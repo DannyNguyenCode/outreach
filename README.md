@@ -173,7 +173,7 @@ Production credentials and customer data must never be used for agent experiment
 
 | Area | Choice |
 |---|---|
-| Runtime | Node.js 22 LTS (`.nvmrc`) |
+| Runtime | Node.js 22 LTS only (`.nvmrc`; engines `>=22.12.0 <23`) |
 | Package manager | npm |
 | Framework | Next.js App Router + React + TypeScript (strict) |
 | Styling | Tailwind CSS (no DaisyUI in Phase 0) |

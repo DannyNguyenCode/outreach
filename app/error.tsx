@@ -7,7 +7,7 @@ type ErrorPageProps = {
   reset: () => void;
 };
 
-export default function GlobalError({ error, reset }: ErrorPageProps) {
+export default function Error({ error, reset }: ErrorPageProps) {
   useEffect(() => {
     console.error(error);
   }, [error]);

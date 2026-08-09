@@ -1,9 +1,8 @@
 /**
- * Seed foundation for Phase 0.
- * Uses fake data only. Domain seeds belong to later phases.
- *
- * Run with: npx prisma db seed
- * (Configure seed in package.json prisma.seed when domain data exists.)
+ * Seed foundation for Phase 0 only.
+ * Prisma seeding is not configured yet (no package.json prisma.seed entry).
+ * There are no Phase 0 domain models or seed records.
+ * Configure seeding in a later phase when fake development data is introduced.
  */
 async function main(): Promise<void> {
   console.log(

@@ -4,7 +4,7 @@ This guide covers local setup for the Phase 0 project foundation. Product featur
 
 ## Required software
 
-- **Node.js** 22.x LTS (see `.nvmrc`; engines require `>=22.12.0`)
+- **Node.js** 22.x LTS only (see `.nvmrc`; `package.json` engines require `>=22.12.0 <23`)
 - **npm** 10+ (ships with Node; do not introduce Yarn or pnpm lockfiles)
 - Access to an Outreach-managed **Supabase** PostgreSQL project (for live database work)
 
@@ -66,7 +66,13 @@ Phase 0 ships a migration lock file and an empty product schema (no Auth.js or d
 
 ### Seed
 
-`prisma/seed.ts` is a no-op foundation. Domain seeds arrive with later phases.
+`prisma/seed.ts` is only a future foundation placeholder.
+
+- Prisma seeding is **not** configured in Phase 0 (no `prisma.seed` entry and no seed npm script).
+- There are no Phase 0 domain models or seed records to insert.
+- Seeding will be configured only when a later phase introduces appropriate fake development data.
+
+Do not run `prisma db seed` expecting application data in Phase 0.
 
 ## Development
 
