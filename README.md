@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: requirements and implementation planning. The application has not yet entered Phase 0 development.
+> Project status: Phase 0 foundation in progress. See [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) for local setup, environment variables, Prisma, and verification commands.
 
 ## Product vision
 
@@ -169,16 +169,46 @@ Production credentials and customer data must never be used for agent experiment
 - Local, Preview, Staging, and Production should use separate provider resources and encryption keys where practical.
 - Important schema changes must use version-controlled migrations rather than dashboard-only edits.
 
-Exact environment variables and setup commands will be documented during Phase 0 after the ORM, email provider, hosting configuration, AI provider, and Twilio OAuth application are finalized.
+### Phase 0 stack decisions
+
+| Area | Choice |
+|---|---|
+| Runtime | Node.js 22 LTS only (`.nvmrc`; engines `>=22.12.0 <23`) |
+| Package manager | npm |
+| Framework | Next.js App Router + React + TypeScript (strict) |
+| Styling | Tailwind CSS (no DaisyUI in Phase 0) |
+| ORM | Prisma → Supabase-hosted PostgreSQL |
+| Env validation | Zod (`lib/env`) |
+| Unit / component tests | Vitest + React Testing Library |
+| End-to-end tests | Playwright |
+| CI | GitHub Actions (`.github/workflows/ci.yml`) |
+
+Database URLs:
+
+- `DATABASE_URL` — pooled connection for application runtime
+- `DIRECT_URL` — direct connection for Prisma migrations
+
+Quick start:
+
+```bash
+npm ci
+cp .env.example .env.local
+npm run dev
+npm run verify
+npm run test:e2e
+```
+
+Full developer instructions: [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Project documents
 
 - [`requirements.md`](./requirements.md) — product source of truth, acceptance criteria, priorities, and requirement IDs
 - [`outreach-implementation-phases.md`](./outreach-implementation-phases.md) — detailed 15-phase feature plan and Cursor Automation boundaries
+- [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — Phase 0 local setup and verification
 
 If documents conflict, `requirements.md` defines product behavior. The implementation phases define build order and decomposition, and this README serves as the project entry point.
 
 ## Current next step
 
-Begin Phase 0 by finalizing the ORM and Auth.js adapter choice, initializing the application, establishing migrations and test infrastructure, defining environment boundaries, and creating the first narrowly scoped Cursor Automation task.
+Complete Phase 0 review, then begin Phase 1 (Auth.js registration, verification, login, recovery, and database sessions).
 
