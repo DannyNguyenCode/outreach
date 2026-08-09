@@ -103,6 +103,8 @@ npm run build
 npm run start
 ```
 
+`npm run typecheck` runs `next typegen` first so route helpers such as `LayoutProps` exist before `tsc` runs (important for clean CI checkouts).
+
 Full non-destructive verification (no remote migrations):
 
 ```bash
