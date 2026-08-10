@@ -10,7 +10,7 @@ import {
   userIdPrefix,
 } from "@/lib/auth/security-log";
 import { findAuthToken, issueAuthToken } from "@/lib/auth/tokens";
-import { toSafeUser, type SafeUser } from "@/lib/auth/users";
+import { safeUserSelect, toSafeUser, type SafeUser } from "@/lib/auth/users";
 import {
   getMailer,
   sendPasswordResetEmail,
@@ -347,15 +347,7 @@ export async function verifyCredentials(input: {
 export async function getUserById(id: string): Promise<SafeUser | null> {
   const user = await prisma.user.findUnique({
     where: { id },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      emailVerifiedAt: true,
-      sessionVersion: true,
-      createdAt: true,
-      updatedAt: true,
-    },
+    select: safeUserSelect,
   });
   return user ? toSafeUser(user) : null;
 }

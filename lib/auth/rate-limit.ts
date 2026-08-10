@@ -30,7 +30,10 @@ export type RateLimitRoute =
   | "login"
   | "resend-verification"
   | "forgot-password"
-  | "reset-password";
+  | "reset-password"
+  | "invite-member"
+  | "accept-invitation"
+  | "create-organization";
 
 export type RateLimitDecision =
   | { ok: true; remaining: number; resetAt: Date }
@@ -50,6 +53,9 @@ export const ROUTE_LIMITS: Record<RateLimitRoute, RateLimitConfig> = {
   "resend-verification": { limit: 5, windowMs: 15 * 60 * 1000 },
   "forgot-password": { limit: 5, windowMs: 15 * 60 * 1000 },
   "reset-password": { limit: 10, windowMs: 15 * 60 * 1000 },
+  "invite-member": { limit: 20, windowMs: 15 * 60 * 1000 },
+  "accept-invitation": { limit: 10, windowMs: 15 * 60 * 1000 },
+  "create-organization": { limit: 10, windowMs: 15 * 60 * 1000 },
 };
 
 function hmacIdentifier(value: string): string {

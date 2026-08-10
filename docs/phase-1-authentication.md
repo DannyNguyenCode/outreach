@@ -225,6 +225,6 @@ Until those steps are done, live delivery remains manually unverified. Do not lo
 
 - JWT sessions require DB `sessionVersion` checks for revocation
 - Rate limiter is intentionally small and Postgres-backed
-- No organization or role model yet
+- Organization and role model is implemented in Phase 2 (`docs/phase-2-organizations.md`)
 - No MFA, passkeys, or social login
 - Live Supabase migration and live Resend delivery require manual setup

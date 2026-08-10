@@ -7,6 +7,19 @@ describe("redirect validation", () => {
     expect(getSafeRedirect("/app")).toBe("/app");
     expect(getSafeRedirect("/login")).toBe("/login");
     expect(isSafeInternalPath("/register")).toBe(true);
+    expect(getSafeRedirect("/app/organizations/new")).toBe(
+      "/app/organizations/new",
+    );
+    expect(getSafeRedirect("/app/orgs/acme/members")).toBe(
+      "/app/orgs/acme/members",
+    );
+    expect(getSafeRedirect("/invitations/accept")).toBe("/invitations/accept");
+  });
+
+  it("preserves safe invitation tokens in callback URLs", () => {
+    expect(getSafeRedirect("/invitations/accept?token=abc_DEF-123")).toBe(
+      "/invitations/accept?token=abc_DEF-123",
+    );
   });
 
   it("rejects external URLs", () => {

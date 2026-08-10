@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: Phase 1 authentication in progress. See [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) for Auth.js setup, sessions, migrations, and verification commands. Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
+> Project status: Phase 2 organizations in progress. See [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) for multi-tenant membership, invitations, and authorization. Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Product vision
 
@@ -169,18 +169,19 @@ Production credentials and customer data must never be used for agent experiment
 - Local, Preview, Staging, and Production should use separate provider resources and encryption keys where practical.
 - Important schema changes must use version-controlled migrations rather than dashboard-only edits.
 
-### Phase 0–1 stack decisions
+### Phase 0–2 stack decisions
 
 | Area | Choice |
 |---|---|
 | Runtime | Node.js 22 LTS only (`.nvmrc`; engines `>=22.12.0 <23`) |
 | Package manager | npm |
 | Framework | Next.js App Router + React + TypeScript (strict) |
-| Styling | Tailwind CSS (no DaisyUI in Phase 0/1) |
+| Styling | Tailwind CSS (no DaisyUI in Phase 0–2) |
 | ORM | Prisma → Supabase-hosted PostgreSQL |
 | Auth | Auth.js (`next-auth` v5) Credentials + JWT + `sessionVersion` revocation |
+| Organizations | Membership roles (`OWNER`/`ADMIN`/`MEMBER`) with server-side authorization |
 | Passwords | Argon2id via `@node-rs/argon2` |
-| Email | Resend (verification + password reset) |
+| Email | Resend (verification, password reset, invitations) |
 | Env validation | Zod (`lib/env`) |
 | Unit / component tests | Vitest + React Testing Library |
 | Integration tests | Vitest + isolated Postgres |
@@ -208,6 +209,7 @@ Developer docs:
 
 - [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — foundation setup
 - [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — authentication
+- [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) — organizations and memberships
 
 ## Project documents
 
@@ -215,9 +217,10 @@ Developer docs:
 - [`outreach-implementation-phases.md`](./outreach-implementation-phases.md) — detailed 15-phase feature plan and Cursor Automation boundaries
 - [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — Phase 0 local setup and verification
 - [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — Phase 1 authentication
+- [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) — Phase 2 organizations
 
 If documents conflict, `requirements.md` defines product behavior. The implementation phases define build order and decomposition, and this README serves as the project entry point.
 
 ## Current next step
 
-Complete Phase 1 review, then begin Phase 2 (organizations, employees, roles, invitations, and offboarding).
+Complete Phase 2 review, then begin Phase 3 (business onboarding and organization configuration).
