@@ -203,9 +203,11 @@ describe("email provider timeout and failures", () => {
 
   it("production rejects mock delivery mode", () => {
     const previousCi = process.env.CI;
-    const previousAllow = process.env.AUTH_ALLOW_MOCK_EMAIL;
+    const previousPlaywright = process.env.PLAYWRIGHT_WEB_SERVER;
+    const previousVercel = process.env.VERCEL_ENV;
     delete process.env.CI;
-    delete process.env.AUTH_ALLOW_MOCK_EMAIL;
+    delete process.env.PLAYWRIGHT_WEB_SERVER;
+    delete process.env.VERCEL_ENV;
     try {
       expect(() =>
         assertEmailDeliveryAllowed({
@@ -220,10 +222,92 @@ describe("email provider timeout and failures", () => {
       } else {
         process.env.CI = previousCi;
       }
+      if (previousPlaywright === undefined) {
+        delete process.env.PLAYWRIGHT_WEB_SERVER;
+      } else {
+        process.env.PLAYWRIGHT_WEB_SERVER = previousPlaywright;
+      }
+      if (previousVercel === undefined) {
+        delete process.env.VERCEL_ENV;
+      } else {
+        process.env.VERCEL_ENV = previousVercel;
+      }
+    }
+  });
+
+  it("Vercel production rejects mock mode even with a local-test Playwright override", () => {
+    const previousCi = process.env.CI;
+    const previousPlaywright = process.env.PLAYWRIGHT_WEB_SERVER;
+    const previousVercel = process.env.VERCEL_ENV;
+    const previousAllow = process.env.AUTH_ALLOW_MOCK_EMAIL;
+    delete process.env.CI;
+    process.env.PLAYWRIGHT_WEB_SERVER = "true";
+    process.env.AUTH_ALLOW_MOCK_EMAIL = "true";
+    process.env.VERCEL_ENV = "production";
+    try {
+      expect(() =>
+        assertEmailDeliveryAllowed({
+          ...baseEnv,
+          AUTH_EMAIL_DELIVERY: "mock",
+          NODE_ENV: "production",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3100",
+        }),
+      ).toThrow(/VERCEL_ENV=production/i);
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousPlaywright === undefined) {
+        delete process.env.PLAYWRIGHT_WEB_SERVER;
+      } else {
+        process.env.PLAYWRIGHT_WEB_SERVER = previousPlaywright;
+      }
+      if (previousVercel === undefined) {
+        delete process.env.VERCEL_ENV;
+      } else {
+        process.env.VERCEL_ENV = previousVercel;
+      }
       if (previousAllow === undefined) {
         delete process.env.AUTH_ALLOW_MOCK_EMAIL;
       } else {
         process.env.AUTH_ALLOW_MOCK_EMAIL = previousAllow;
+      }
+    }
+  });
+
+  it("allows mock delivery for Playwright webServer on localhost", () => {
+    const previousCi = process.env.CI;
+    const previousPlaywright = process.env.PLAYWRIGHT_WEB_SERVER;
+    const previousVercel = process.env.VERCEL_ENV;
+    delete process.env.CI;
+    delete process.env.VERCEL_ENV;
+    process.env.PLAYWRIGHT_WEB_SERVER = "true";
+    try {
+      expect(() =>
+        assertEmailDeliveryAllowed({
+          ...baseEnv,
+          AUTH_EMAIL_DELIVERY: "mock",
+          NODE_ENV: "production",
+          NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3100",
+        }),
+      ).not.toThrow();
+    } finally {
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+      if (previousPlaywright === undefined) {
+        delete process.env.PLAYWRIGHT_WEB_SERVER;
+      } else {
+        process.env.PLAYWRIGHT_WEB_SERVER = previousPlaywright;
+      }
+      if (previousVercel === undefined) {
+        delete process.env.VERCEL_ENV;
+      } else {
+        process.env.VERCEL_ENV = previousVercel;
       }
     }
   });
