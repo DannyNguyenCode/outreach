@@ -23,10 +23,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: outreach_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d outreach_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/outreach_ci?schema=public
       DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/outreach_ci?schema=public
+      AUTH_SECRET: ci-only-auth-secret-replace-me-32ch
+      RESEND_API_KEY: re_ci_fake_key_do_not_send
+      AUTH_EMAIL_FROM: Outreach <auth@mail.example.com>
+      AUTH_EMAIL_DELIVERY: mock
       NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+      AUTH_TRUST_HOST: "true"
 
     steps:
       - name: Checkout
@@ -44,6 +64,12 @@ jobs:
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
+      - name: Validate Prisma schema
+        run: npm run prisma:validate
+
+      - name: Apply migrations to CI database
+        run: npm run prisma:migrate:deploy
+
       - name: Format check
         run: npm run format:check
 
@@ -56,8 +82,8 @@ jobs:
       - name: Unit and component tests
         run: npm run test
 
-      - name: Validate Prisma schema
-        run: npm run prisma:validate
+      - name: Integration tests
+        run: npm run test:integration
 
       - name: Production build
         run: npm run build
@@ -65,5 +91,5 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: End-to-end smoke tests
+      - name: End-to-end authentication smoke tests
         run: npm run test:e2e

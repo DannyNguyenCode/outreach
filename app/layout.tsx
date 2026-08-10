@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     template: "%s · Outreach",
   },
   description:
-    "Outreach application foundation — multi-tenant calling workspace scaffolding.",
+    "Outreach application — Phase 1 authentication foundation for a multi-tenant calling workspace.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

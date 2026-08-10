@@ -20,6 +20,12 @@ export function getServerEnv(): ServerEnv {
   const parsed = serverEnvSchema.safeParse({
     DATABASE_URL: process.env.DATABASE_URL,
     DIRECT_URL: process.env.DIRECT_URL,
+    AUTH_SECRET: process.env.AUTH_SECRET,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    AUTH_EMAIL_FROM: process.env.AUTH_EMAIL_FROM,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    AUTH_EMAIL_DELIVERY: process.env.AUTH_EMAIL_DELIVERY,
+    AUTH_TRUST_HOST: process.env.AUTH_TRUST_HOST,
     NODE_ENV: process.env.NODE_ENV,
   });
 

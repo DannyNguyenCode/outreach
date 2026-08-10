@@ -6,30 +6,43 @@ import {
   serverEnvSchema,
 } from "@/lib/env/schema";
 
-describe("serverEnvSchema", () => {
-  it("accepts valid database and node environment values", () => {
-    const result = serverEnvSchema.safeParse({
-      DATABASE_URL:
-        "postgresql://postgres:postgres@127.0.0.1:5432/outreach?schema=public",
-      DIRECT_URL:
-        "postgresql://postgres:postgres@127.0.0.1:5432/outreach?schema=public",
-      NODE_ENV: "test",
-    });
+const validServerEnv = {
+  DATABASE_URL:
+    "postgresql://postgres:postgres@127.0.0.1:5432/outreach?schema=public",
+  DIRECT_URL:
+    "postgresql://postgres:postgres@127.0.0.1:5432/outreach?schema=public",
+  AUTH_SECRET: "dev-only-auth-secret-replace-me-32chars",
+  RESEND_API_KEY: "re_test_fake_key",
+  AUTH_EMAIL_FROM: "Outreach <auth@mail.example.com>",
+  AUTH_EMAIL_DELIVERY: "mock" as const,
+  NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+  NODE_ENV: "test" as const,
+};
 
+describe("serverEnvSchema", () => {
+  it("accepts valid database and auth environment values", () => {
+    const result = serverEnvSchema.safeParse(validServerEnv);
     expect(result.success).toBe(true);
   });
 
   it("rejects missing DATABASE_URL with a clear issue path", () => {
     const result = serverEnvSchema.safeParse({
-      DIRECT_URL:
-        "postgresql://postgres:postgres@127.0.0.1:5432/outreach?schema=public",
-      NODE_ENV: "test",
+      ...validServerEnv,
+      DATABASE_URL: undefined,
     });
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(formatEnvErrors(result.error)).toContain("DATABASE_URL");
     }
+  });
+
+  it("rejects a short AUTH_SECRET", () => {
+    const result = serverEnvSchema.safeParse({
+      ...validServerEnv,
+      AUTH_SECRET: "too-short",
+    });
+    expect(result.success).toBe(false);
   });
 });
 

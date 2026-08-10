@@ -8,6 +8,57 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// Phase 0 intentionally defines no application-domain models.
-// Auth.js and product tables are introduced in later phases.
-// Migrations remain version-controlled under prisma/migrations.
+/// Application user for Phase 1 email/password authentication.
+/// passwordHash must never be selected by public-facing helpers.
+model User {
+  id              String     @id @default(cuid())
+  name            String
+  /// Normalized lowercase email; uniqueness is case-insensitive by construction.
+  email           String     @unique
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  /// Incremented on password reset / explicit revocation to invalidate JWT sessions.
+  sessionVersion  Int        @default(0)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  authTokens      AuthToken[]
+
+  @@index([emailVerifiedAt])
+}
+
+enum AuthTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+/// One-time tokens for email verification and password reset.
+/// Only a cryptographic hash of the raw token is stored.
+model AuthToken {
+  id         String           @id @default(cuid())
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purpose    AuthTokenPurpose
+  tokenHash  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime         @default(now())
+
+  @@unique([purpose, tokenHash])
+  @@index([userId, purpose, consumedAt])
+  @@index([expiresAt])
+  @@index([tokenHash])
+}
+
+/// Database-backed rate-limit counters suitable for serverless runtimes.
+/// bucketKey is a hashed composite identity — never raw email or IP alone.
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  bucketKey   String   @unique
+  count       Int      @default(0)
+  windowStart DateTime
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([expiresAt])
+}
