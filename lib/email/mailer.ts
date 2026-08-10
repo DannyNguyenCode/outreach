@@ -70,20 +70,56 @@ function logEmailFailure(input: { code: string; to: string }): void {
 }
 
 /**
+ * Dedicated Playwright webServer marker. Set only by playwright.config.ts so
+ * local `next start` e2e against localhost may use mock delivery.
+ */
+export const PLAYWRIGHT_WEB_SERVER_ENV = "PLAYWRIGHT_WEB_SERVER";
+
+function isLocalhostAppUrl(appUrl: string): boolean {
+  try {
+    const { hostname } = new URL(appUrl);
+    return hostname === "127.0.0.1" || hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
+function isPlaywrightLocalhostEnvironment(env: ServerEnv): boolean {
+  return (
+    process.env[PLAYWRIGHT_WEB_SERVER_ENV] === "true" &&
+    isLocalhostAppUrl(env.NEXT_PUBLIC_APP_URL)
+  );
+}
+
+/**
  * Whether mock delivery is permitted for this process.
- * Real production deployments must use Resend. CI and explicit local e2e may mock.
+ *
+ * Allowed only when:
+ * - NODE_ENV is not production, or
+ * - CI === "true", or
+ * - Playwright webServer is driving a localhost app URL
+ *
+ * Vercel production always rejects mock delivery.
  */
 export function assertEmailDeliveryAllowed(env: ServerEnv): void {
   if (env.AUTH_EMAIL_DELIVERY !== "mock") {
     return;
   }
+
+  if (process.env.VERCEL_ENV === "production") {
+    throw new Error(
+      "AUTH_EMAIL_DELIVERY=mock is not allowed when VERCEL_ENV=production. Use resend.",
+    );
+  }
+
   const allowMock =
     env.NODE_ENV !== "production" ||
     process.env.CI === "true" ||
-    process.env.AUTH_ALLOW_MOCK_EMAIL === "true";
+    isPlaywrightLocalhostEnvironment(env);
+
   if (!allowMock) {
     throw new Error(
-      "AUTH_EMAIL_DELIVERY=mock is not allowed in production deployments. Use resend, or set AUTH_ALLOW_MOCK_EMAIL=true only for local production-mode e2e.",
+      "AUTH_EMAIL_DELIVERY=mock is not allowed in production deployments. Use resend, run under CI, or use the Playwright localhost webServer.",
     );
   }
 }

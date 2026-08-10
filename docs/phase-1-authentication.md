@@ -105,7 +105,8 @@ Limitations: best-effort expiry cleanup outside the lock; advisory locks are Pos
 - `AUTH_EMAIL_DELIVERY=mock|resend`
 - Live Resend sends use `EMAIL_PROVIDER_TIMEOUT_MS` (default `10000`, range 1000–60000)
 - Timeouts and provider errors become controlled `EmailDeliveryError` values; auth flows still return generic success where required
-- Production deployments reject mock mode unless `CI=true` or `AUTH_ALLOW_MOCK_EMAIL=true` (local e2e)
+- Production / Vercel production reject mock mode
+- Mock is allowed when `NODE_ENV !== "production"`, `CI=true`, or Playwright’s localhost webServer (`PLAYWRIGHT_WEB_SERVER=true` + localhost app URL)
 - Automated tests and CI always use mock delivery and never contact Resend
 - The Resend SDK call may continue in the background after timeout; the app stops awaiting it
 
@@ -124,7 +125,6 @@ Limitations: best-effort expiry cleanup outside the lock; advisory locks are Pos
 | `AUTH_EMAIL_FROM` | Server | From address for auth email |
 | `AUTH_EMAIL_DELIVERY` | Server | `resend` (live) or `mock` (no network send) |
 | `EMAIL_PROVIDER_TIMEOUT_MS` | Server | Live Resend deadline (default 10000) |
-| `AUTH_ALLOW_MOCK_EMAIL` | Server optional | Allow mock delivery under `next start` |
 | `NEXT_PUBLIC_APP_URL` | Public + server link building | App origin |
 | `AUTH_TRUST_HOST` | Server optional | Auth.js trust host (`true`/`false`) |
 

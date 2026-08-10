@@ -36,7 +36,7 @@ export default defineConfig({
       AUTH_EMAIL_DELIVERY: process.env.AUTH_EMAIL_DELIVERY ?? "mock",
       EMAIL_PROVIDER_TIMEOUT_MS:
         process.env.EMAIL_PROVIDER_TIMEOUT_MS ?? "10000",
-      AUTH_ALLOW_MOCK_EMAIL: process.env.AUTH_ALLOW_MOCK_EMAIL ?? "true",
+      PLAYWRIGHT_WEB_SERVER: "true",
       NEXT_PUBLIC_APP_URL: baseURL,
       AUTH_TRUST_HOST: "true",
     },
