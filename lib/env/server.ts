@@ -25,6 +25,7 @@ export function getServerEnv(): ServerEnv {
     AUTH_EMAIL_FROM: process.env.AUTH_EMAIL_FROM,
     NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
     AUTH_EMAIL_DELIVERY: process.env.AUTH_EMAIL_DELIVERY,
+    EMAIL_PROVIDER_TIMEOUT_MS: process.env.EMAIL_PROVIDER_TIMEOUT_MS,
     AUTH_TRUST_HOST: process.env.AUTH_TRUST_HOST,
     NODE_ENV: process.env.NODE_ENV,
   });

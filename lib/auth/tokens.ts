@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-import type { AuthTokenPurpose } from "@prisma/client";
+import type { AuthTokenPurpose, PrismaClient } from "@prisma/client";
 
 import type { AuthTokenDb } from "@/lib/auth/token-db";
 
@@ -36,39 +36,71 @@ export function ttlForPurpose(purpose: AuthTokenPurpose): number {
     : PASSWORD_RESET_TTL_MS;
 }
 
+function advisoryLockKey(userId: string, purpose: AuthTokenPurpose): string {
+  return `auth-token:${userId}:${purpose}`;
+}
+
+export type IssueAuthTokenOptions = {
+  /**
+   * Test-only hook invoked after active tokens are invalidated and before the
+   * replacement row is created. Throwing here must roll back invalidation.
+   */
+  testBeforeCreate?: () => Promise<void>;
+};
+
 /**
- * Issue a one-time token. Invalidates older unconsumed tokens of the same
- * purpose for the user. Returns the raw token for email delivery only.
+ * Issue a one-time token atomically for a user+purpose.
+ *
+ * Concurrency strategy:
+ * - `pg_advisory_xact_lock(hashtext(userId:purpose))` serializes issuers for
+ *   the same user and purpose inside a single transaction.
+ * - Within that lock, active tokens are invalidated and the replacement is
+ *   created. If creation fails, the transaction rolls back so prior tokens
+ *   remain usable.
+ * - A partial unique index (`AuthToken_userId_purpose_active_key`) enforces at
+ *   most one unconsumed token per user+purpose as defense in depth.
+ *
+ * Returns the raw token for email delivery only — never stored or logged.
  */
 export async function issueAuthToken(
-  db: AuthTokenDb,
+  db: PrismaClient,
   input: {
     userId: string;
     purpose: AuthTokenPurpose;
   },
+  options: IssueAuthTokenOptions = {},
 ): Promise<{ rawToken: string; expiresAt: Date }> {
   const rawToken = generateRawToken();
   const tokenHash = hashToken(rawToken);
   const expiresAt = new Date(Date.now() + ttlForPurpose(input.purpose));
+  const lockKey = advisoryLockKey(input.userId, input.purpose);
 
-  await db.authToken.updateMany({
-    where: {
-      userId: input.userId,
-      purpose: input.purpose,
-      consumedAt: null,
-    },
-    data: {
-      consumedAt: new Date(),
-    },
-  });
+  await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
 
-  await db.authToken.create({
-    data: {
-      userId: input.userId,
-      purpose: input.purpose,
-      tokenHash,
-      expiresAt,
-    },
+    await tx.authToken.updateMany({
+      where: {
+        userId: input.userId,
+        purpose: input.purpose,
+        consumedAt: null,
+      },
+      data: {
+        consumedAt: new Date(),
+      },
+    });
+
+    if (options.testBeforeCreate) {
+      await options.testBeforeCreate();
+    }
+
+    await tx.authToken.create({
+      data: {
+        userId: input.userId,
+        purpose: input.purpose,
+        tokenHash,
+        expiresAt,
+      },
+    });
   });
 
   return { rawToken, expiresAt };

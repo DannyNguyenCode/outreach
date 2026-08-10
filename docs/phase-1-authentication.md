@@ -64,8 +64,9 @@ Chosen to align with OWASP interactive login guidance while remaining practical 
 1. Registration creates an unverified user and issues an `EMAIL_VERIFICATION` token
 2. Only the SHA-256 hash of the token is stored
 3. Raw token is emailed via Resend (`lib/email/mailer.ts`)
-4. `/verify-email?token=…` consumes the token atomically and sets `emailVerifiedAt`
-5. Resend is rate-limited and always returns a generic success message
+4. GET `/verify-email?token=…` renders a confirmation page only — it does **not** consume the token or mark the user verified (protects against email scanners / link previews)
+5. The user must submit the confirmation form (POST / server action) to consume the token atomically and set `emailVerifiedAt`
+6. Resend is rate-limited and always returns a generic success message
 
 Unverified users cannot sign in to protected areas.
 
@@ -83,7 +84,9 @@ Unverified users cannot sign in to protected areas.
 - Purposes: `EMAIL_VERIFICATION` (24h), `PASSWORD_RESET` (1h)
 - Stored as SHA-256 hex hashes
 - Single-use via `consumedAt`
-- Issuing a new token invalidates older active tokens of the same purpose
+- Replacement issuance runs in a Postgres transaction under `pg_advisory_xact_lock(hashtext(userId:purpose))` so invalidate + create commit together
+- A partial unique index (`AuthToken_userId_purpose_active_key`) enforces at most one active token per user+purpose
+- If replacement creation fails, invalidation rolls back and the previous token remains usable
 
 ## Rate limiting
 
@@ -92,9 +95,19 @@ Module: `lib/auth/rate-limit.ts` — Postgres `RateLimitBucket` table.
 - Keys are HMAC-SHA256 composites (route + hashed email and/or IP)
 - Raw emails and IPs never appear in keys
 - Missing proxy headers do **not** collapse into a shared `ip:unknown` bucket; email or token-derived salt is required
+- Concurrent requests for the same bucket are serialized with `pg_advisory_xact_lock(hashtext(bucketKey))` inside a transaction; the admit/deny decision uses the count read under that lock
 - If the rate-limit backend fails, requests are denied (fail closed)
 
-Limitations: best-effort expiry cleanup; under extreme concurrency a window may admit a few extra attempts.
+Limitations: best-effort expiry cleanup outside the lock; advisory locks are Postgres-specific (CI uses Postgres).
+
+## Email delivery
+
+- `AUTH_EMAIL_DELIVERY=mock|resend`
+- Live Resend sends use `EMAIL_PROVIDER_TIMEOUT_MS` (default `10000`, range 1000–60000)
+- Timeouts and provider errors become controlled `EmailDeliveryError` values; auth flows still return generic success where required
+- Production deployments reject mock mode unless `CI=true` or `AUTH_ALLOW_MOCK_EMAIL=true` (local e2e)
+- Automated tests and CI always use mock delivery and never contact Resend
+- The Resend SDK call may continue in the background after timeout; the app stops awaiting it
 
 ## Security-event logging
 
@@ -110,6 +123,8 @@ Limitations: best-effort expiry cleanup; under extreme concurrency a window may 
 | `RESEND_API_KEY` | Server | Resend API key |
 | `AUTH_EMAIL_FROM` | Server | From address for auth email |
 | `AUTH_EMAIL_DELIVERY` | Server | `resend` (live) or `mock` (no network send) |
+| `EMAIL_PROVIDER_TIMEOUT_MS` | Server | Live Resend deadline (default 10000) |
+| `AUTH_ALLOW_MOCK_EMAIL` | Server optional | Allow mock delivery under `next start` |
 | `NEXT_PUBLIC_APP_URL` | Public + server link building | App origin |
 | `AUTH_TRUST_HOST` | Server optional | Auth.js trust host (`true`/`false`) |
 
@@ -122,15 +137,26 @@ Copy `.env.example` → `.env.local`. Never commit real secrets.
 npm run prisma:generate
 npm run prisma:validate
 
-# Apply Phase 1 migration to an isolated local/CI database only
+# Apply Phase 1 migrations to an isolated local/CI database only
 npm run prisma:migrate:deploy
 ```
 
-Migration name: `20260810000000_phase_01_authentication`
+Migrations:
 
-Creates `User`, `AuthToken`, `RateLimitBucket`, and `AuthTokenPurpose`.
+- `20260810000000_phase_01_authentication` — `User`, `AuthToken`, `RateLimitBucket`
+- `20260810010000_auth_token_active_unique` — partial unique index for active tokens
 
-Do not apply this migration to production or shared Staging without an explicit release process.
+Do not apply these migrations to production or shared Staging without an explicit release process.
+
+### Development connectivity + CRUD check
+
+Against a **local** disposable database only:
+
+```bash
+npm run db:crud-check
+```
+
+The script prints sanitized host/database classification, runs `SELECT 1`, creates uniquely prefixed temporary `User` / `AuthToken` / `RateLimitBucket` rows, updates them, then deletes only those IDs. It aborts if the host is not local.
 
 ### Manual Supabase apply (when safe credentials are confirmed)
 
@@ -144,7 +170,7 @@ Do not apply this migration to production or shared Staging without an explicit 
 Example local URL:
 
 ```text
-postgresql://postgres:postgres@127.0.0.1:5432/outreach_test?schema=public
+postgresql://postgres:postgres@127.0.0.1:5433/outreach_test?schema=public
 ```
 
 ```bash
@@ -158,15 +184,17 @@ CI starts Postgres 16 as a service container and applies migrations there only.
 
 ```bash
 npm run test                 # unit + component
-npm run test:integration     # requires migrated test DB
+npm run test:integration     # requires migrated test DB (includes concurrency + revocation)
 npm run test:e2e             # Playwright auth smoke (migrated DB + fake secrets)
 ```
 
-Email delivery is mocked in unit/integration tests via `setMailerForTests`. CI never sends real email.
+Email delivery is mocked in unit/integration tests via `setMailerForTests` / `AUTH_EMAIL_DELIVERY=mock`. CI never sends real email. Live Resend remains manually unverified unless genuinely configured and tested.
 
-### E2E limitation
+### E2E notes
 
-End-to-end flows that depend on reading a verification link from a real inbox are not covered. Token consumption is covered by integration tests.
+- Visiting `/verify-email?token=…` alone does not verify; confirmation submit does.
+- Password reset increments `sessionVersion` and rejects the previous browser session on `/app`.
+- Inbox capture of verification links is not required; tokens are seeded in the test database.
 
 ## Seeding a verified development user
 

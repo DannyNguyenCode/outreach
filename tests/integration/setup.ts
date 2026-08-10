@@ -12,4 +12,5 @@ process.env.AUTH_SECRET ??= "dev-only-auth-secret-replace-me-32chars";
 process.env.RESEND_API_KEY ??= "re_test_fake_key";
 process.env.AUTH_EMAIL_FROM ??= "Outreach <auth@mail.example.com>";
 process.env.AUTH_EMAIL_DELIVERY ??= "mock";
+process.env.EMAIL_PROVIDER_TIMEOUT_MS ??= "10000";
 process.env.NEXT_PUBLIC_APP_URL ??= "http://127.0.0.1:3100";

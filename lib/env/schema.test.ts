@@ -15,6 +15,7 @@ const validServerEnv = {
   RESEND_API_KEY: "re_test_fake_key",
   AUTH_EMAIL_FROM: "Outreach <auth@mail.example.com>",
   AUTH_EMAIL_DELIVERY: "mock" as const,
+  EMAIL_PROVIDER_TIMEOUT_MS: 10_000,
   NEXT_PUBLIC_APP_URL: "http://localhost:3000",
   NODE_ENV: "test" as const,
 };

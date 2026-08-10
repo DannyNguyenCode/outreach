@@ -24,6 +24,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
+    "db:crud-check": "tsx scripts/dev-auth-crud-check.ts",
     "postinstall": "prisma generate",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run prisma:validate && npm run build"
   },

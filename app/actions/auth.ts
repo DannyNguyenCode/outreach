@@ -321,11 +321,39 @@ export async function resendVerificationAction(
   };
 }
 
-export async function consumeVerificationTokenAction(
-  token: string,
-): Promise<
-  "verified" | "already_verified" | "invalid" | "expired" | "consumed"
-> {
+export async function confirmVerificationAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const token = String(formData.get("token") ?? "").trim();
+  if (!token || token.length > 256 || /\s/.test(token)) {
+    return {
+      status: "error",
+      message: "This verification link is invalid or has already been used.",
+    };
+  }
+
   const result = await verifyEmailWithToken(token);
-  return result.status;
+
+  if (result.status === "verified" || result.status === "already_verified") {
+    return {
+      status: "success",
+      message:
+        result.status === "already_verified"
+          ? "This email was already verified. You can sign in."
+          : "Your email is verified. You can now sign in.",
+    };
+  }
+
+  if (result.status === "expired") {
+    return {
+      status: "error",
+      message: "This verification link has expired. Request a new one.",
+    };
+  }
+
+  return {
+    status: "error",
+    message: "This verification link is invalid or has already been used.",
+  };
 }

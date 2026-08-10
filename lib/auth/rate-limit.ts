@@ -1,18 +1,26 @@
 import "server-only";
 
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
-import type { RateLimitDb } from "@/lib/auth/rate-limit-db";
+import type { PrismaClient } from "@prisma/client";
+
 import { getServerEnv } from "@/lib/env/server";
 
 /**
  * Database-backed rate limiter for serverless runtimes.
  *
- * Limitations (Phase 1):
- * - Uses Postgres row upserts; under extreme concurrency a window may allow a
- *   few extra requests past the limit (acceptable for auth abuse mitigation).
+ * Concurrency safety:
+ * Each bucket key is serialized with `pg_advisory_xact_lock(hashtext(bucketKey))`
+ * inside a Prisma interactive transaction. Concurrent requests for the same key
+ * queue; only one read-modify-write runs at a time. The permit decision uses the
+ * count observed under that lock, so stale pre-update reads cannot over-admit.
+ * Different bucket keys hash to different locks and do not block each other.
+ *
+ * Backend-unavailable policy: fail closed (deny the request).
+ *
+ * Limitations:
  * - Expired rows are cleaned opportunistically on write, not by a background job.
- * - If the database is unavailable, requests fail closed (denied).
+ * - Advisory locks are per-database session/transaction (correct for Postgres).
  *
  * Keys never contain raw email or IP. Sensitive identifiers are HMAC'd with AUTH_SECRET.
  */
@@ -36,7 +44,7 @@ type RateLimitConfig = {
   windowMs: number;
 };
 
-const ROUTE_LIMITS: Record<RateLimitRoute, RateLimitConfig> = {
+export const ROUTE_LIMITS: Record<RateLimitRoute, RateLimitConfig> = {
   register: { limit: 5, windowMs: 15 * 60 * 1000 },
   login: { limit: 10, windowMs: 15 * 60 * 1000 },
   "resend-verification": { limit: 5, windowMs: 15 * 60 * 1000 },
@@ -51,9 +59,8 @@ function hmacIdentifier(value: string): string {
 
 /**
  * Resolve a client IP without collapsing missing headers into one shared bucket.
- * Prefer the platform-provided value when present; otherwise isolate by a
- * per-request ephemeral identity derived from route + timestamp entropy is
- * NOT used — instead we require an explicit fallbackIdentity (e.g. email hash).
+ * Prefer platform-provided values only when the deployment trusts the proxy
+ * (production / AUTH_TRUST_HOST), matching Vercel-style forwarded headers.
  */
 export function resolveClientIp(
   headers: Headers,
@@ -73,9 +80,6 @@ export function resolveClientIp(
     }
   }
 
-  // Next.js may expose connection remote address in some runtimes via headers
-  // that are not spoofable the same way; without a trusted proxy we do not
-  // invent a shared "unknown" bucket.
   return { kind: "missing" };
 }
 
@@ -83,11 +87,6 @@ export function buildRateLimitBucketKey(input: {
   route: RateLimitRoute;
   emailNormalized?: string | null;
   ip: ClientIpResult;
-  /**
-   * When IP is missing, a secondary signal is required so requests do not share
-   * a global bucket. Prefer a normalized-email HMAC. If neither IP nor email is
-   * available, callers must fail closed before calling enforceRateLimit.
-   */
   missingIpSalt?: string;
 }): string {
   const parts: string[] = [`route:${input.route}`];
@@ -112,8 +111,12 @@ export function buildRateLimitBucketKey(input: {
     .digest("hex");
 }
 
+function newBucketId(): string {
+  return `rl_${randomBytes(12).toString("hex")}`;
+}
+
 export async function enforceRateLimit(
-  db: RateLimitDb,
+  db: PrismaClient,
   input: {
     route: RateLimitRoute;
     bucketKey: string;
@@ -124,62 +127,72 @@ export async function enforceRateLimit(
   const now = input.now ?? new Date();
 
   try {
-    // Opportunistic cleanup of expired buckets (best-effort).
+    // Best-effort cleanup outside the per-bucket lock.
     await db.rateLimitBucket.deleteMany({
       where: { expiresAt: { lt: now } },
     });
 
-    const existing = await db.rateLimitBucket.findUnique({
-      where: { bucketKey: input.bucketKey },
-    });
+    return await db.$transaction(async (tx) => {
+      // Serialize all mutations for this bucket key for the duration of the tx.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.bucketKey}))`;
 
-    if (!existing || existing.expiresAt.getTime() <= now.getTime()) {
-      const expiresAt = new Date(now.getTime() + config.windowMs);
-      await db.rateLimitBucket.upsert({
+      const existing = await tx.rateLimitBucket.findUnique({
         where: { bucketKey: input.bucketKey },
-        create: {
-          bucketKey: input.bucketKey,
-          count: 1,
-          windowStart: now,
-          expiresAt,
-        },
-        update: {
-          count: 1,
-          windowStart: now,
-          expiresAt,
-        },
       });
-      return {
-        ok: true,
-        remaining: config.limit - 1,
-        resetAt: expiresAt,
-      };
-    }
 
-    if (existing.count >= config.limit) {
-      const retryAfterSeconds = Math.max(
-        1,
-        Math.ceil((existing.expiresAt.getTime() - now.getTime()) / 1000),
-      );
-      return {
-        ok: false,
-        retryAfterSeconds,
-        resetAt: existing.expiresAt,
-      };
-    }
+      if (!existing || existing.expiresAt.getTime() <= now.getTime()) {
+        const expiresAt = new Date(now.getTime() + config.windowMs);
+        if (!existing) {
+          await tx.rateLimitBucket.create({
+            data: {
+              id: newBucketId(),
+              bucketKey: input.bucketKey,
+              count: 1,
+              windowStart: now,
+              expiresAt,
+            },
+          });
+        } else {
+          await tx.rateLimitBucket.update({
+            where: { bucketKey: input.bucketKey },
+            data: {
+              count: 1,
+              windowStart: now,
+              expiresAt,
+            },
+          });
+        }
+        return {
+          ok: true as const,
+          remaining: config.limit - 1,
+          resetAt: expiresAt,
+        };
+      }
 
-    const updated = await db.rateLimitBucket.update({
-      where: { bucketKey: input.bucketKey },
-      data: { count: { increment: 1 } },
+      if (existing.count >= config.limit) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((existing.expiresAt.getTime() - now.getTime()) / 1000),
+        );
+        return {
+          ok: false as const,
+          retryAfterSeconds,
+          resetAt: existing.expiresAt,
+        };
+      }
+
+      const updated = await tx.rateLimitBucket.update({
+        where: { bucketKey: input.bucketKey },
+        data: { count: { increment: 1 } },
+      });
+
+      return {
+        ok: true as const,
+        remaining: Math.max(0, config.limit - updated.count),
+        resetAt: updated.expiresAt,
+      };
     });
-
-    return {
-      ok: true,
-      remaining: Math.max(0, config.limit - updated.count),
-      resetAt: updated.expiresAt,
-    };
   } catch (error) {
-    // Fail closed when the rate-limit backend is unavailable.
     console.error(
       JSON.stringify({
         event: "rate_limit.backend_unavailable",

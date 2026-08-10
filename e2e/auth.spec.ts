@@ -1,8 +1,18 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import { expect, test } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { hash } from "@node-rs/argon2";
 
 const prisma = new PrismaClient();
+
+function makeRawToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+function makeTokenHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 const verifiedEmail = "e2e-verified@example.com";
 const verifiedPassword = "CorrectHorseBatteryStaple";
@@ -127,5 +137,139 @@ test.describe("authentication smoke", () => {
     await page.getByLabel("Email").fill(unknownEmail);
     await page.getByRole("button", { name: "Send reset link" }).click();
     await expect(page.getByText(generic)).toBeVisible();
+  });
+
+  test("visiting a verification link does not verify until confirmation POST", async ({
+    page,
+  }) => {
+    const email = `e2e-verify-${Date.now()}@example.com`;
+    const passwordHash = await hash("CorrectHorseBatteryStaple", {
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+      outputLen: 32,
+      algorithm: 2,
+    });
+    const user = await prisma.user.create({
+      data: {
+        name: "E2E Verify",
+        email,
+        passwordHash,
+      },
+    });
+
+    const token = makeRawToken();
+    await prisma.authToken.create({
+      data: {
+        userId: user.id,
+        purpose: "EMAIL_VERIFICATION",
+        tokenHash: makeTokenHash(token),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    await page.goto(`/verify-email?token=${encodeURIComponent(token)}`);
+    await expect(
+      page.getByRole("heading", { name: "Confirm email verification" }),
+    ).toBeVisible();
+
+    const stillUnverified = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(stillUnverified.emailVerifiedAt).toBeNull();
+    expect(
+      await prisma.authToken.count({
+        where: { userId: user.id, consumedAt: null },
+      }),
+    ).toBe(1);
+
+    await page.getByRole("button", { name: "Verify email" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Email verified" }),
+    ).toBeVisible();
+
+    const verified = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+    });
+    expect(verified.emailVerifiedAt).not.toBeNull();
+  });
+
+  test("password reset invalidates an existing browser session for /app", async ({
+    page,
+    context,
+  }) => {
+    const email = `e2e-revoke-${Date.now()}@example.com`;
+    const oldPassword = "CorrectHorseBatteryStaple";
+    const newPassword = "TotallyNewPassphrase1";
+    const passwordHash = await hash(oldPassword, {
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+      outputLen: 32,
+      algorithm: 2,
+    });
+    const user = await prisma.user.create({
+      data: {
+        name: "E2E Revoke",
+        email,
+        passwordHash,
+        emailVerifiedAt: new Date(),
+        sessionVersion: 0,
+      },
+    });
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(oldPassword);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/app/);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Application" }),
+    ).toBeVisible();
+
+    const token = makeRawToken();
+    await prisma.authToken.create({
+      data: {
+        userId: user.id,
+        purpose: "PASSWORD_RESET",
+        tokenHash: makeTokenHash(token),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+    const newHash = await hash(newPassword, {
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+      outputLen: 32,
+      algorithm: 2,
+    });
+    await prisma.$transaction([
+      prisma.authToken.updateMany({
+        where: { userId: user.id, purpose: "PASSWORD_RESET", consumedAt: null },
+        data: { consumedAt: new Date() },
+      }),
+      prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: newHash, sessionVersion: { increment: 1 } },
+      }),
+    ]);
+
+    // Reuse the same browser session cookies without signing in again.
+    await page.goto("/app");
+    await expect(page).toHaveURL(/\/login/);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(oldPassword);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByText("Invalid email or password.")).toBeVisible();
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(newPassword);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page).toHaveURL(/\/app/);
+
+    expect(context.pages().length).toBeGreaterThan(0);
   });
 });

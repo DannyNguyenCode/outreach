@@ -4,7 +4,6 @@ import {
   findAuthToken,
   generateRawToken,
   hashToken,
-  issueAuthToken,
   tokensEqual,
 } from "@/lib/auth/tokens";
 
@@ -97,7 +96,7 @@ function createTokenDb() {
   };
 }
 
-describe("token utilities", () => {
+describe("token lookup utilities", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -109,21 +108,21 @@ describe("token utilities", () => {
     expect(a.length).toBeGreaterThanOrEqual(40);
   });
 
-  it("stores a hash rather than the raw token", async () => {
-    const db = createTokenDb();
-    const { rawToken } = await issueAuthToken(db, {
-      userId: "user_1",
-      purpose: "EMAIL_VERIFICATION",
-    });
-    expect(db._tokens[0]?.tokenHash).toBe(hashToken(rawToken));
-    expect(db._tokens[0]?.tokenHash).not.toBe(rawToken);
+  it("hashes rather than storing raw tokens", () => {
+    const raw = generateRawToken();
+    expect(hashToken(raw)).not.toBe(raw);
   });
 
   it("verifies a correct token and rejects incorrect ones", async () => {
     const db = createTokenDb();
-    const { rawToken } = await issueAuthToken(db, {
+    const rawToken = generateRawToken();
+    db._tokens.push({
+      id: "tok_1",
       userId: "user_1",
       purpose: "EMAIL_VERIFICATION",
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
     });
 
     const ok = await findAuthToken(db, {
@@ -143,9 +142,14 @@ describe("token utilities", () => {
   it("rejects expired tokens", async () => {
     vi.useFakeTimers();
     const db = createTokenDb();
-    const { rawToken } = await issueAuthToken(db, {
+    const rawToken = generateRawToken();
+    db._tokens.push({
+      id: "tok_1",
       userId: "user_1",
       purpose: "PASSWORD_RESET",
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
     });
     vi.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
 
@@ -159,11 +163,15 @@ describe("token utilities", () => {
 
   it("rejects consumed tokens", async () => {
     const db = createTokenDb();
-    const { rawToken } = await issueAuthToken(db, {
+    const rawToken = generateRawToken();
+    db._tokens.push({
+      id: "tok_1",
       userId: "user_1",
       purpose: "EMAIL_VERIFICATION",
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: new Date(),
     });
-    db._tokens[0]!.consumedAt = new Date();
 
     const result = await findAuthToken(db, {
       rawToken,
@@ -175,9 +183,14 @@ describe("token utilities", () => {
 
   it("rejects purpose mismatches", async () => {
     const db = createTokenDb();
-    const { rawToken } = await issueAuthToken(db, {
+    const rawToken = generateRawToken();
+    db._tokens.push({
+      id: "tok_1",
       userId: "user_1",
       purpose: "EMAIL_VERIFICATION",
+      tokenHash: hashToken(rawToken),
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
     });
 
     const result = await findAuthToken(db, {

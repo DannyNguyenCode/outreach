@@ -3,10 +3,12 @@ import "server-only";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
-import { getSessionVersion } from "@/lib/auth/account-service";
+import {
+  getUserById,
+  isSessionVersionCurrent,
+} from "@/lib/auth/account-service";
 import { getSafeRedirect } from "@/lib/auth/redirects";
 import type { SafeUser } from "@/lib/auth/users";
-import { getUserById } from "@/lib/auth/account-service";
 
 export type AuthSessionUser = {
   id: string;
@@ -26,8 +28,7 @@ export async function getCurrentSessionUser(): Promise<AuthSessionUser | null> {
     return null;
   }
 
-  const currentVersion = await getSessionVersion(user.id);
-  if (currentVersion === null || currentVersion !== user.sessionVersion) {
+  if (!(await isSessionVersionCurrent(user.id, user.sessionVersion))) {
     return null;
   }
 

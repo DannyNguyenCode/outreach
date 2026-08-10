@@ -369,3 +369,15 @@ export async function getSessionVersion(
   });
   return user?.sessionVersion ?? null;
 }
+
+/**
+ * Server-side revocation check used by protected helpers.
+ * A JWT is only valid while its embedded sessionVersion matches the database.
+ */
+export async function isSessionVersionCurrent(
+  userId: string,
+  sessionVersion: number,
+): Promise<boolean> {
+  const current = await getSessionVersion(userId);
+  return current !== null && current === sessionVersion;
+}

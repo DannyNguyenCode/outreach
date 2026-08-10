@@ -47,6 +47,7 @@ model AuthToken {
   @@index([userId, purpose, consumedAt])
   @@index([expiresAt])
   @@index([tokenHash])
+  /// Partial unique index created in migration 20260810010000 (active tokens only).
 }
 
 /// Database-backed rate-limit counters suitable for serverless runtimes.

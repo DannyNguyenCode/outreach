@@ -30,6 +30,16 @@ export const serverEnvSchema = z.object({
   /** Canonical public origin used to build verification/reset links. */
   NEXT_PUBLIC_APP_URL: nonemptyUrl,
   AUTH_EMAIL_DELIVERY: z.enum(["resend", "mock"]).default("resend"),
+  /**
+   * Max wait for live Resend delivery before failing the send.
+   * Default 10s; clamped to 1000–60000 inclusive.
+   */
+  EMAIL_PROVIDER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1000)
+    .max(60_000)
+    .default(10_000),
   AUTH_TRUST_HOST: z
     .enum(["true", "false"])
     .optional()
