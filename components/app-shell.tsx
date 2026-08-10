@@ -17,7 +17,7 @@ export function AppShell({ children }: AppShellProps) {
         {children}
       </main>
       <footer className="border-t border-[var(--border)] py-4 text-center text-sm text-[var(--muted)]">
-        Outreach foundation — Phase 0
+        Outreach foundation — Phase 1
       </footer>
     </div>
   );

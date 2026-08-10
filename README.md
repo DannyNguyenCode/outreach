@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: Phase 0 foundation in progress. See [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) for local setup, environment variables, Prisma, and verification commands.
+> Project status: Phase 1 authentication in progress. See [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) for Auth.js setup, sessions, migrations, and verification commands. Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Product vision
 
@@ -169,19 +169,23 @@ Production credentials and customer data must never be used for agent experiment
 - Local, Preview, Staging, and Production should use separate provider resources and encryption keys where practical.
 - Important schema changes must use version-controlled migrations rather than dashboard-only edits.
 
-### Phase 0 stack decisions
+### Phase 0–1 stack decisions
 
 | Area | Choice |
 |---|---|
 | Runtime | Node.js 22 LTS only (`.nvmrc`; engines `>=22.12.0 <23`) |
 | Package manager | npm |
 | Framework | Next.js App Router + React + TypeScript (strict) |
-| Styling | Tailwind CSS (no DaisyUI in Phase 0) |
+| Styling | Tailwind CSS (no DaisyUI in Phase 0/1) |
 | ORM | Prisma → Supabase-hosted PostgreSQL |
+| Auth | Auth.js (`next-auth` v5) Credentials + JWT + `sessionVersion` revocation |
+| Passwords | Argon2id via `@node-rs/argon2` |
+| Email | Resend (verification + password reset) |
 | Env validation | Zod (`lib/env`) |
 | Unit / component tests | Vitest + React Testing Library |
+| Integration tests | Vitest + isolated Postgres |
 | End-to-end tests | Playwright |
-| CI | GitHub Actions (`.github/workflows/ci.yml`) |
+| CI | GitHub Actions (`.github/workflows/ci.yml`) with Postgres service |
 
 Database URLs:
 
@@ -193,22 +197,27 @@ Quick start:
 ```bash
 npm ci
 cp .env.example .env.local
+npm run prisma:migrate:deploy
 npm run dev
 npm run verify
+npm run test:integration
 npm run test:e2e
 ```
 
-Full developer instructions: [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
+Developer docs:
+
+- [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — foundation setup
+- [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — authentication
 
 ## Project documents
 
 - [`requirements.md`](./requirements.md) — product source of truth, acceptance criteria, priorities, and requirement IDs
 - [`outreach-implementation-phases.md`](./outreach-implementation-phases.md) — detailed 15-phase feature plan and Cursor Automation boundaries
 - [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — Phase 0 local setup and verification
+- [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — Phase 1 authentication
 
 If documents conflict, `requirements.md` defines product behavior. The implementation phases define build order and decomposition, and this README serves as the project entry point.
 
 ## Current next step
 
-Complete Phase 0 review, then begin Phase 1 (Auth.js registration, verification, login, recovery, and database sessions).
-
+Complete Phase 1 review, then begin Phase 2 (organizations, employees, roles, invitations, and offboarding).
