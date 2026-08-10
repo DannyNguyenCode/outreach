@@ -14,9 +14,12 @@ import { recordOrganizationAuditEvent } from "@/lib/orgs/audit";
 import {
   OrganizationAuthError,
   requireOrganizationPermission,
-  requireScopedInvitation,
 } from "@/lib/orgs/authorization";
-import { isInvitableRole, type InvitableRole } from "@/lib/orgs/permissions";
+import {
+  isInvitableRole,
+  roleHasPermission,
+  type InvitableRole,
+} from "@/lib/orgs/permissions";
 import { prisma } from "@/lib/prisma";
 
 /** Invitation links expire after 7 days. */
@@ -38,12 +41,35 @@ export function invitationPublicStatus(invitation: {
   return "pending";
 }
 
-function advisoryLockKey(
+/** Serializes concurrent issuers for the same organization + email. */
+export function invitationIssuanceLockKey(
   organizationId: string,
   emailNormalized: string,
 ): string {
   return `org-invite:${organizationId}:${emailNormalized}`;
 }
+
+/**
+ * Serializes terminal transitions (accept ↔ revoke) for one invitation.
+ * Uses the invitation id only — never a raw token.
+ */
+export function invitationTerminalLockKey(invitationId: string): string {
+  return `org-invite-terminal:${invitationId}`;
+}
+
+export type InvitationMutationTestHooks = {
+  /**
+   * Test-only seam invoked after any advisory lock is held and before the
+   * authoritative transactional membership/permission recheck.
+   */
+  testBeforeTransactionalAuth?: () => Promise<void>;
+  /**
+   * Test-only seam invoked after the terminal lock is held and the invitation
+   * has been reloaded as still pending, immediately before the conditional
+   * terminal mutation (accept or revoke).
+   */
+  testBeforeTerminalMutation?: () => Promise<void>;
+};
 
 export type CreateInvitationResult =
   | {
@@ -69,9 +95,12 @@ export type CreateInvitationResult =
  *
  * Concurrency:
  * - `pg_advisory_xact_lock(hashtext(orgId:email))` serializes issuers
+ * - Actor membership + `org.members.invite` are rechecked inside the transaction
  * - Active invitations for the same org+email are revoked, then a replacement
  *   row is created in the same transaction
  * - Partial unique index enforces at most one usable invitation per org+email
+ *
+ * Email is sent only after a successful commit.
  */
 export async function createOrganizationInvitation(
   input: {
@@ -80,8 +109,9 @@ export async function createOrganizationInvitation(
     email: string;
     role: OrganizationRole | string;
   },
-  deps: { mailer?: EmailSender } = {},
+  deps: { mailer?: EmailSender } & InvitationMutationTestHooks = {},
 ): Promise<CreateInvitationResult> {
+  // Fast rejection only — not authoritative for the mutation.
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -153,7 +183,10 @@ export async function createOrganizationInvitation(
   const rawToken = generateRawToken();
   const tokenHash = hashToken(rawToken);
   const expiresAt = new Date(Date.now() + ORGANIZATION_INVITATION_TTL_MS);
-  const lockKey = advisoryLockKey(input.organizationId, emailNormalized);
+  const lockKey = invitationIssuanceLockKey(
+    input.organizationId,
+    emailNormalized,
+  );
 
   let invitationId = "";
   let replaced = false;
@@ -162,7 +195,10 @@ export async function createOrganizationInvitation(
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
 
-      // Re-check actor membership under the lock path via fresh read.
+      if (deps.testBeforeTransactionalAuth) {
+        await deps.testBeforeTransactionalAuth();
+      }
+
       const actorMembership = await tx.membership.findUnique({
         where: {
           organizationId_userId: {
@@ -173,6 +209,9 @@ export async function createOrganizationInvitation(
       });
       if (!actorMembership || actorMembership.status !== "ACTIVE") {
         throw new OrganizationAuthError("inactive_membership");
+      }
+      if (!roleHasPermission(actorMembership.role, "org.members.invite")) {
+        throw new OrganizationAuthError("forbidden");
       }
 
       const revoked = await tx.organizationInvitation.updateMany({
@@ -292,10 +331,13 @@ export type AcceptInvitationResult =
  * Intentionally accept an invitation. GET preview must never call this.
  * Role always comes from the stored invitation row — never from the client.
  */
-export async function acceptOrganizationInvitation(input: {
-  actor: SafeUser | null;
-  rawToken: string;
-}): Promise<AcceptInvitationResult> {
+export async function acceptOrganizationInvitation(
+  input: {
+    actor: SafeUser | null;
+    rawToken: string;
+  },
+  deps: InvitationMutationTestHooks = {},
+): Promise<AcceptInvitationResult> {
   if (!input.actor) {
     return {
       ok: false,
@@ -335,7 +377,6 @@ export async function acceptOrganizationInvitation(input: {
         return { kind: "invalid" as const };
       }
       if (invitation.acceptedAt) {
-        // Idempotent path: if this user already has membership, succeed.
         const existing = await tx.membership.findUnique({
           where: {
             organizationId_userId: {
@@ -367,10 +408,13 @@ export async function acceptOrganizationInvitation(input: {
         return { kind: "email_mismatch" as const };
       }
 
-      // Serialize acceptors for this invitation.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`org-invite-accept:${invitation.id}`}))`;
+      const terminalLock = invitationTerminalLockKey(invitation.id);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${terminalLock}))`;
 
-      // Re-read after lock.
+      if (deps.testBeforeTransactionalAuth) {
+        await deps.testBeforeTransactionalAuth();
+      }
+
       const fresh = await tx.organizationInvitation.findUnique({
         where: { id: invitation.id },
       });
@@ -398,6 +442,32 @@ export async function acceptOrganizationInvitation(input: {
       }
       if (fresh.expiresAt.getTime() <= Date.now()) {
         return { kind: "expired" as const };
+      }
+
+      if (deps.testBeforeTerminalMutation) {
+        await deps.testBeforeTerminalMutation();
+      }
+
+      // Claim acceptance first so a concurrent revoke cannot leave membership
+      // without a matching accepted invitation (or vice versa).
+      const consumed = await tx.organizationInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          organizationId: invitation.organizationId,
+          acceptedAt: null,
+          revokedAt: null,
+        },
+        data: { acceptedAt: new Date() },
+      });
+      if (consumed.count !== 1) {
+        const after = await tx.organizationInvitation.findUnique({
+          where: { id: invitation.id },
+        });
+        return {
+          kind: after?.acceptedAt
+            ? ("accepted" as const)
+            : ("revoked" as const),
+        };
       }
 
       const existingMembership = await tx.membership.findUnique({
@@ -437,18 +507,6 @@ export async function acceptOrganizationInvitation(input: {
           select: { id: true },
         });
         membershipId = created.id;
-      }
-
-      const consumed = await tx.organizationInvitation.updateMany({
-        where: {
-          id: invitation.id,
-          acceptedAt: null,
-          revokedAt: null,
-        },
-        data: { acceptedAt: new Date() },
-      });
-      if (consumed.count !== 1) {
-        return { kind: "accepted" as const };
       }
 
       await recordOrganizationAuditEvent(tx, {
@@ -582,11 +640,36 @@ export async function previewOrganizationInvitation(
   };
 }
 
-export async function revokeOrganizationInvitation(input: {
-  actor: SafeUser;
-  organizationId: string;
-  invitationId: string;
-}): Promise<{ ok: true } | { ok: false; reason: string; message: string }> {
+export type RevokeInvitationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | "forbidden"
+        | "not_found"
+        | "not_pending"
+        | "accepted"
+        | "revoked"
+        | "failed";
+      message: string;
+    };
+
+/**
+ * Revoke a pending invitation.
+ *
+ * Uses the same invitation-terminal advisory lock as acceptance and a
+ * conditional update requiring `acceptedAt` and `revokedAt` remain null.
+ * Actor membership + `org.invitations.revoke` are rechecked inside the txn.
+ */
+export async function revokeOrganizationInvitation(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    invitationId: string;
+  },
+  deps: InvitationMutationTestHooks = {},
+): Promise<RevokeInvitationResult> {
+  // Fast rejection only — not authoritative for the mutation.
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -604,41 +687,141 @@ export async function revokeOrganizationInvitation(input: {
     throw error;
   }
 
-  const invitation = await requireScopedInvitation({
-    organizationId: input.organizationId,
-    invitationId: input.invitationId,
-  }).catch(() => null);
+  try {
+    const outcome = await prisma.$transaction(async (tx) => {
+      const terminalLock = invitationTerminalLockKey(input.invitationId);
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${terminalLock}))`;
 
-  if (!invitation) {
+      if (deps.testBeforeTransactionalAuth) {
+        await deps.testBeforeTransactionalAuth();
+      }
+
+      const actorMembership = await tx.membership.findUnique({
+        where: {
+          organizationId_userId: {
+            organizationId: input.organizationId,
+            userId: input.actor.id,
+          },
+        },
+      });
+      if (!actorMembership || actorMembership.status !== "ACTIVE") {
+        throw new OrganizationAuthError("inactive_membership");
+      }
+      if (!roleHasPermission(actorMembership.role, "org.invitations.revoke")) {
+        throw new OrganizationAuthError("forbidden");
+      }
+
+      const invitation = await tx.organizationInvitation.findFirst({
+        where: {
+          id: input.invitationId,
+          organizationId: input.organizationId,
+        },
+      });
+      if (!invitation) {
+        return { kind: "not_found" as const };
+      }
+      if (invitation.acceptedAt) {
+        return { kind: "accepted" as const };
+      }
+      if (invitation.revokedAt) {
+        return { kind: "revoked" as const };
+      }
+
+      if (deps.testBeforeTerminalMutation) {
+        await deps.testBeforeTerminalMutation();
+      }
+
+      const revoked = await tx.organizationInvitation.updateMany({
+        where: {
+          id: invitation.id,
+          organizationId: input.organizationId,
+          acceptedAt: null,
+          revokedAt: null,
+        },
+        data: { revokedAt: new Date() },
+      });
+      if (revoked.count !== 1) {
+        const after = await tx.organizationInvitation.findFirst({
+          where: {
+            id: invitation.id,
+            organizationId: input.organizationId,
+          },
+        });
+        if (after?.acceptedAt) {
+          return { kind: "accepted" as const };
+        }
+        if (after?.revokedAt) {
+          return { kind: "revoked" as const };
+        }
+        return { kind: "not_pending" as const };
+      }
+
+      await recordOrganizationAuditEvent(tx, {
+        organizationId: input.organizationId,
+        actorUserId: input.actor.id,
+        action: "INVITATION_REVOKED",
+        metadata: { invitationId: invitation.id },
+      });
+
+      return { kind: "ok" as const };
+    });
+
+    if (outcome.kind === "ok") {
+      return { ok: true };
+    }
+
+    const messages: Record<string, RevokeInvitationResult> = {
+      not_found: {
+        ok: false,
+        reason: "not_found",
+        message: "Invitation not found.",
+      },
+      accepted: {
+        ok: false,
+        reason: "accepted",
+        message: "This invitation has already been accepted.",
+      },
+      revoked: {
+        ok: false,
+        reason: "revoked",
+        message: "This invitation has already been revoked.",
+      },
+      not_pending: {
+        ok: false,
+        reason: "not_pending",
+        message: "Only pending invitations can be revoked.",
+      },
+    };
+    return (
+      messages[outcome.kind] ?? {
+        ok: false,
+        reason: "failed",
+        message: "Unable to revoke this invitation. Please try again.",
+      }
+    );
+  } catch (error) {
+    if (error instanceof OrganizationAuthError) {
+      return {
+        ok: false,
+        reason: "forbidden",
+        message: "You do not have permission to revoke invitations.",
+      };
+    }
+    console.error(
+      JSON.stringify({
+        event: "org.invitation_revoke_failed",
+        code:
+          error instanceof Prisma.PrismaClientKnownRequestError
+            ? error.code
+            : "unknown",
+      }),
+    );
     return {
       ok: false,
-      reason: "not_found",
-      message: "Invitation not found.",
+      reason: "failed",
+      message: "Unable to revoke this invitation. Please try again.",
     };
   }
-
-  if (invitation.acceptedAt || invitation.revokedAt) {
-    return {
-      ok: false,
-      reason: "not_pending",
-      message: "Only pending invitations can be revoked.",
-    };
-  }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.organizationInvitation.update({
-      where: { id: invitation.id },
-      data: { revokedAt: new Date() },
-    });
-    await recordOrganizationAuditEvent(tx, {
-      organizationId: input.organizationId,
-      actorUserId: input.actor.id,
-      action: "INVITATION_REVOKED",
-      metadata: { invitationId: invitation.id },
-    });
-  });
-
-  return { ok: true };
 }
 
 export async function listOrganizationInvitations(input: {
