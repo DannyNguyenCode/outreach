@@ -12,6 +12,8 @@ export type SafeUser = {
   email: string;
   emailVerifiedAt: Date | null;
   sessionVersion: number;
+  /** Soft preference only — always re-validate against active membership. */
+  activeOrganizationId: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -22,6 +24,7 @@ export const safeUserSelect = {
   email: true,
   emailVerifiedAt: true,
   sessionVersion: true,
+  activeOrganizationId: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -34,6 +37,7 @@ export function toSafeUser(
     | "email"
     | "emailVerifiedAt"
     | "sessionVersion"
+    | "activeOrganizationId"
     | "createdAt"
     | "updatedAt"
   >,
@@ -44,6 +48,7 @@ export function toSafeUser(
     email: user.email,
     emailVerifiedAt: user.emailVerifiedAt,
     sessionVersion: user.sessionVersion,
+    activeOrganizationId: user.activeOrganizationId,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

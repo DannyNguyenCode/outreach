@@ -83,7 +83,7 @@ test.describe("authentication smoke", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/app/);
     await expect(
-      page.getByRole("heading", { level: 1, name: "Application" }),
+      page.getByRole("heading", { level: 1, name: "Organizations" }),
     ).toBeVisible();
   });
 
@@ -224,7 +224,7 @@ test.describe("authentication smoke", () => {
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/app/);
     await expect(
-      page.getByRole("heading", { level: 1, name: "Application" }),
+      page.getByRole("heading", { level: 1, name: "Organizations" }),
     ).toBeVisible();
 
     const token = makeRawToken();

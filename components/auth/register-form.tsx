@@ -10,11 +10,17 @@ import { FieldError } from "@/components/auth/field-error";
 import { FormStatus } from "@/components/auth/form-status";
 import { SubmitButton } from "@/components/auth/submit-button";
 
-export function RegisterForm() {
+type RegisterFormProps = {
+  callbackUrl?: string;
+};
+
+export function RegisterForm({ callbackUrl = "/app" }: RegisterFormProps) {
   const [state, formAction] = useActionState<ActionState, FormData>(
     registerAction,
     initialActionState,
   );
+
+  const loginHref = `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`;
 
   return (
     <AuthCard
@@ -123,7 +129,7 @@ export function RegisterForm() {
       <p className="text-sm text-[var(--muted)]">
         Already have an account?{" "}
         <Link
-          href="/login"
+          href={loginHref}
           className="text-[var(--foreground)] underline-offset-2 hover:underline"
         >
           Sign in

@@ -11,19 +11,27 @@ datasource db {
 /// Application user for Phase 1 email/password authentication.
 /// passwordHash must never be selected by public-facing helpers.
 model User {
-  id              String     @id @default(cuid())
-  name            String
+  id                   String                    @id @default(cuid())
+  name                 String
   /// Normalized lowercase email; uniqueness is case-insensitive by construction.
-  email           String     @unique
-  passwordHash    String
-  emailVerifiedAt DateTime?
+  email                String                    @unique
+  passwordHash         String
+  emailVerifiedAt      DateTime?
   /// Incremented on password reset / explicit revocation to invalidate JWT sessions.
-  sessionVersion  Int        @default(0)
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
-  authTokens      AuthToken[]
+  sessionVersion       Int                       @default(0)
+  /// Soft preference for the last selected organization. Always re-validated.
+  activeOrganizationId String?
+  activeOrganization   Organization?             @relation("UserActiveOrganization", fields: [activeOrganizationId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  authTokens           AuthToken[]
+  memberships          Membership[]
+  invitationsSent      OrganizationInvitation[]  @relation("InvitationInviter")
+  membershipDeactivations Membership[]           @relation("MembershipDeactivator")
+  auditEvents          OrganizationAuditEvent[]  @relation("AuditActor")
 
   @@index([emailVerifiedAt])
+  @@index([activeOrganizationId])
 }
 
 enum AuthTokenPurpose {
@@ -62,4 +70,101 @@ model RateLimitBucket {
   updatedAt   DateTime @updatedAt
 
   @@index([expiresAt])
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum OrganizationAuditAction {
+  ORGANIZATION_CREATED
+  INVITATION_CREATED
+  INVITATION_REPLACED
+  INVITATION_REVOKED
+  INVITATION_ACCEPTED
+  MEMBER_ROLE_CHANGED
+  MEMBER_DEACTIVATED
+}
+
+/// Tenant root for Phase 2 multi-organization support.
+model Organization {
+  id          String                    @id @default(cuid())
+  name        String
+  /// URL-safe unique slug. Normalized at write time; not silently rewritten on rename.
+  slug        String                    @unique
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+  memberships Membership[]
+  invitations OrganizationInvitation[]
+  auditEvents OrganizationAuditEvent[]
+  activeUsers User[]                    @relation("UserActiveOrganization")
+
+  @@index([createdAt])
+}
+
+/// User membership in an organization. One row per user per organization.
+model Membership {
+  id                  String           @id @default(cuid())
+  organizationId      String
+  organization        Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId              String
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role                OrganizationRole
+  status              MembershipStatus @default(ACTIVE)
+  deactivatedAt       DateTime?
+  deactivatedByUserId String?
+  deactivatedBy       User?            @relation("MembershipDeactivator", fields: [deactivatedByUserId], references: [id], onDelete: SetNull)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId, status])
+  @@index([organizationId, status])
+  @@index([organizationId, role, status])
+}
+
+/// Hashed, expiring, single-use organization invitation.
+/// Raw tokens are emailed once and never stored.
+model OrganizationInvitation {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  emailNormalized String
+  role            OrganizationRole
+  tokenHash       String           @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+  invitedByUserId String
+  invitedBy       User             @relation("InvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Restrict)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([organizationId, emailNormalized])
+  @@index([expiresAt])
+  @@index([organizationId, revokedAt, acceptedAt])
+  /// Partial unique index created in Phase 2 migration (one usable invite per org+email).
+}
+
+/// Focused audit trail for sensitive Phase 2 organization actions.
+model OrganizationAuditEvent {
+  id             String                   @id @default(cuid())
+  organizationId String
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorUserId    String?
+  actor          User?                    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  action         OrganizationAuditAction
+  /// Structured, minimal metadata. Never store secrets or raw tokens.
+  metadata       Json?
+  createdAt      DateTime                 @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([actorUserId, createdAt])
 }

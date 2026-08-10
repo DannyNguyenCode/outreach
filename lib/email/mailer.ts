@@ -259,3 +259,36 @@ export async function sendPasswordResetEmail(
     html: `<p>Reset your password by opening this link:</p><p><a href="${resetUrl}">Reset password</a></p><p>If you did not request a reset, you can ignore this message.</p>`,
   });
 }
+
+export async function sendOrganizationInvitationEmail(
+  mailer: EmailSender,
+  input: {
+    to: string;
+    organizationName: string;
+    role: string;
+    expiresAt: Date;
+    rawToken: string;
+    inviterName: string;
+  },
+): Promise<void> {
+  const acceptUrl = buildAppUrl("/invitations/accept", {
+    token: input.rawToken,
+  });
+  const expiresLabel = input.expiresAt.toUTCString();
+  const roleLabel = input.role.toLowerCase();
+  await mailer.send({
+    to: input.to,
+    subject: `Invitation to join ${input.organizationName} on Outreach`,
+    text: `${input.inviterName} invited you to join ${input.organizationName} as ${roleLabel}.\n\nOpen this link, then confirm acceptance in the browser:\n\n${acceptUrl}\n\nThis invitation expires on ${expiresLabel}.\n\nIf you were not expecting this invitation, you can ignore this message.`,
+    html: `<p><strong>${escapeHtml(input.inviterName)}</strong> invited you to join <strong>${escapeHtml(input.organizationName)}</strong> as ${escapeHtml(roleLabel)}.</p><p>Open this link, then confirm acceptance in the browser:</p><p><a href="${acceptUrl}">Review invitation</a></p><p>This invitation expires on ${escapeHtml(expiresLabel)}.</p><p>If you were not expecting this invitation, you can ignore this message.</p>`,
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}

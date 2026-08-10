@@ -14,6 +14,7 @@ import { issueAuthToken } from "@/lib/auth/tokens";
 import { verifyPassword } from "@/lib/auth/password";
 import { setMailerForTests, type EmailSender } from "@/lib/email/mailer";
 import { resetServerEnvCache } from "@/lib/env/server";
+import { resetApplicationData } from "@/tests/integration/reset";
 
 const sent: Array<{ to: string; subject: string; text: string }> = [];
 
@@ -39,9 +40,7 @@ describe("authentication integration", () => {
 
   beforeEach(async () => {
     sent.length = 0;
-    await prisma.rateLimitBucket.deleteMany();
-    await prisma.authToken.deleteMany();
-    await prisma.user.deleteMany();
+    await resetApplicationData(prisma);
   });
 
   afterAll(async () => {
