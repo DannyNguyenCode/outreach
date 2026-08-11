@@ -130,9 +130,14 @@ unnecessarily within one logical transaction.
 
 Lock ordering (deadlock prevention):
 
-1. Acquire `organization-readiness:<organizationId>` first.
-2. Only then acquire specialized locks (`hours:`, `services-order:`, `products-order:`) when needed.
-3. Reorder-only operations that do not affect completion readiness may use specialized locks alone.
+1. Acquire `organization-readiness:<organizationId>` first (when required).
+2. Lock the actor membership row with `SELECT … FOR UPDATE` (recheck role/status under lock).
+3. Only then acquire specialized locks (`hours:`, `services-order:`, `products-order:`) when needed.
+4. Reorder-only operations that do not affect completion readiness may use specialized locks alone (still recheck membership under `FOR UPDATE`).
+
+Demotion / offboarding lock the **target** membership with `FOR UPDATE` first (the same row Phase 3A locks when that user is the actor), then the **actor** membership. That shared row lock linearizes authorization races with sensitive configuration mutations.
+
+When a save also advances onboarding progress (`progress` / `markStep`), the configuration write and `advanceOnboardingStepInTx` run in **one transaction** under the readiness + membership locks. If progress fails (including completed-onboarding rejection), the whole save rolls back.
 
 Versioned writes use atomic conditional `updateMany` scoped by organization and expected version.
 
@@ -195,7 +200,8 @@ Client-supplied `isComplete: true` is ignored.
 ## Reopening and invalidation behavior
 
 - Explicit reopen → `IN_PROGRESS`, records actor/timestamp, clears ready flag.
-- Ordinary edits remain allowed after completion.
+- **Completed onboarding is immutable to ordinary progress mutations** (`advanceOnboardingStep` / combined save+progress) until reopen. Callers receive `already_completed`.
+- Ordinary configuration edits remain allowed after completion.
 - If an edit invalidates completion requirements, the server sets `isConfigurationReady=false` and transitions status back to `IN_PROGRESS` so the org is not falsely presented as ready for Phase 3B.
 
 ## Active-organization strategy
@@ -248,6 +254,7 @@ Cross-tenant IDs fail safely and do not write audits in either tenant.
 - Catalogue reordering uses advisory lock + org-scoped updates
 - Onboarding completion uses advisory lock + readiness recompute
 - Profile/settings use optimistic `version` where applicable
+- Combined config + onboarding progress is a single transaction (save then advance; failures roll back both)
 - Concurrent onboarding init converges via unique `organizationId` + P2002 handling
 
 No in-memory production locks.

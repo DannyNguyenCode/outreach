@@ -22,7 +22,9 @@ import {
   businessBasicsSchema,
   contactLocationSchema,
   requireExpectedVersion,
+  type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
+import { advanceOnboardingStepInTx } from "@/lib/orgs/onboarding";
 import { prisma } from "@/lib/prisma";
 
 export type BusinessConfiguration = {
@@ -36,6 +38,12 @@ export type GetBusinessResult =
   | { ok: true; data: BusinessConfiguration }
   | { ok: false; reason: "not_initialized"; message: string }
   | AuthFailure;
+
+type ProgressInput = {
+  step: OnboardingStepValue;
+  nextStep?: OnboardingStepValue;
+  expectedVersion: number;
+};
 
 /**
  * Read-only business configuration retrieval. Never creates defaults.
@@ -90,12 +98,40 @@ export async function getBusinessConfiguration(input: {
   }
 }
 
+function parseProgress(
+  progress: ProgressInput | undefined,
+):
+  | { ok: true; progress?: ProgressInput & { expectedVersion: number } }
+  | AuthFailure {
+  if (!progress) {
+    return { ok: true };
+  }
+  const versionParsed = requireExpectedVersion(progress.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { onboardingExpectedVersion: [versionParsed.message] },
+    };
+  }
+  return {
+    ok: true,
+    progress: {
+      step: progress.step,
+      nextStep: progress.nextStep,
+      expectedVersion: versionParsed.version,
+    },
+  };
+}
+
 export async function updateBusinessBasics(
   input: {
     actor: SafeUser;
     organizationId: string;
     raw: unknown;
     expectedVersion: number;
+    progress?: ProgressInput;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<GetBusinessResult> {
@@ -107,6 +143,11 @@ export async function updateBusinessBasics(
       message: versionParsed.message,
       fieldErrors: { expectedVersion: [versionParsed.message] },
     };
+  }
+
+  const progressParsed = parseProgress(input.progress);
+  if (!progressParsed.ok) {
+    return progressParsed;
   }
 
   const parsed = businessBasicsSchema.safeParse(input.raw);
@@ -134,11 +175,15 @@ export async function updateBusinessBasics(
 
     await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.business.update",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.business.update",
+        },
+        hooks,
+      );
 
       const exists = await tx.businessProfile.findUnique({
         where: { organizationId: input.organizationId },
@@ -175,6 +220,15 @@ export async function updateBusinessBasics(
         metadata: { section: "basics", businessType: parsed.data.businessType },
       });
 
+      if (progressParsed.progress) {
+        await advanceOnboardingStepInTx(tx, {
+          organizationId: input.organizationId,
+          step: progressParsed.progress.step,
+          nextStep: progressParsed.progress.nextStep,
+          expectedVersion: progressParsed.progress.expectedVersion,
+        });
+      }
+
       await refreshConfigurationReadiness(tx, input.organizationId);
     });
 
@@ -204,6 +258,7 @@ export async function updateContactAndLocation(
     organizationId: string;
     raw: unknown;
     expectedVersion: number;
+    progress?: ProgressInput;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<GetBusinessResult> {
@@ -215,6 +270,11 @@ export async function updateContactAndLocation(
       message: versionParsed.message,
       fieldErrors: { expectedVersion: [versionParsed.message] },
     };
+  }
+
+  const progressParsed = parseProgress(input.progress);
+  if (!progressParsed.ok) {
+    return progressParsed;
   }
 
   const parsed = contactLocationSchema.safeParse(input.raw);
@@ -242,11 +302,15 @@ export async function updateContactAndLocation(
 
     await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.business.update",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.business.update",
+        },
+        hooks,
+      );
 
       const exists = await tx.businessProfile.findUnique({
         where: { organizationId: input.organizationId },
@@ -295,6 +359,15 @@ export async function updateContactAndLocation(
           timeZone: parsed.data.timeZone,
         },
       });
+
+      if (progressParsed.progress) {
+        await advanceOnboardingStepInTx(tx, {
+          organizationId: input.organizationId,
+          step: progressParsed.progress.step,
+          nextStep: progressParsed.progress.nextStep,
+          expectedVersion: progressParsed.progress.expectedVersion,
+        });
+      }
 
       await refreshConfigurationReadiness(tx, input.organizationId);
     });

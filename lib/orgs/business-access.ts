@@ -27,17 +27,36 @@ export type AuthFailure = {
 };
 
 /**
- * Test-only seams for deterministic readiness-lock concurrency tests.
+ * Test-only seams for deterministic concurrency tests.
  * Production callers must omit these hooks.
+ *
+ * Global lock order for sensitive Phase 3A mutations:
+ * 1. Organization readiness advisory lock (when required)
+ * 2. Actor membership row lock (`SELECT … FOR UPDATE`)
+ * 3. Specialized configuration locks (`hours:`, `services-order:`, …)
+ * 4. Other rows in a stable deterministic order
+ *
+ * Membership demotion/offboarding lock the target membership row with the same
+ * `FOR UPDATE` protocol so authorization races linearize on that row.
  */
 export type ReadinessMutationTestHooks = {
   /** Invoked immediately before acquiring the shared readiness lock. */
   testBeforeReadinessLock?: () => Promise<void>;
   /**
    * Invoked after the shared readiness lock is held and before the
-   * authoritative transactional membership/permission recheck.
+   * membership row lock / permission recheck.
    */
   testAfterReadinessLock?: () => Promise<void>;
+  /** Invoked immediately before locking the actor membership row. */
+  testBeforeMembershipLock?: () => Promise<void>;
+  /** Invoked after the actor membership row lock is held. */
+  testAfterMembershipLock?: () => Promise<void>;
+};
+
+/** Test seams for membership role/status mutations (demotion / offboarding). */
+export type MembershipMutationTestHooks = {
+  testBeforeTargetMembershipLock?: () => Promise<void>;
+  testAfterTargetMembershipLock?: () => Promise<void>;
 };
 
 export class ConflictError extends Error {
@@ -47,16 +66,29 @@ export class ConflictError extends Error {
   }
 }
 
+/** Completed onboarding cannot accept ordinary progress mutations. */
+export class OnboardingLifecycleError extends Error {
+  readonly code = "already_completed" as const;
+
+  constructor(
+    message = "Onboarding is complete. Reopen it before changing progress.",
+  ) {
+    super(message);
+    this.name = "OnboardingLifecycleError";
+  }
+}
+
 /**
  * Lock key namespace for all readiness-affecting Phase 3A mutations.
  *
  * Ordering rule (prevents deadlocks):
  * 1. Always acquire `organization-readiness:<organizationId>` first.
- * 2. Only then acquire any specialized locks (`hours:`, `services-order:`,
+ * 2. Lock the actor's membership row with `FOR UPDATE`.
+ * 3. Only then acquire any specialized locks (`hours:`, `services-order:`,
  *    `products-order:`) if still needed for that operation.
- * 3. Never acquire specialized locks before the readiness lock when both are used.
- * 4. Reorder-only operations that do not affect completion readiness may use
- *    their specialized locks alone.
+ * 4. Never acquire specialized locks before the readiness lock when both are used.
+ * 5. Reorder-only operations that do not affect completion readiness may use
+ *    their specialized locks alone (still recheck membership under `FOR UPDATE`).
  */
 export function organizationReadinessLockKey(organizationId: string): string {
   return `organization-readiness:${organizationId}`;
@@ -82,6 +114,13 @@ export async function acquireOrganizationReadinessLock(
 }
 
 export function mapAuthError(error: unknown): AuthFailure | null {
+  if (error instanceof OnboardingLifecycleError) {
+    return {
+      ok: false,
+      reason: error.code,
+      message: error.message,
+    };
+  }
   if (!(error instanceof OrganizationAuthError)) {
     return null;
   }
@@ -100,6 +139,74 @@ export function mapAuthError(error: unknown): AuthFailure | null {
   };
 }
 
+type LockedMembershipRow = {
+  id: string;
+  role: OrganizationRole;
+  status: "ACTIVE" | "INACTIVE";
+};
+
+/**
+ * Lock a membership row by organization + user with `SELECT … FOR UPDATE`.
+ * Call only inside an open transaction. Read role/status only after the lock.
+ */
+export async function lockMembershipByUserForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; userId: string },
+  hooks: Pick<
+    ReadinessMutationTestHooks,
+    "testBeforeMembershipLock" | "testAfterMembershipLock"
+  > = {},
+): Promise<LockedMembershipRow | null> {
+  if (hooks.testBeforeMembershipLock) {
+    await hooks.testBeforeMembershipLock();
+  }
+  const rows = await tx.$queryRaw<LockedMembershipRow[]>`
+    SELECT id, role, status
+    FROM "Membership"
+    WHERE "organizationId" = ${input.organizationId}
+      AND "userId" = ${input.userId}
+    FOR UPDATE
+  `;
+  if (hooks.testAfterMembershipLock) {
+    await hooks.testAfterMembershipLock();
+  }
+  return rows[0] ?? null;
+}
+
+/**
+ * Lock a membership row by id (tenant-scoped) with `SELECT … FOR UPDATE`.
+ * Used by demotion/offboarding so authorization races share the same row lock
+ * as sensitive Phase 3A mutations that lock the actor membership.
+ */
+export async function lockMembershipByIdForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; membershipId: string },
+  hooks: MembershipMutationTestHooks = {},
+): Promise<
+  (LockedMembershipRow & { userId: string; organizationId: string }) | null
+> {
+  if (hooks.testBeforeTargetMembershipLock) {
+    await hooks.testBeforeTargetMembershipLock();
+  }
+  const rows = await tx.$queryRaw<
+    Array<LockedMembershipRow & { userId: string; organizationId: string }>
+  >`
+    SELECT id, role, status, "userId", "organizationId"
+    FROM "Membership"
+    WHERE id = ${input.membershipId}
+      AND "organizationId" = ${input.organizationId}
+    FOR UPDATE
+  `;
+  if (hooks.testAfterTargetMembershipLock) {
+    await hooks.testAfterTargetMembershipLock();
+  }
+  return rows[0] ?? null;
+}
+
+/**
+ * Recheck active membership + permission after locks are held.
+ * Always locks the actor membership row before reading authorization state.
+ */
 export async function requireActiveActorInTx(
   tx: Prisma.TransactionClient,
   input: {
@@ -107,16 +214,19 @@ export async function requireActiveActorInTx(
     userId: string;
     permission: Parameters<typeof roleHasPermission>[1];
   },
-): Promise<{ role: OrganizationRole }> {
-  const membership = await tx.membership.findUnique({
-    where: {
-      organizationId_userId: {
-        organizationId: input.organizationId,
-        userId: input.userId,
-      },
+  hooks: Pick<
+    ReadinessMutationTestHooks,
+    "testBeforeMembershipLock" | "testAfterMembershipLock"
+  > = {},
+): Promise<{ role: OrganizationRole; membershipId: string }> {
+  const membership = await lockMembershipByUserForUpdate(
+    tx,
+    {
+      organizationId: input.organizationId,
+      userId: input.userId,
     },
-    select: { role: true, status: true },
-  });
+    hooks,
+  );
   if (!membership) {
     throw new OrganizationAuthError("not_a_member");
   }
@@ -126,7 +236,7 @@ export async function requireActiveActorInTx(
   if (!roleHasPermission(membership.role, input.permission)) {
     throw new OrganizationAuthError("forbidden");
   }
-  return { role: membership.role };
+  return { role: membership.role, membershipId: membership.id };
 }
 
 export type ReadinessResult = {

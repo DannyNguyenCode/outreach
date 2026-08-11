@@ -4,12 +4,10 @@ import type { DayOfWeek, OperatingHourInterval } from "@prisma/client";
 
 import type { SafeUser } from "@/lib/auth/users";
 import { recordOrganizationAuditEvent } from "@/lib/orgs/audit";
-import {
-  OrganizationAuthError,
-  requireOrganizationPermission,
-} from "@/lib/orgs/authorization";
+import { requireOrganizationPermission } from "@/lib/orgs/authorization";
 import {
   acquireOrganizationReadinessLock,
+  ConflictError,
   mapAuthError,
   refreshConfigurationReadiness,
   requireActiveActorInTx,
@@ -19,10 +17,13 @@ import {
 import {
   DAYS_OF_WEEK,
   replaceOperatingHoursSchema,
+  requireExpectedVersion,
   timeStringToMinutes,
   validateWeeklySchedule,
   type DayOfWeekValue,
+  type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
+import { advanceOnboardingStepInTx } from "@/lib/orgs/onboarding";
 import { prisma } from "@/lib/prisma";
 
 export type GetHoursResult =
@@ -32,6 +33,12 @@ export type GetHoursResult =
       customerNote: string | null;
     }
   | AuthFailure;
+
+type ProgressInput = {
+  step: OnboardingStepValue;
+  nextStep?: OnboardingStepValue;
+  expectedVersion: number;
+};
 
 export async function getOperatingHours(input: {
   actor: SafeUser;
@@ -73,9 +80,26 @@ export async function replaceOperatingHours(
     actor: SafeUser;
     organizationId: string;
     raw: unknown;
+    progress?: ProgressInput;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<GetHoursResult> {
+  let progressVersion: number | undefined;
+  if (input.progress) {
+    const progressParsed = requireExpectedVersion(
+      input.progress.expectedVersion,
+    );
+    if (!progressParsed.ok) {
+      return {
+        ok: false,
+        reason: "validation",
+        message: progressParsed.message,
+        fieldErrors: { onboardingExpectedVersion: [progressParsed.message] },
+      };
+    }
+    progressVersion = progressParsed.version;
+  }
+
   const parsed = replaceOperatingHoursSchema.safeParse(input.raw);
   if (!parsed.success) {
     return {
@@ -168,13 +192,17 @@ export async function replaceOperatingHours(
     });
 
     const intervals = await prisma.$transaction(async (tx) => {
-      // Lock order: readiness first, then hours-specific schedule lock.
+      // Lock order: readiness first, then membership, then hours-specific schedule lock.
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.hours.update",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.hours.update",
+        },
+        hooks,
+      );
 
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`hours:${input.organizationId}`}))`;
 
@@ -201,6 +229,15 @@ export async function replaceOperatingHours(
         metadata: { intervalCount: normalized.length },
       });
 
+      if (input.progress && progressVersion !== undefined) {
+        await advanceOnboardingStepInTx(tx, {
+          organizationId: input.organizationId,
+          step: input.progress.step,
+          nextStep: input.progress.nextStep,
+          expectedVersion: progressVersion,
+        });
+      }
+
       await refreshConfigurationReadiness(tx, input.organizationId);
 
       return tx.operatingHourInterval.findMany({
@@ -215,13 +252,20 @@ export async function replaceOperatingHours(
       customerNote: parsed.data.customerNote ?? null,
     };
   } catch (error) {
-    if (error instanceof OrganizationAuthError) {
-      return mapAuthError(error)!;
+    if (error instanceof ConflictError) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message:
+          "Operating hours or onboarding were updated elsewhere. Reload and try again.",
+      };
     }
-    return {
-      ok: false,
-      reason: "failed",
-      message: "Could not update operating hours.",
-    };
+    return (
+      mapAuthError(error) ?? {
+        ok: false,
+        reason: "failed",
+        message: "Could not update operating hours.",
+      }
+    );
   }
 }

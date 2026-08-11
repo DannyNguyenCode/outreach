@@ -14,6 +14,7 @@ import {
   ConflictError,
   initializeBusinessDefaults,
   mapAuthError,
+  OnboardingLifecycleError,
   requireActiveActorInTx,
   type AuthFailure,
   type ReadinessMutationTestHooks,
@@ -25,6 +26,7 @@ import {
   type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 
 export type OnboardingView = {
   status: OrganizationOnboarding["status"];
@@ -45,7 +47,14 @@ export type OnboardingView = {
 export type GetOnboardingResult =
   | { ok: true; onboarding: OnboardingView }
   | { ok: false; reason: "not_started"; message: string }
+  | { ok: false; reason: "already_completed"; message: string }
   | AuthFailure;
+
+export type OnboardingProgressTransition = {
+  step: OnboardingStepValue;
+  nextStep?: OnboardingStepValue;
+  expectedVersion: number;
+};
 
 /**
  * Read-only onboarding retrieval. Never creates rows or audit events.
@@ -112,11 +121,15 @@ export async function startOrganizationOnboarding(
 
     const onboarding = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.onboarding.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.onboarding.manage",
+        },
+        hooks,
+      );
 
       await initializeBusinessDefaults(tx, input.organizationId);
 
@@ -180,6 +193,68 @@ export async function startOrganizationOnboarding(
 }
 
 /**
+ * Apply an onboarding progress transition inside an open transaction that
+ * already holds the organization readiness lock (and membership lock).
+ *
+ * Rejects COMPLETED onboarding — reopen is required before progress changes.
+ * Does not acquire locks itself.
+ */
+export async function advanceOnboardingStepInTx(
+  tx: Prisma.TransactionClient,
+  input: {
+    organizationId: string;
+    step: OnboardingStepValue;
+    nextStep?: OnboardingStepValue;
+    expectedVersion: number;
+  },
+): Promise<OrganizationOnboarding> {
+  const existing = await tx.organizationOnboarding.findUnique({
+    where: { organizationId: input.organizationId },
+  });
+  if (!existing) {
+    throw new OrganizationAuthError("organization_not_found");
+  }
+
+  if (existing.status === "COMPLETED") {
+    throw new OnboardingLifecycleError();
+  }
+
+  const completed = parseCompletedSteps(existing.completedSteps);
+  if (!completed.includes(input.step)) {
+    completed.push(input.step);
+  }
+
+  const next =
+    input.nextStep && ONBOARDING_STEPS.includes(input.nextStep)
+      ? input.nextStep
+      : existing.currentStep;
+
+  const status =
+    existing.status === "NOT_STARTED" ? "IN_PROGRESS" : "IN_PROGRESS";
+
+  const updated = await tx.organizationOnboarding.updateMany({
+    where: {
+      organizationId: input.organizationId,
+      version: input.expectedVersion,
+    },
+    data: {
+      status,
+      currentStep: next,
+      completedSteps: completed,
+      version: { increment: 1 },
+    },
+  });
+
+  if (updated.count !== 1) {
+    throw new ConflictError();
+  }
+
+  return tx.organizationOnboarding.findUniqueOrThrow({
+    where: { organizationId: input.organizationId },
+  });
+}
+
+/**
  * Advance onboarding progress. Mutates OrganizationOnboarding under the shared
  * readiness lock so it cannot race with completion/reopening.
  *
@@ -187,7 +262,8 @@ export async function startOrganizationOnboarding(
  * completion metadata/version must hold `organization-readiness:<organizationId>`
  * (or be nested in a transaction that already holds it).
  *
- * expectedVersion is required for optimistic concurrency.
+ * Completed onboarding is immutable to ordinary progress updates — callers must
+ * reopen first. expectedVersion is required for optimistic concurrency.
  */
 export async function advanceOnboardingStep(
   input: {
@@ -218,57 +294,21 @@ export async function advanceOnboardingStep(
 
     const onboarding = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.onboarding.manage",
-      });
-
-      const existing = await tx.organizationOnboarding.findUnique({
-        where: { organizationId: input.organizationId },
-      });
-      if (!existing) {
-        throw new OrganizationAuthError("organization_not_found");
-      }
-
-      // After completion, progress markers may still be updated but must not
-      // revert status away from COMPLETED.
-      const completed = parseCompletedSteps(existing.completedSteps);
-      if (!completed.includes(input.step)) {
-        completed.push(input.step);
-      }
-
-      const next =
-        input.nextStep && ONBOARDING_STEPS.includes(input.nextStep)
-          ? input.nextStep
-          : existing.currentStep;
-
-      const status =
-        existing.status === "COMPLETED"
-          ? "COMPLETED"
-          : existing.status === "NOT_STARTED"
-            ? "IN_PROGRESS"
-            : "IN_PROGRESS";
-
-      const updated = await tx.organizationOnboarding.updateMany({
-        where: {
+      await requireActiveActorInTx(
+        tx,
+        {
           organizationId: input.organizationId,
-          version: versionParsed.version,
+          userId: input.actor.id,
+          permission: "org.onboarding.manage",
         },
-        data: {
-          status,
-          currentStep: next,
-          completedSteps: completed,
-          version: { increment: 1 },
-        },
-      });
+        hooks,
+      );
 
-      if (updated.count !== 1) {
-        throw new ConflictError();
-      }
-
-      return tx.organizationOnboarding.findUniqueOrThrow({
-        where: { organizationId: input.organizationId },
+      return advanceOnboardingStepInTx(tx, {
+        organizationId: input.organizationId,
+        step: input.step,
+        nextStep: input.nextStep,
+        expectedVersion: versionParsed.version,
       });
     });
 
@@ -322,11 +362,15 @@ export async function completeOrganizationOnboarding(
 
     const result = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.onboarding.complete",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.onboarding.complete",
+        },
+        hooks,
+      );
 
       const existing = await tx.organizationOnboarding.findUnique({
         where: { organizationId: input.organizationId },
@@ -450,11 +494,15 @@ export async function reopenOrganizationOnboarding(
 
     const updated = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.onboarding.reopen",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.onboarding.reopen",
+        },
+        hooks,
+      );
 
       const existing = await tx.organizationOnboarding.findUnique({
         where: { organizationId: input.organizationId },

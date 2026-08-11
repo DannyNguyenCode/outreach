@@ -85,11 +85,15 @@ export async function createBusinessProduct(
 
     const product = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.products.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.products.manage",
+        },
+        hooks,
+      );
 
       const maxOrder = await tx.businessProduct.aggregate({
         where: { organizationId: input.organizationId },
@@ -184,11 +188,15 @@ export async function updateBusinessProduct(
 
     const product = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.products.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.products.manage",
+        },
+        hooks,
+      );
 
       const existing = await tx.businessProduct.findFirst({
         where: {
@@ -270,11 +278,15 @@ export async function deactivateBusinessProduct(
 
     const product = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.products.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.products.manage",
+        },
+        hooks,
+      );
 
       const existing = await tx.businessProduct.findFirst({
         where: {
@@ -314,11 +326,14 @@ export async function deactivateBusinessProduct(
   }
 }
 
-export async function reorderBusinessProducts(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-}): Promise<ProductsResult> {
+export async function reorderBusinessProducts(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<ProductsResult> {
   const parsed = reorderItemsSchema.safeParse(input.raw);
   if (!parsed.success) {
     return {
@@ -336,11 +351,15 @@ export async function reorderBusinessProducts(input: {
     });
 
     const products = await prisma.$transaction(async (tx) => {
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.products.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.products.manage",
+        },
+        hooks,
+      );
 
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`products-order:${input.organizationId}`}))`;
 

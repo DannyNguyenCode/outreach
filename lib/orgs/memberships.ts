@@ -9,6 +9,11 @@ import {
   requireScopedMembership,
 } from "@/lib/orgs/authorization";
 import {
+  lockMembershipByIdForUpdate,
+  lockMembershipByUserForUpdate,
+  type MembershipMutationTestHooks,
+} from "@/lib/orgs/business-access";
+import {
   canChangeMemberRole,
   canDeactivateMember,
 } from "@/lib/orgs/permissions";
@@ -51,14 +56,21 @@ const DEACTIVATE_MESSAGES: Record<string, string> = {
 
 /**
  * Change a member's role within an organization.
- * Re-loads actor membership inside the transaction to reduce TOCTOU races.
+ *
+ * Lock order (deadlock prevention with Phase 3A actor membership locks):
+ * 1. Target membership row `FOR UPDATE` — the contested row Phase 3A also locks
+ *    when that user is the actor in a sensitive mutation.
+ * 2. Actor membership row `FOR UPDATE` — authorization recheck under lock.
  */
-export async function changeMemberRole(input: {
-  actor: SafeUser;
-  organizationId: string;
-  membershipId: string;
-  nextRole: OrganizationRole;
-}): Promise<ChangeRoleResult> {
+export async function changeMemberRole(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    membershipId: string;
+    nextRole: OrganizationRole;
+  },
+  hooks: MembershipMutationTestHooks = {},
+): Promise<ChangeRoleResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -78,26 +90,24 @@ export async function changeMemberRole(input: {
 
   try {
     await prisma.$transaction(async (tx) => {
-      const actorMembership = await tx.membership.findUnique({
-        where: {
-          organizationId_userId: {
-            organizationId: input.organizationId,
-            userId: input.actor.id,
-          },
+      const target = await lockMembershipByIdForUpdate(
+        tx,
+        {
+          organizationId: input.organizationId,
+          membershipId: input.membershipId,
         },
+        hooks,
+      );
+      if (!target) {
+        throw new OrganizationAuthError("not_a_member");
+      }
+
+      const actorMembership = await lockMembershipByUserForUpdate(tx, {
+        organizationId: input.organizationId,
+        userId: input.actor.id,
       });
       if (!actorMembership || actorMembership.status !== "ACTIVE") {
         throw new OrganizationAuthError("inactive_membership");
-      }
-
-      const target = await tx.membership.findFirst({
-        where: {
-          id: input.membershipId,
-          organizationId: input.organizationId,
-        },
-      });
-      if (!target) {
-        throw new OrganizationAuthError("not_a_member");
       }
 
       const decision = canChangeMemberRole({
@@ -164,12 +174,17 @@ export async function changeMemberRole(input: {
  * Offboard a member by deactivating their membership.
  * Does not delete the global User or credentials. Access is revoked immediately
  * because every org authorization path re-queries membership status.
+ *
+ * Lock order matches {@link changeMemberRole}: target membership first, then actor.
  */
-export async function deactivateMember(input: {
-  actor: SafeUser;
-  organizationId: string;
-  membershipId: string;
-}): Promise<DeactivateResult> {
+export async function deactivateMember(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    membershipId: string;
+  },
+  hooks: MembershipMutationTestHooks = {},
+): Promise<DeactivateResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -189,26 +204,24 @@ export async function deactivateMember(input: {
 
   try {
     await prisma.$transaction(async (tx) => {
-      const actorMembership = await tx.membership.findUnique({
-        where: {
-          organizationId_userId: {
-            organizationId: input.organizationId,
-            userId: input.actor.id,
-          },
+      const target = await lockMembershipByIdForUpdate(
+        tx,
+        {
+          organizationId: input.organizationId,
+          membershipId: input.membershipId,
         },
+        hooks,
+      );
+      if (!target) {
+        throw new OrganizationAuthError("not_a_member");
+      }
+
+      const actorMembership = await lockMembershipByUserForUpdate(tx, {
+        organizationId: input.organizationId,
+        userId: input.actor.id,
       });
       if (!actorMembership || actorMembership.status !== "ACTIVE") {
         throw new OrganizationAuthError("inactive_membership");
-      }
-
-      const target = await tx.membership.findFirst({
-        where: {
-          id: input.membershipId,
-          organizationId: input.organizationId,
-        },
-      });
-      if (!target) {
-        throw new OrganizationAuthError("not_a_member");
       }
 
       const decision = canDeactivateMember({

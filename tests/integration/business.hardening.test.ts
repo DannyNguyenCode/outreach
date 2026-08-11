@@ -1192,11 +1192,18 @@ describe("Phase 3A hardening: reads, readiness races, optimistic concurrency", (
       const advanceResult = await advancePromise;
       expect(advanceResult.ok).toBe(false);
       if (!advanceResult.ok) {
-        expect(advanceResult.reason).toBe("conflict");
+        expect(["already_completed", "conflict"]).toContain(
+          advanceResult.reason,
+        );
       }
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.status).toBe("COMPLETED");
+      expect(after.currentStep).toBe("REVIEW");
     });
 
-    it("advance wins first; reopen with stale version conflicts", async () => {
+    it("advance on completed rejects; reopen then succeeds with same version", async () => {
       const { owner, organizationId } = await createOrgWithOwner(
         prisma,
         "adv-reopen-a",
@@ -1251,11 +1258,15 @@ describe("Phase 3A hardening: reads, readiness races, optimistic concurrency", (
       await reopenStarted.waitUntilReached();
       advanceHeld.release();
 
-      expect((await advancePromise).ok).toBe(true);
+      const advanceResult = await advancePromise;
+      expect(advanceResult.ok).toBe(false);
+      if (!advanceResult.ok) {
+        expect(advanceResult.reason).toBe("already_completed");
+      }
       const reopenResult = await reopenPromise;
-      expect(reopenResult.ok).toBe(false);
-      if (!reopenResult.ok) {
-        expect(reopenResult.reason).toBe("conflict");
+      expect(reopenResult.ok).toBe(true);
+      if (reopenResult.ok) {
+        expect(reopenResult.onboarding.status).toBe("IN_PROGRESS");
       }
     });
 
@@ -1318,7 +1329,10 @@ describe("Phase 3A hardening: reads, readiness races, optimistic concurrency", (
       const advanceResult = await advancePromise;
       expect(advanceResult.ok).toBe(false);
       if (!advanceResult.ok) {
-        expect(advanceResult.reason).toBe("conflict");
+        // Stale pre-reopen version, or completed-state rejection if scheduling differs.
+        expect(["conflict", "already_completed"]).toContain(
+          advanceResult.reason,
+        );
       }
     });
   });

@@ -159,10 +159,32 @@ export async function updateBusinessBasicsAction(
   const version = parseRequiredExpectedVersion(formData);
   if (!("ok" in version)) return version;
 
+  const markStep = formData.get("markStep");
+  let progress:
+    | {
+        step: "BUSINESS_BASICS";
+        nextStep: "CONTACT_LOCATION";
+        expectedVersion: number;
+      }
+    | undefined;
+  if (markStep === "BUSINESS_BASICS") {
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    progress = {
+      step: "BUSINESS_BASICS",
+      nextStep: "CONTACT_LOCATION",
+      expectedVersion: onboardingVersion.version,
+    };
+  }
+
   const result = await updateBusinessBasics({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
     expectedVersion: version.version,
+    progress,
     raw: {
       legalName: formData.get("legalName") || undefined,
       displayName: formData.get("displayName"),
@@ -175,23 +197,6 @@ export async function updateBusinessBasicsAction(
   });
 
   if (!result.ok) return failureFromService(result);
-
-  const step = formData.get("markStep");
-  if (step === "BUSINESS_BASICS") {
-    const onboardingVersion = parseRequiredExpectedVersion(
-      formData,
-      "onboardingExpectedVersion",
-    );
-    if (!("ok" in onboardingVersion)) return onboardingVersion;
-    const advanced = await advanceOnboardingStep({
-      actor: resolved.user,
-      organizationId: resolved.membership.organizationId,
-      step: "BUSINESS_BASICS",
-      nextStep: "CONTACT_LOCATION",
-      expectedVersion: onboardingVersion.version,
-    });
-    if (!advanced.ok) return failureFromService(advanced);
-  }
 
   revalidateOrgPaths(resolved.slug);
   return { status: "success", message: "Business basics saved." };
@@ -213,10 +218,31 @@ export async function updateContactLocationAction(
   const version = parseRequiredExpectedVersion(formData);
   if (!("ok" in version)) return version;
 
+  let progress:
+    | {
+        step: "CONTACT_LOCATION";
+        nextStep: "OPERATING_HOURS";
+        expectedVersion: number;
+      }
+    | undefined;
+  if (formData.get("markStep") === "CONTACT_LOCATION") {
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    progress = {
+      step: "CONTACT_LOCATION",
+      nextStep: "OPERATING_HOURS",
+      expectedVersion: onboardingVersion.version,
+    };
+  }
+
   const result = await updateContactAndLocation({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
     expectedVersion: version.version,
+    progress,
     raw: {
       primaryEmail: formData.get("primaryEmail"),
       primaryPhone: formData.get("primaryPhone"),
@@ -233,22 +259,6 @@ export async function updateContactLocationAction(
   });
 
   if (!result.ok) return failureFromService(result);
-
-  if (formData.get("markStep") === "CONTACT_LOCATION") {
-    const onboardingVersion = parseRequiredExpectedVersion(
-      formData,
-      "onboardingExpectedVersion",
-    );
-    if (!("ok" in onboardingVersion)) return onboardingVersion;
-    const advanced = await advanceOnboardingStep({
-      actor: resolved.user,
-      organizationId: resolved.membership.organizationId,
-      step: "CONTACT_LOCATION",
-      nextStep: "OPERATING_HOURS",
-      expectedVersion: onboardingVersion.version,
-    });
-    if (!advanced.ok) return failureFromService(advanced);
-  }
 
   revalidateOrgPaths(resolved.slug);
   return { status: "success", message: "Contact and location saved." };
@@ -267,6 +277,26 @@ export async function replaceOperatingHoursAction(
   );
   if (limited) return limited;
 
+  let progress:
+    | {
+        step: "OPERATING_HOURS";
+        nextStep: "CATALOGUE";
+        expectedVersion: number;
+      }
+    | undefined;
+  if (formData.get("markStep") === "OPERATING_HOURS") {
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    progress = {
+      step: "OPERATING_HOURS",
+      nextStep: "CATALOGUE",
+      expectedVersion: onboardingVersion.version,
+    };
+  }
+
   const intervalsRaw = String(formData.get("intervalsJson") ?? "");
   let intervals: unknown;
   try {
@@ -281,6 +311,7 @@ export async function replaceOperatingHoursAction(
   const result = await replaceOperatingHours({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
+    progress,
     raw: {
       customerNote: formData.get("customerNote") || undefined,
       intervals,
@@ -288,22 +319,6 @@ export async function replaceOperatingHoursAction(
   });
 
   if (!result.ok) return failureFromService(result);
-
-  if (formData.get("markStep") === "OPERATING_HOURS") {
-    const onboardingVersion = parseRequiredExpectedVersion(
-      formData,
-      "onboardingExpectedVersion",
-    );
-    if (!("ok" in onboardingVersion)) return onboardingVersion;
-    const advanced = await advanceOnboardingStep({
-      actor: resolved.user,
-      organizationId: resolved.membership.organizationId,
-      step: "OPERATING_HOURS",
-      nextStep: "CATALOGUE",
-      expectedVersion: onboardingVersion.version,
-    });
-    if (!advanced.ok) return failureFromService(advanced);
-  }
 
   revalidateOrgPaths(resolved.slug);
   return { status: "success", message: "Operating hours saved." };
@@ -526,10 +541,31 @@ export async function updateEmployeeDefaultsAction(
   const version = parseRequiredExpectedVersion(formData);
   if (!("ok" in version)) return version;
 
+  let progress:
+    | {
+        step: "EMPLOYEE_DEFAULTS";
+        nextStep: "REVIEW";
+        expectedVersion: number;
+      }
+    | undefined;
+  if (formData.get("markStep") === "EMPLOYEE_DEFAULTS") {
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    progress = {
+      step: "EMPLOYEE_DEFAULTS",
+      nextStep: "REVIEW",
+      expectedVersion: onboardingVersion.version,
+    };
+  }
+
   const result = await updateOrganizationSettings({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
     expectedVersion: version.version,
+    progress,
     raw: {
       membersCanViewServices: formData.get("membersCanViewServices") === "on",
       membersCanViewProducts: formData.get("membersCanViewProducts") === "on",
@@ -541,22 +577,6 @@ export async function updateEmployeeDefaultsAction(
   });
 
   if (!result.ok) return failureFromService(result);
-
-  if (formData.get("markStep") === "EMPLOYEE_DEFAULTS") {
-    const onboardingVersion = parseRequiredExpectedVersion(
-      formData,
-      "onboardingExpectedVersion",
-    );
-    if (!("ok" in onboardingVersion)) return onboardingVersion;
-    const advanced = await advanceOnboardingStep({
-      actor: resolved.user,
-      organizationId: resolved.membership.organizationId,
-      step: "EMPLOYEE_DEFAULTS",
-      nextStep: "REVIEW",
-      expectedVersion: onboardingVersion.version,
-    });
-    if (!advanced.ok) return failureFromService(advanced);
-  }
 
   revalidateOrgPaths(resolved.slug);
   return { status: "success", message: "Employee defaults saved." };

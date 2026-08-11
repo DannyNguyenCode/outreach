@@ -19,13 +19,21 @@ import {
 import {
   employeeDefaultsSchema,
   requireExpectedVersion,
+  type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
+import { advanceOnboardingStepInTx } from "@/lib/orgs/onboarding";
 import { prisma } from "@/lib/prisma";
 
 export type SettingsResult =
   | { ok: true; settings: OrganizationSettings }
   | { ok: false; reason: "not_initialized"; message: string }
   | AuthFailure;
+
+type ProgressInput = {
+  step: OnboardingStepValue;
+  nextStep?: OnboardingStepValue;
+  expectedVersion: number;
+};
 
 /**
  * Read-only settings retrieval. Never creates defaults.
@@ -73,6 +81,7 @@ export async function updateOrganizationSettings(
     organizationId: string;
     raw: unknown;
     expectedVersion: number;
+    progress?: ProgressInput;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<SettingsResult> {
@@ -84,6 +93,22 @@ export async function updateOrganizationSettings(
       message: versionParsed.message,
       fieldErrors: { expectedVersion: [versionParsed.message] },
     };
+  }
+
+  let progressVersion: number | undefined;
+  if (input.progress) {
+    const progressParsed = requireExpectedVersion(
+      input.progress.expectedVersion,
+    );
+    if (!progressParsed.ok) {
+      return {
+        ok: false,
+        reason: "validation",
+        message: progressParsed.message,
+        fieldErrors: { onboardingExpectedVersion: [progressParsed.message] },
+      };
+    }
+    progressVersion = progressParsed.version;
   }
 
   const parsed = employeeDefaultsSchema.safeParse(input.raw);
@@ -111,11 +136,15 @@ export async function updateOrganizationSettings(
 
     const settings = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
-      await requireActiveActorInTx(tx, {
-        organizationId: input.organizationId,
-        userId: input.actor.id,
-        permission: "org.settings.manage",
-      });
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.settings.manage",
+        },
+        hooks,
+      );
 
       const exists = await tx.organizationSettings.findUnique({
         where: { organizationId: input.organizationId },
@@ -157,6 +186,15 @@ export async function updateOrganizationSettings(
           futureCallingAccessDefault: updated.futureCallingAccessDefault,
         },
       });
+
+      if (input.progress && progressVersion !== undefined) {
+        await advanceOnboardingStepInTx(tx, {
+          organizationId: input.organizationId,
+          step: input.progress.step,
+          nextStep: input.progress.nextStep,
+          expectedVersion: progressVersion,
+        });
+      }
 
       return updated;
     });
