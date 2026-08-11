@@ -21,6 +21,7 @@ type IntervalInput = {
 
 type HoursFormProps = {
   organizationSlug: string;
+  onboardingExpectedVersion?: number;
   markStep?: boolean;
   customerNote: string;
   initial: Array<{
@@ -65,6 +66,7 @@ function buildInitial(initial: HoursFormProps["initial"]): IntervalInput[] {
 
 export function OperatingHoursForm({
   organizationSlug,
+  onboardingExpectedVersion,
   markStep = true,
   customerNote,
   initial,
@@ -96,8 +98,15 @@ export function OperatingHoursForm({
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="intervalsJson" value={intervalsJson} />
       <input type="hidden" name="customerNote" value={note} />
-      {markStep ? (
-        <input type="hidden" name="markStep" value="OPERATING_HOURS" />
+      {markStep && onboardingExpectedVersion !== undefined ? (
+        <>
+          <input type="hidden" name="markStep" value="OPERATING_HOURS" />
+          <input
+            type="hidden"
+            name="onboardingExpectedVersion"
+            value={onboardingExpectedVersion}
+          />
+        </>
       ) : null}
 
       <p className="text-sm text-[var(--muted)]">

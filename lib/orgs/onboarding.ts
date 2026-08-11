@@ -21,6 +21,7 @@ import {
 import {
   ONBOARDING_STEPS,
   parseCompletedSteps,
+  requireExpectedVersion,
   type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
@@ -178,25 +179,36 @@ export async function startOrganizationOnboarding(
   }
 }
 
-/** @deprecated Use startOrganizationOnboarding for mutations; getOrganizationOnboarding for reads. */
-export async function ensureOrganizationOnboarding(input: {
-  actor: SafeUser;
-  organizationId: string;
-  recordStartAudit?: boolean;
-}): Promise<GetOnboardingResult> {
-  if (input.recordStartAudit === false) {
-    return getOrganizationOnboarding(input);
+/**
+ * Advance onboarding progress. Mutates OrganizationOnboarding under the shared
+ * readiness lock so it cannot race with completion/reopening.
+ *
+ * Contract: every writer of status/currentStep/completedSteps/isConfigurationReady/
+ * completion metadata/version must hold `organization-readiness:<organizationId>`
+ * (or be nested in a transaction that already holds it).
+ *
+ * expectedVersion is required for optimistic concurrency.
+ */
+export async function advanceOnboardingStep(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    step: OnboardingStepValue;
+    nextStep?: OnboardingStepValue;
+    expectedVersion: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<GetOnboardingResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
   }
-  return startOrganizationOnboarding(input);
-}
 
-export async function advanceOnboardingStep(input: {
-  actor: SafeUser;
-  organizationId: string;
-  step: OnboardingStepValue;
-  nextStep?: OnboardingStepValue;
-  expectedVersion?: number;
-}): Promise<GetOnboardingResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -205,6 +217,7 @@ export async function advanceOnboardingStep(input: {
     });
 
     const onboarding = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
@@ -218,6 +231,8 @@ export async function advanceOnboardingStep(input: {
         throw new OrganizationAuthError("organization_not_found");
       }
 
+      // After completion, progress markers may still be updated but must not
+      // revert status away from COMPLETED.
       const completed = parseCompletedSteps(existing.completedSteps);
       if (!completed.includes(input.step)) {
         completed.push(input.step);
@@ -229,22 +244,17 @@ export async function advanceOnboardingStep(input: {
           : existing.currentStep;
 
       const status =
-        existing.status === "NOT_STARTED"
-          ? "IN_PROGRESS"
-          : existing.status === "COMPLETED"
-            ? "COMPLETED"
+        existing.status === "COMPLETED"
+          ? "COMPLETED"
+          : existing.status === "NOT_STARTED"
+            ? "IN_PROGRESS"
             : "IN_PROGRESS";
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
-
       const updated = await tx.organizationOnboarding.updateMany({
-        where,
+        where: {
+          organizationId: input.organizationId,
+          version: versionParsed.version,
+        },
         data: {
           status,
           currentStep: next,
@@ -290,12 +300,16 @@ export type CompleteOnboardingResult =
 
 /**
  * Intentional completion. Server computes readiness under the shared readiness lock.
+ *
+ * Optimistic expectedVersion is intentionally omitted: completion always reads
+ * authoritative configuration after acquiring the readiness lock and applies an
+ * unconditional organization-scoped transition from that locked snapshot.
+ * Serialization with every readiness/onboarding mutation is via the shared lock.
  */
 export async function completeOrganizationOnboarding(
   input: {
     actor: SafeUser;
     organizationId: string;
-    expectedVersion?: number;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<CompleteOnboardingResult> {
@@ -334,16 +348,17 @@ export async function completeOrganizationOnboarding(
         };
       }
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
+      if (existing.status === "COMPLETED" && existing.isConfigurationReady) {
+        return {
+          kind: "completed" as const,
+          onboarding: existing,
+          readiness,
+          alreadyComplete: true as const,
+        };
+      }
 
       const updatedCount = await tx.organizationOnboarding.updateMany({
-        where,
+        where: { organizationId: input.organizationId },
         data: {
           status: "COMPLETED",
           currentStep: "REVIEW",
@@ -373,6 +388,7 @@ export async function completeOrganizationOnboarding(
         kind: "completed" as const,
         onboarding: updated,
         readiness,
+        alreadyComplete: false as const,
       };
     });
 
@@ -411,10 +427,20 @@ export async function reopenOrganizationOnboarding(
   input: {
     actor: SafeUser;
     organizationId: string;
-    expectedVersion?: number;
+    expectedVersion: number;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<CompleteOnboardingResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
+  }
+
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -437,16 +463,11 @@ export async function reopenOrganizationOnboarding(
         throw new OrganizationAuthError("organization_not_found");
       }
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
-
       const updatedCount = await tx.organizationOnboarding.updateMany({
-        where,
+        where: {
+          organizationId: input.organizationId,
+          version: versionParsed.version,
+        },
         data: {
           status: "IN_PROGRESS",
           isConfigurationReady: false,

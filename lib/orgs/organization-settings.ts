@@ -9,13 +9,17 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
+  acquireOrganizationReadinessLock,
   ConflictError,
-  initializeBusinessDefaults,
   mapAuthError,
   requireActiveActorInTx,
   type AuthFailure,
+  type ReadinessMutationTestHooks,
 } from "@/lib/orgs/business-access";
-import { employeeDefaultsSchema } from "@/lib/orgs/business-validation";
+import {
+  employeeDefaultsSchema,
+  requireExpectedVersion,
+} from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
 
 export type SettingsResult =
@@ -58,12 +62,30 @@ export async function getOrganizationSettings(input: {
   }
 }
 
-export async function updateOrganizationSettings(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-  expectedVersion?: number;
-}): Promise<SettingsResult> {
+/**
+ * Settings updates take the shared readiness lock so optimistic-concurrency
+ * races can be coordinated deterministically with other org writers.
+ * Settings do not themselves change completion readiness.
+ */
+export async function updateOrganizationSettings(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+    expectedVersion: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<SettingsResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
+  }
+
   const parsed = employeeDefaultsSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -88,23 +110,25 @@ export async function updateOrganizationSettings(input: {
     });
 
     const settings = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
         permission: "org.settings.manage",
       });
-      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
+      const exists = await tx.organizationSettings.findUnique({
+        where: { organizationId: input.organizationId },
+      });
+      if (!exists) {
+        throw new OrganizationAuthError("organization_not_found");
+      }
 
       const updatedCount = await tx.organizationSettings.updateMany({
-        where,
+        where: {
+          organizationId: input.organizationId,
+          version: versionParsed.version,
+        },
         data: {
           membersCanViewServices: parsed.data.membersCanViewServices,
           membersCanViewProducts: parsed.data.membersCanViewProducts,
@@ -115,12 +139,6 @@ export async function updateOrganizationSettings(input: {
       });
 
       if (updatedCount.count !== 1) {
-        const exists = await tx.organizationSettings.findUnique({
-          where: { organizationId: input.organizationId },
-        });
-        if (!exists) {
-          throw new OrganizationAuthError("organization_not_found");
-        }
         throw new ConflictError();
       }
 

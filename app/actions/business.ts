@@ -41,7 +41,23 @@ import {
   startOrganizationOnboarding,
 } from "@/lib/orgs/onboarding";
 import { updateOrganizationSettings } from "@/lib/orgs/organization-settings";
+import { requireExpectedVersion } from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
+
+function parseRequiredExpectedVersion(
+  formData: FormData,
+  fieldName = "expectedVersion",
+): { ok: true; version: number } | ActionState {
+  const parsed = requireExpectedVersion(formData.get(fieldName));
+  if (!parsed.ok) {
+    return {
+      status: "error",
+      message: parsed.message,
+      fieldErrors: { [fieldName]: [parsed.message] },
+    };
+  }
+  return { ok: true, version: parsed.version };
+}
 
 async function rateLimitOrReject(
   route: RateLimitRoute,
@@ -140,18 +156,13 @@ export async function updateBusinessBasicsAction(
   );
   if (limited) return limited;
 
-  const expectedVersionRaw = formData.get("expectedVersion");
-  const expectedVersion =
-    expectedVersionRaw === null || expectedVersionRaw === ""
-      ? undefined
-      : Number(expectedVersionRaw);
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
 
   const result = await updateBusinessBasics({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
-    expectedVersion: Number.isFinite(expectedVersion)
-      ? expectedVersion
-      : undefined,
+    expectedVersion: version.version,
     raw: {
       legalName: formData.get("legalName") || undefined,
       displayName: formData.get("displayName"),
@@ -167,12 +178,19 @@ export async function updateBusinessBasicsAction(
 
   const step = formData.get("markStep");
   if (step === "BUSINESS_BASICS") {
-    await advanceOnboardingStep({
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    const advanced = await advanceOnboardingStep({
       actor: resolved.user,
       organizationId: resolved.membership.organizationId,
       step: "BUSINESS_BASICS",
       nextStep: "CONTACT_LOCATION",
+      expectedVersion: onboardingVersion.version,
     });
+    if (!advanced.ok) return failureFromService(advanced);
   }
 
   revalidateOrgPaths(resolved.slug);
@@ -192,18 +210,13 @@ export async function updateContactLocationAction(
   );
   if (limited) return limited;
 
-  const expectedVersionRaw = formData.get("expectedVersion");
-  const expectedVersion =
-    expectedVersionRaw === null || expectedVersionRaw === ""
-      ? undefined
-      : Number(expectedVersionRaw);
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
 
   const result = await updateContactAndLocation({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
-    expectedVersion: Number.isFinite(expectedVersion)
-      ? expectedVersion
-      : undefined,
+    expectedVersion: version.version,
     raw: {
       primaryEmail: formData.get("primaryEmail"),
       primaryPhone: formData.get("primaryPhone"),
@@ -222,12 +235,19 @@ export async function updateContactLocationAction(
   if (!result.ok) return failureFromService(result);
 
   if (formData.get("markStep") === "CONTACT_LOCATION") {
-    await advanceOnboardingStep({
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    const advanced = await advanceOnboardingStep({
       actor: resolved.user,
       organizationId: resolved.membership.organizationId,
       step: "CONTACT_LOCATION",
       nextStep: "OPERATING_HOURS",
+      expectedVersion: onboardingVersion.version,
     });
+    if (!advanced.ok) return failureFromService(advanced);
   }
 
   revalidateOrgPaths(resolved.slug);
@@ -270,12 +290,19 @@ export async function replaceOperatingHoursAction(
   if (!result.ok) return failureFromService(result);
 
   if (formData.get("markStep") === "OPERATING_HOURS") {
-    await advanceOnboardingStep({
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    const advanced = await advanceOnboardingStep({
       actor: resolved.user,
       organizationId: resolved.membership.organizationId,
       step: "OPERATING_HOURS",
       nextStep: "CATALOGUE",
+      expectedVersion: onboardingVersion.version,
     });
+    if (!advanced.ok) return failureFromService(advanced);
   }
 
   revalidateOrgPaths(resolved.slug);
@@ -496,18 +523,13 @@ export async function updateEmployeeDefaultsAction(
   );
   if (limited) return limited;
 
-  const expectedVersionRaw = formData.get("expectedVersion");
-  const expectedVersion =
-    expectedVersionRaw === null || expectedVersionRaw === ""
-      ? undefined
-      : Number(expectedVersionRaw);
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
 
   const result = await updateOrganizationSettings({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
-    expectedVersion: Number.isFinite(expectedVersion)
-      ? expectedVersion
-      : undefined,
+    expectedVersion: version.version,
     raw: {
       membersCanViewServices: formData.get("membersCanViewServices") === "on",
       membersCanViewProducts: formData.get("membersCanViewProducts") === "on",
@@ -521,12 +543,19 @@ export async function updateEmployeeDefaultsAction(
   if (!result.ok) return failureFromService(result);
 
   if (formData.get("markStep") === "EMPLOYEE_DEFAULTS") {
-    await advanceOnboardingStep({
+    const onboardingVersion = parseRequiredExpectedVersion(
+      formData,
+      "onboardingExpectedVersion",
+    );
+    if (!("ok" in onboardingVersion)) return onboardingVersion;
+    const advanced = await advanceOnboardingStep({
       actor: resolved.user,
       organizationId: resolved.membership.organizationId,
       step: "EMPLOYEE_DEFAULTS",
       nextStep: "REVIEW",
+      expectedVersion: onboardingVersion.version,
     });
+    if (!advanced.ok) return failureFromService(advanced);
   }
 
   revalidateOrgPaths(resolved.slug);
@@ -540,11 +569,18 @@ export async function markCatalogueStepAction(
   const resolved = await resolveOrgFromForm(formData);
   if (resolved.error || !resolved.membership) return resolved.error!;
 
+  const onboardingVersion = parseRequiredExpectedVersion(
+    formData,
+    "onboardingExpectedVersion",
+  );
+  if (!("ok" in onboardingVersion)) return onboardingVersion;
+
   const result = await advanceOnboardingStep({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
     step: "CATALOGUE",
     nextStep: "EMPLOYEE_DEFAULTS",
+    expectedVersion: onboardingVersion.version,
   });
 
   if (!result.ok) return failureFromService(result);
@@ -588,8 +624,8 @@ export async function completeOnboardingAction(
   );
   if (limited) return limited;
 
-  // Do not pass expectedVersion through a prior step advance — completion
-  // rechecks authority and readiness inside its own transaction.
+  // Completion intentionally omits optimistic expectedVersion: the shared
+  // readiness lock + authoritative readiness recompute serialize the transition.
   const result = await completeOrganizationOnboarding({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
@@ -607,18 +643,13 @@ export async function reopenOnboardingAction(
   const resolved = await resolveOrgFromForm(formData);
   if (resolved.error || !resolved.membership) return resolved.error!;
 
-  const expectedVersionRaw = formData.get("expectedVersion");
-  const expectedVersion =
-    expectedVersionRaw === null || expectedVersionRaw === ""
-      ? undefined
-      : Number(expectedVersionRaw);
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
 
   const result = await reopenOrganizationOnboarding({
     actor: resolved.user,
     organizationId: resolved.membership.organizationId,
-    expectedVersion: Number.isFinite(expectedVersion)
-      ? expectedVersion
-      : undefined,
+    expectedVersion: version.version,
   });
 
   if (!result.ok) return failureFromService(result);

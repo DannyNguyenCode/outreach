@@ -39,6 +39,7 @@ export function CatalogueManager({
   products,
   canManage,
   markStep = true,
+  onboardingExpectedVersion,
 }: {
   organizationSlug: string;
   businessType: string | null;
@@ -46,6 +47,7 @@ export function CatalogueManager({
   products: ProductRow[];
   canManage: boolean;
   markStep?: boolean;
+  onboardingExpectedVersion?: number;
 }) {
   const showServices =
     businessType === "SERVICES" || businessType === "BOTH" || !businessType;
@@ -142,8 +144,11 @@ export function CatalogueManager({
         </section>
       ) : null}
 
-      {canManage && markStep ? (
-        <MarkCatalogueStepForm organizationSlug={organizationSlug} />
+      {canManage && markStep && onboardingExpectedVersion !== undefined ? (
+        <MarkCatalogueStepForm
+          organizationSlug={organizationSlug}
+          onboardingExpectedVersion={onboardingExpectedVersion}
+        />
       ) : null}
     </div>
   );
@@ -354,8 +359,10 @@ function DeactivateProductButton({
 
 function MarkCatalogueStepForm({
   organizationSlug,
+  onboardingExpectedVersion,
 }: {
   organizationSlug: string;
+  onboardingExpectedVersion: number;
 }) {
   const [state, formAction] = useActionState(
     markCatalogueStepAction,
@@ -364,6 +371,11 @@ function MarkCatalogueStepForm({
   return (
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
+      <input
+        type="hidden"
+        name="onboardingExpectedVersion"
+        value={onboardingExpectedVersion}
+      />
       <FormStatus status={state.status} message={state.message} />
       <SubmitButton pendingLabel="Saving…">
         Continue to employee defaults

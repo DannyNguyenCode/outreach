@@ -118,6 +118,16 @@ All readiness-affecting mutations acquire a shared transaction advisory lock:
 organization-readiness:<organizationId>
 ```
 
+This includes profile updates, hours replacement, catalogue mutations, organization
+settings updates that are serialized with readiness, onboarding step advancement,
+completion, and reopening.
+
+**Contract:** every writer of `OrganizationOnboarding` (`status`, `currentStep`,
+`completedSteps`, `isConfigurationReady`, completion/reopening metadata, or
+`version`) must either acquire this lock itself or run only inside a transaction
+that already holds it. Do not nest a second acquisition of the same advisory lock
+unnecessarily within one logical transaction.
+
 Lock ordering (deadlock prevention):
 
 1. Acquire `organization-readiness:<organizationId>` first.
@@ -126,9 +136,23 @@ Lock ordering (deadlock prevention):
 
 Versioned writes use atomic conditional `updateMany` scoped by organization and expected version.
 
+Client-supplied `expectedVersion` values are parsed strictly (base-10 non-negative
+safe integers only). Missing or malformed versions are rejected at the action and
+service boundaries; they never degrade a conditional update into an unconditional
+update.
+
+**Completion** intentionally omits optimistic `expectedVersion`: under the shared
+readiness lock it always recomputes readiness from authoritative current state and
+applies the complete transition atomically. It still serializes with every
+onboarding-state and readiness-affecting mutation via the same lock.
+
 ## GET non-mutation
 
 Read helpers never create defaults, onboarding rows, or audit events. Intentional initialization uses `startOrganizationOnboarding()` via POST (`startOnboardingAction`).
+
+Ordinary onboarding edits require an existing configuration/onboarding record.
+They do not call `initializeBusinessDefaults` and will not silently start Phase 3A
+for a not-started organization.
 
 ## Onboarding-state lifecycle
 

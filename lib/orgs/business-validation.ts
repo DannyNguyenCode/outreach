@@ -622,4 +622,83 @@ export function parseCompletedSteps(value: unknown): OnboardingStepValue[] {
   return steps;
 }
 
-export { emailSchema };
+/**
+ * Strict optimistic-concurrency version parser for Phase 3A mutations.
+ *
+ * Accepts only a base-10 non-negative safe integer. Malformed values must never
+ * become `undefined` (which would weaken a conditional update into an
+ * unconditional update).
+ */
+export type ExpectedVersionParseResult =
+  { ok: true; version: number } | { ok: false; message: string };
+
+export function parseExpectedVersion(
+  raw: unknown,
+  options: { required?: boolean } = { required: true },
+): ExpectedVersionParseResult {
+  const required = options.required !== false;
+
+  if (raw === null || raw === undefined) {
+    return required
+      ? { ok: false, message: "Expected version is required." }
+      : { ok: false, message: "Expected version is required." };
+  }
+
+  if (typeof raw === "number") {
+    if (
+      !Number.isInteger(raw) ||
+      raw < 0 ||
+      raw > Number.MAX_SAFE_INTEGER ||
+      !Number.isSafeInteger(raw)
+    ) {
+      return { ok: false, message: "Expected version is invalid." };
+    }
+    return { ok: true, version: raw };
+  }
+
+  if (typeof raw !== "string") {
+    return { ok: false, message: "Expected version is invalid." };
+  }
+
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, message: "Expected version is required." };
+  }
+
+  // Reject decimals, signs, whitespace mid-string, hex, etc.
+  if (!/^[0-9]+$/.test(trimmed)) {
+    return { ok: false, message: "Expected version is invalid." };
+  }
+
+  // Reject leading zeros that aren't exactly "0" to keep canonical base-10 ints.
+  if (trimmed.length > 1 && trimmed.startsWith("0")) {
+    return { ok: false, message: "Expected version is invalid." };
+  }
+
+  let version: number;
+  try {
+    version = Number(trimmed);
+  } catch {
+    return { ok: false, message: "Expected version is invalid." };
+  }
+
+  if (
+    !Number.isInteger(version) ||
+    version < 0 ||
+    !Number.isSafeInteger(version)
+  ) {
+    return { ok: false, message: "Expected version is invalid." };
+  }
+
+  return { ok: true, version };
+}
+
+/**
+ * Require a valid expected version for version-protected service mutations.
+ * Throws ConflictError-compatible AuthFailure shape via return — callers check ok.
+ */
+export function requireExpectedVersion(
+  raw: unknown,
+): ExpectedVersionParseResult {
+  return parseExpectedVersion(raw, { required: true });
+}

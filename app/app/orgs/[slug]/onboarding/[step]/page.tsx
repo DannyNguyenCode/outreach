@@ -115,6 +115,7 @@ export default async function OnboardingStepPage({ params }: PageProps) {
         <BusinessBasicsForm
           organizationSlug={slug}
           expectedVersion={business.data.profile.version}
+          onboardingExpectedVersion={onboardingResult.onboarding.version}
           defaults={{
             legalName: business.data.profile.legalName ?? "",
             displayName: business.data.profile.displayName ?? "",
@@ -132,6 +133,7 @@ export default async function OnboardingStepPage({ params }: PageProps) {
         <ContactLocationForm
           organizationSlug={slug}
           expectedVersion={business.data.profile.version}
+          onboardingExpectedVersion={onboardingResult.onboarding.version}
           defaults={{
             primaryEmail: business.data.profile.primaryEmail ?? "",
             primaryPhone: business.data.profile.primaryPhoneE164 ?? "",
@@ -153,6 +155,7 @@ export default async function OnboardingStepPage({ params }: PageProps) {
           slug={slug}
           organizationId={membership.organizationId}
           user={user}
+          onboardingExpectedVersion={onboardingResult.onboarding.version}
         />
       ) : null}
 
@@ -163,6 +166,7 @@ export default async function OnboardingStepPage({ params }: PageProps) {
           user={user}
           businessType={business.ok ? business.data.profile.businessType : null}
           canManage={canManage}
+          onboardingExpectedVersion={onboardingResult.onboarding.version}
         />
       ) : null}
 
@@ -171,6 +175,7 @@ export default async function OnboardingStepPage({ params }: PageProps) {
           slug={slug}
           organizationId={membership.organizationId}
           user={user}
+          onboardingExpectedVersion={onboardingResult.onboarding.version}
         />
       ) : null}
 
@@ -203,10 +208,12 @@ async function HoursStep({
   slug,
   organizationId,
   user,
+  onboardingExpectedVersion,
 }: {
   slug: string;
   organizationId: string;
   user: Awaited<ReturnType<typeof requireVerifiedUser>>;
+  onboardingExpectedVersion: number;
 }) {
   const hours = await getOperatingHours({ actor: user, organizationId });
   if (!hours.ok) {
@@ -216,6 +223,7 @@ async function HoursStep({
   return (
     <OperatingHoursForm
       organizationSlug={slug}
+      onboardingExpectedVersion={onboardingExpectedVersion}
       customerNote={hours.customerNote ?? ""}
       initial={hours.intervals.map((interval) => ({
         dayOfWeek: interval.dayOfWeek as DayOfWeekValue,
@@ -233,12 +241,14 @@ async function CatalogueStep({
   user,
   businessType,
   canManage,
+  onboardingExpectedVersion,
 }: {
   slug: string;
   organizationId: string;
   user: Awaited<ReturnType<typeof requireVerifiedUser>>;
   businessType: string | null;
   canManage: boolean;
+  onboardingExpectedVersion: number;
 }) {
   const [services, products] = await Promise.all([
     listBusinessServices({ actor: user, organizationId }),
@@ -250,6 +260,7 @@ async function CatalogueStep({
       organizationSlug={slug}
       businessType={businessType}
       canManage={canManage}
+      onboardingExpectedVersion={onboardingExpectedVersion}
       services={services.ok ? services.services : []}
       products={products.ok ? products.products : []}
     />
@@ -260,10 +271,12 @@ async function DefaultsStep({
   slug,
   organizationId,
   user,
+  onboardingExpectedVersion,
 }: {
   slug: string;
   organizationId: string;
   user: Awaited<ReturnType<typeof requireVerifiedUser>>;
+  onboardingExpectedVersion: number;
 }) {
   const settings = await getOrganizationSettings({
     actor: user,
@@ -277,6 +290,7 @@ async function DefaultsStep({
     <EmployeeDefaultsForm
       organizationSlug={slug}
       expectedVersion={settings.settings.version}
+      onboardingExpectedVersion={onboardingExpectedVersion}
       defaults={{
         membersCanViewServices: settings.settings.membersCanViewServices,
         membersCanViewProducts: settings.settings.membersCanViewProducts,
@@ -407,7 +421,6 @@ async function ReviewStep({
       {canManage && onboarding.status !== "COMPLETED" ? (
         <CompleteOnboardingForm
           organizationSlug={slug}
-          expectedVersion={onboarding.version}
           missing={onboarding.readiness.missing}
           ready={onboarding.readiness.ready}
         />

@@ -3,7 +3,6 @@ import "server-only";
 import type {
   BusinessType,
   DayOfWeek,
-  OnboardingStep,
   OrganizationRole,
   Prisma,
   PrismaClient,
@@ -14,11 +13,7 @@ import {
   OrganizationAuthError,
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
-import {
-  DAYS_OF_WEEK,
-  parseCompletedSteps,
-  type OnboardingStepValue,
-} from "@/lib/orgs/business-validation";
+import { DAYS_OF_WEEK } from "@/lib/orgs/business-validation";
 import { roleHasPermission } from "@/lib/orgs/permissions";
 
 export type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -222,6 +217,7 @@ export async function computeConfigurationReadiness(
 /**
  * Recompute readiness and apply invalidation policy.
  * Caller must already hold the shared readiness lock.
+ * Only writes (and bumps version) when status or readiness actually change.
  */
 export async function refreshConfigurationReadiness(
   db: DbClient,
@@ -231,33 +227,47 @@ export async function refreshConfigurationReadiness(
   const onboarding = await db.organizationOnboarding.findUnique({
     where: { organizationId },
   });
-  if (onboarding) {
-    const nextStatus =
-      onboarding.status === "COMPLETED" && !readiness.ready
-        ? "IN_PROGRESS"
-        : onboarding.status;
-
-    await db.organizationOnboarding.update({
-      where: { organizationId },
-      data: {
-        isConfigurationReady: readiness.ready && nextStatus === "COMPLETED",
-        status: nextStatus,
-        ...(nextStatus === "IN_PROGRESS" && onboarding.status === "COMPLETED"
-          ? {
-              completedAt: null,
-              completedByUserId: null,
-            }
-          : {}),
-        version: { increment: 1 },
-      },
-    });
+  if (!onboarding) {
+    return readiness;
   }
+
+  const nextStatus =
+    onboarding.status === "COMPLETED" && !readiness.ready
+      ? "IN_PROGRESS"
+      : onboarding.status;
+  const nextReady = readiness.ready && nextStatus === "COMPLETED";
+  const clearingCompletion =
+    nextStatus === "IN_PROGRESS" && onboarding.status === "COMPLETED";
+
+  if (
+    onboarding.status === nextStatus &&
+    onboarding.isConfigurationReady === nextReady &&
+    !clearingCompletion
+  ) {
+    return readiness;
+  }
+
+  await db.organizationOnboarding.update({
+    where: { organizationId },
+    data: {
+      isConfigurationReady: nextReady,
+      status: nextStatus,
+      ...(clearingCompletion
+        ? {
+            completedAt: null,
+            completedByUserId: null,
+          }
+        : {}),
+      version: { increment: 1 },
+    },
+  });
   return readiness;
 }
 
 /**
- * Mutating initializer for Phase 3A defaults. Must not be called from GET/read paths.
- * Intended for intentional start and write mutations that need rows to exist.
+ * Mutating initializer for Phase 3A defaults.
+ * Must not be called from GET/read paths.
+ * Only `startOrganizationOnboarding` should create the initial Phase 3A rows.
  */
 export async function initializeBusinessDefaults(
   db: DbClient,
@@ -295,38 +305,6 @@ export async function initializeBusinessDefaults(
       }
     }
   }
-}
-
-/** @deprecated Use initializeBusinessDefaults — alias kept briefly for migration of call sites. */
-export const ensureBusinessDefaults = initializeBusinessDefaults;
-
-export async function markOnboardingStep(
-  db: DbClient,
-  input: {
-    organizationId: string;
-    step: OnboardingStepValue;
-    nextStep?: OnboardingStepValue;
-  },
-): Promise<void> {
-  const existing = await db.organizationOnboarding.findUnique({
-    where: { organizationId: input.organizationId },
-  });
-  if (!existing) return;
-
-  const completed = parseCompletedSteps(existing.completedSteps);
-  if (!completed.includes(input.step)) {
-    completed.push(input.step);
-  }
-
-  await db.organizationOnboarding.update({
-    where: { organizationId: input.organizationId },
-    data: {
-      status: existing.status === "COMPLETED" ? "COMPLETED" : "IN_PROGRESS",
-      currentStep: (input.nextStep ?? existing.currentStep) as OnboardingStep,
-      completedSteps: completed,
-      version: { increment: 1 },
-    },
-  });
 }
 
 /**
@@ -396,20 +374,4 @@ export async function assertCanReadProducts(input: {
     }
   }
   return { role: membership.role };
-}
-
-export function parseExpectedVersion(
-  value: unknown,
-): number | undefined | "invalid" {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value >= 0 ? value : "invalid";
-  }
-  if (typeof value === "string" && /^\d+$/.test(value)) {
-    const n = Number(value);
-    return Number.isInteger(n) && n >= 0 ? n : "invalid";
-  }
-  return "invalid";
 }

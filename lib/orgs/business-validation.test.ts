@@ -5,6 +5,8 @@ import {
   contactLocationSchema,
   intervalsOverlap,
   normalizePhoneNumber,
+  parseExpectedVersion,
+  requireExpectedVersion,
   safeHttpUrlSchema,
   ianaTimeZoneSchema,
   validateWeeklySchedule,
@@ -159,6 +161,43 @@ describe("Phase 3A business validation", () => {
         sku: "WID-1",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("parseExpectedVersion / requireExpectedVersion", () => {
+  it("rejects missing, alpha, decimal, negative, and unsafe integers", () => {
+    expect(parseExpectedVersion(undefined).ok).toBe(false);
+    expect(parseExpectedVersion(null).ok).toBe(false);
+    expect(parseExpectedVersion("").ok).toBe(false);
+    expect(parseExpectedVersion("   ").ok).toBe(false);
+    expect(parseExpectedVersion("abc").ok).toBe(false);
+    expect(parseExpectedVersion("1.5").ok).toBe(false);
+    expect(parseExpectedVersion(1.5).ok).toBe(false);
+    expect(parseExpectedVersion("-1").ok).toBe(false);
+    expect(parseExpectedVersion(-1).ok).toBe(false);
+    expect(parseExpectedVersion(Number.MAX_SAFE_INTEGER + 1).ok).toBe(false);
+    expect(parseExpectedVersion("9007199254740992").ok).toBe(false);
+    expect(parseExpectedVersion("01").ok).toBe(false);
+    expect(parseExpectedVersion(true).ok).toBe(false);
+
+    expect(requireExpectedVersion(undefined).ok).toBe(false);
+    expect(requireExpectedVersion("abc").ok).toBe(false);
+    expect(requireExpectedVersion("1.5").ok).toBe(false);
+    expect(requireExpectedVersion(-1).ok).toBe(false);
+    expect(requireExpectedVersion(Number.MAX_SAFE_INTEGER + 1).ok).toBe(false);
+  });
+
+  it("accepts valid 0 and positive safe integers", () => {
+    expect(parseExpectedVersion(0)).toEqual({ ok: true, version: 0 });
+    expect(parseExpectedVersion("0")).toEqual({ ok: true, version: 0 });
+    expect(parseExpectedVersion(1)).toEqual({ ok: true, version: 1 });
+    expect(parseExpectedVersion("42")).toEqual({ ok: true, version: 42 });
+    expect(parseExpectedVersion(Number.MAX_SAFE_INTEGER)).toEqual({
+      ok: true,
+      version: Number.MAX_SAFE_INTEGER,
+    });
+    expect(requireExpectedVersion(0)).toEqual({ ok: true, version: 0 });
+    expect(requireExpectedVersion(99)).toEqual({ ok: true, version: 99 });
   });
 });
 

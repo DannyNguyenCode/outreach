@@ -11,6 +11,7 @@ import { SubmitButton } from "@/components/auth/submit-button";
 type BasicsFormProps = {
   organizationSlug: string;
   expectedVersion: number;
+  onboardingExpectedVersion?: number;
   markStep?: boolean;
   defaults: {
     legalName: string;
@@ -27,6 +28,7 @@ type BasicsFormProps = {
 export function BusinessBasicsForm({
   organizationSlug,
   expectedVersion,
+  onboardingExpectedVersion,
   markStep = true,
   defaults,
 }: BasicsFormProps) {
@@ -40,8 +42,15 @@ export function BusinessBasicsForm({
       <FormStatus status={state.status} message={state.message} />
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="expectedVersion" value={expectedVersion} />
-      {markStep ? (
-        <input type="hidden" name="markStep" value="BUSINESS_BASICS" />
+      {markStep && onboardingExpectedVersion !== undefined ? (
+        <>
+          <input type="hidden" name="markStep" value="BUSINESS_BASICS" />
+          <input
+            type="hidden"
+            name="onboardingExpectedVersion"
+            value={onboardingExpectedVersion}
+          />
+        </>
       ) : null}
 
       <p className="text-sm text-[var(--muted)]">

@@ -230,18 +230,26 @@ describe("Phase 3A business concurrency", () => {
       actor: owner,
       organizationId: org.organization.id,
     });
+    const profileV1 = await prisma.businessProfile.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     await updateBusinessBasics({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: profileV1.version,
       raw: {
         displayName: "Race Biz",
         industry: "Services",
         businessType: "SERVICES",
       },
     });
+    const profileV2 = await prisma.businessProfile.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     await updateContactAndLocation({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: profileV2.version,
       raw: {
         primaryEmail: "race@example.com",
         primaryPhone: "4165559999",
@@ -320,18 +328,26 @@ describe("Phase 3A business concurrency", () => {
       actor: owner,
       organizationId: org.organization.id,
     });
+    const profileV1 = await prisma.businessProfile.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     await updateBusinessBasics({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: profileV1.version,
       raw: {
         displayName: "Auth Biz",
         industry: "Services",
         businessType: "SERVICES",
       },
     });
+    const profileV2 = await prisma.businessProfile.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     await updateContactAndLocation({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: profileV2.version,
       raw: {
         primaryEmail: "auth@example.com",
         primaryPhone: "4165558888",
@@ -390,11 +406,16 @@ describe("Phase 3A business concurrency", () => {
       actor: owner,
       organizationId: org.organization.id,
     });
+    const onboardingForReopen =
+      await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: org.organization.id },
+      });
     const reopenDenied = await (
       await import("@/lib/orgs/onboarding")
     ).reopenOrganizationOnboarding({
       actor: admin,
       organizationId: org.organization.id,
+      expectedVersion: onboardingForReopen.version,
     });
     expect(reopenDenied.ok).toBe(false);
   });

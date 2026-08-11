@@ -12,7 +12,6 @@ import {
   acquireOrganizationReadinessLock,
   assertCanReadBusinessInfo,
   ConflictError,
-  initializeBusinessDefaults,
   mapAuthError,
   refreshConfigurationReadiness,
   requireActiveActorInTx,
@@ -22,6 +21,7 @@ import {
 import {
   businessBasicsSchema,
   contactLocationSchema,
+  requireExpectedVersion,
 } from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
 
@@ -95,10 +95,20 @@ export async function updateBusinessBasics(
     actor: SafeUser;
     organizationId: string;
     raw: unknown;
-    expectedVersion?: number;
+    expectedVersion: number;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<GetBusinessResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
+  }
+
   const parsed = businessBasicsSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -129,18 +139,19 @@ export async function updateBusinessBasics(
         userId: input.actor.id,
         permission: "org.business.update",
       });
-      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
+      const exists = await tx.businessProfile.findUnique({
+        where: { organizationId: input.organizationId },
+      });
+      if (!exists) {
+        throw new OrganizationAuthError("organization_not_found");
+      }
 
       const updated = await tx.businessProfile.updateMany({
-        where,
+        where: {
+          organizationId: input.organizationId,
+          version: versionParsed.version,
+        },
         data: {
           legalName: parsed.data.legalName ?? null,
           displayName: parsed.data.displayName,
@@ -154,12 +165,6 @@ export async function updateBusinessBasics(
       });
 
       if (updated.count !== 1) {
-        const exists = await tx.businessProfile.findUnique({
-          where: { organizationId: input.organizationId },
-        });
-        if (!exists) {
-          throw new OrganizationAuthError("organization_not_found");
-        }
         throw new ConflictError();
       }
 
@@ -198,10 +203,20 @@ export async function updateContactAndLocation(
     actor: SafeUser;
     organizationId: string;
     raw: unknown;
-    expectedVersion?: number;
+    expectedVersion: number;
   },
   hooks: ReadinessMutationTestHooks = {},
 ): Promise<GetBusinessResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
+  }
+
   const parsed = contactLocationSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -232,18 +247,19 @@ export async function updateContactAndLocation(
         userId: input.actor.id,
         permission: "org.business.update",
       });
-      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const where =
-        input.expectedVersion !== undefined
-          ? {
-              organizationId: input.organizationId,
-              version: input.expectedVersion,
-            }
-          : { organizationId: input.organizationId };
+      const exists = await tx.businessProfile.findUnique({
+        where: { organizationId: input.organizationId },
+      });
+      if (!exists) {
+        throw new OrganizationAuthError("organization_not_found");
+      }
 
       const updated = await tx.businessProfile.updateMany({
-        where,
+        where: {
+          organizationId: input.organizationId,
+          version: versionParsed.version,
+        },
         data: {
           primaryEmail: parsed.data.primaryEmail,
           primaryPhoneE164: parsed.data.primaryPhoneE164 ?? null,
@@ -254,12 +270,6 @@ export async function updateContactAndLocation(
       });
 
       if (updated.count !== 1) {
-        const exists = await tx.businessProfile.findUnique({
-          where: { organizationId: input.organizationId },
-        });
-        if (!exists) {
-          throw new OrganizationAuthError("organization_not_found");
-        }
         throw new ConflictError();
       }
 

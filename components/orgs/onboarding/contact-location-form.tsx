@@ -24,6 +24,7 @@ const COMMON_TIMEZONES = [
 type ContactFormProps = {
   organizationSlug: string;
   expectedVersion: number;
+  onboardingExpectedVersion?: number;
   markStep?: boolean;
   defaults: {
     primaryEmail: string;
@@ -42,6 +43,7 @@ type ContactFormProps = {
 export function ContactLocationForm({
   organizationSlug,
   expectedVersion,
+  onboardingExpectedVersion,
   markStep = true,
   defaults,
 }: ContactFormProps) {
@@ -55,8 +57,15 @@ export function ContactLocationForm({
       <FormStatus status={state.status} message={state.message} />
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="expectedVersion" value={expectedVersion} />
-      {markStep ? (
-        <input type="hidden" name="markStep" value="CONTACT_LOCATION" />
+      {markStep && onboardingExpectedVersion !== undefined ? (
+        <>
+          <input type="hidden" name="markStep" value="CONTACT_LOCATION" />
+          <input
+            type="hidden"
+            name="onboardingExpectedVersion"
+            value={onboardingExpectedVersion}
+          />
+        </>
       ) : null}
 
       <div className="space-y-1">

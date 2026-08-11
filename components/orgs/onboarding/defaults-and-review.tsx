@@ -14,11 +14,13 @@ import { SubmitButton } from "@/components/auth/submit-button";
 export function EmployeeDefaultsForm({
   organizationSlug,
   expectedVersion,
+  onboardingExpectedVersion,
   markStep = true,
   defaults,
 }: {
   organizationSlug: string;
   expectedVersion: number;
+  onboardingExpectedVersion?: number;
   markStep?: boolean;
   defaults: {
     membersCanViewServices: boolean;
@@ -37,8 +39,15 @@ export function EmployeeDefaultsForm({
       <FormStatus status={state.status} message={state.message} />
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="expectedVersion" value={expectedVersion} />
-      {markStep ? (
-        <input type="hidden" name="markStep" value="EMPLOYEE_DEFAULTS" />
+      {markStep && onboardingExpectedVersion !== undefined ? (
+        <>
+          <input type="hidden" name="markStep" value="EMPLOYEE_DEFAULTS" />
+          <input
+            type="hidden"
+            name="onboardingExpectedVersion"
+            value={onboardingExpectedVersion}
+          />
+        </>
       ) : null}
 
       <p className="text-sm text-[var(--muted)]">
@@ -99,12 +108,10 @@ export function EmployeeDefaultsForm({
 
 export function CompleteOnboardingForm({
   organizationSlug,
-  expectedVersion,
   missing,
   ready,
 }: {
   organizationSlug: string;
-  expectedVersion: number;
   missing: string[];
   ready: boolean;
 }) {
@@ -116,7 +123,6 @@ export function CompleteOnboardingForm({
   return (
     <form action={formAction} className="space-y-3" method="post">
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
-      <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <FormStatus status={state.status} message={state.message} />
       {!ready ? (
         <div

@@ -100,28 +100,39 @@ function defaultWeek(open = true) {
   );
 }
 
-async function seedReadyConfig(input: {
-  actor: SafeUser;
-  organizationId: string;
-  businessType?: "SERVICES" | "PRODUCTS" | "BOTH";
-}) {
+async function seedReadyConfig(
+  prisma: PrismaClient,
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    businessType?: "SERVICES" | "PRODUCTS" | "BOTH";
+  },
+) {
   const businessType = input.businessType ?? "BOTH";
   await startOrganizationOnboarding({
     actor: input.actor,
     organizationId: input.organizationId,
   });
+  const profileV1 = await prisma.businessProfile.findUniqueOrThrow({
+    where: { organizationId: input.organizationId },
+  });
   await updateBusinessBasics({
     actor: input.actor,
     organizationId: input.organizationId,
+    expectedVersion: profileV1.version,
     raw: {
       displayName: "Ready Biz",
       industry: "Retail",
       businessType,
     },
   });
+  const profileV2 = await prisma.businessProfile.findUniqueOrThrow({
+    where: { organizationId: input.organizationId },
+  });
   await updateContactAndLocation({
     actor: input.actor,
     organizationId: input.organizationId,
+    expectedVersion: profileV2.version,
     raw: {
       primaryEmail: "ready@example.com",
       primaryPhone: "4165551234",
@@ -283,7 +294,7 @@ describe("Phase 3A business onboarding integration", () => {
       expect(incomplete.missingRequirements?.length).toBeGreaterThan(0);
     }
 
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: owner,
       organizationId: org.organization.id,
       businessType: "SERVICES",
@@ -311,7 +322,7 @@ describe("Phase 3A business onboarding integration", () => {
       actor: owner,
       organizationId: org.organization.id,
     });
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: owner,
       organizationId: org.organization.id,
       businessType: "SERVICES",
@@ -347,7 +358,7 @@ describe("Phase 3A business onboarding integration", () => {
       expect(after.onboarding.status).toBe("IN_PROGRESS");
     }
 
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: owner,
       organizationId: org.organization.id,
       businessType: "SERVICES",
@@ -356,9 +367,14 @@ describe("Phase 3A business onboarding integration", () => {
       actor: owner,
       organizationId: org.organization.id,
     });
+    const onboardingBeforeReopen =
+      await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: org.organization.id },
+      });
     const reopened = await reopenOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: onboardingBeforeReopen.version,
     });
     expect(reopened.ok).toBe(true);
     if (reopened.ok) {
@@ -380,11 +396,11 @@ describe("Phase 3A business onboarding integration", () => {
     });
     if (!orgA.ok || !orgB.ok) return;
 
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: ownerA,
       organizationId: orgA.organization.id,
     });
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: ownerB,
       organizationId: orgB.organization.id,
     });
@@ -438,6 +454,7 @@ describe("Phase 3A business onboarding integration", () => {
     const crossSettings = await updateOrganizationSettings({
       actor: ownerA,
       organizationId: orgB.organization.id,
+      expectedVersion: 0,
       raw: {
         membersCanViewServices: false,
         membersCanViewProducts: false,
@@ -471,14 +488,18 @@ describe("Phase 3A business onboarding integration", () => {
       rawToken: token!,
     });
 
-    await seedReadyConfig({
+    await seedReadyConfig(prisma, {
       actor: owner,
       organizationId: org.organization.id,
     });
 
+    const profileForMember = await prisma.businessProfile.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     const memberUpdate = await updateBusinessBasics({
       actor: memberUser,
       organizationId: org.organization.id,
+      expectedVersion: profileForMember.version,
       raw: {
         displayName: "Nope",
         industry: "X",
@@ -513,9 +534,13 @@ describe("Phase 3A business onboarding integration", () => {
     });
     expect(memberOnboarding.ok).toBe(false);
 
+    const settingsRow = await prisma.organizationSettings.findUniqueOrThrow({
+      where: { organizationId: org.organization.id },
+    });
     await updateOrganizationSettings({
       actor: owner,
       organizationId: org.organization.id,
+      expectedVersion: settingsRow.version,
       raw: {
         membersCanViewServices: false,
         membersCanViewProducts: true,
@@ -573,6 +598,7 @@ describe("Phase 3A business onboarding integration", () => {
     const denied = await updateBusinessBasics({
       actor: adminUser,
       organizationId: org.organization.id,
+      expectedVersion: 0,
       raw: {
         displayName: "Denied",
         industry: "X",
