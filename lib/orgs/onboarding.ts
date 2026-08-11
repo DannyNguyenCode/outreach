@@ -9,11 +9,14 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
+  acquireOrganizationReadinessLock,
   computeConfigurationReadiness,
-  ensureBusinessDefaults,
+  ConflictError,
+  initializeBusinessDefaults,
   mapAuthError,
   requireActiveActorInTx,
   type AuthFailure,
+  type ReadinessMutationTestHooks,
 } from "@/lib/orgs/business-access";
 import {
   ONBOARDING_STEPS,
@@ -39,93 +42,34 @@ export type OnboardingView = {
 };
 
 export type GetOnboardingResult =
-  { ok: true; onboarding: OnboardingView } | AuthFailure;
+  | { ok: true; onboarding: OnboardingView }
+  | { ok: false; reason: "not_started"; message: string }
+  | AuthFailure;
 
 /**
- * Idempotently create onboarding + defaults for an organization.
- * Concurrent callers converge on a single OrganizationOnboarding row.
- * Requires org.onboarding.manage (create/start) or returns existing for viewers.
+ * Read-only onboarding retrieval. Never creates rows or audit events.
  */
-export async function ensureOrganizationOnboarding(input: {
+export async function getOrganizationOnboarding(input: {
   actor: SafeUser;
   organizationId: string;
-  recordStartAudit?: boolean;
 }): Promise<GetOnboardingResult> {
-  let canManage = false;
   try {
     await requireOrganizationPermission({
       user: input.actor,
       organizationId: input.organizationId,
-      permission: "org.onboarding.manage",
+      permission: "org.onboarding.view",
     });
-    canManage = true;
-  } catch (error) {
-    try {
-      await requireOrganizationPermission({
-        user: input.actor,
-        organizationId: input.organizationId,
-        permission: "org.onboarding.view",
-      });
-    } catch (viewError) {
-      return (
-        mapAuthError(viewError) ??
-        mapAuthError(error) ?? {
-          ok: false,
-          reason: "forbidden",
-          message: "You do not have permission to view onboarding.",
-        }
-      );
+
+    const onboarding = await prisma.organizationOnboarding.findUnique({
+      where: { organizationId: input.organizationId },
+    });
+    if (!onboarding) {
+      return {
+        ok: false,
+        reason: "not_started",
+        message: "Onboarding has not been started for this organization.",
+      };
     }
-  }
-
-  try {
-    const onboarding = await prisma.$transaction(async (tx) => {
-      await ensureBusinessDefaults(tx, input.organizationId);
-
-      const existing = await tx.organizationOnboarding.findUnique({
-        where: { organizationId: input.organizationId },
-      });
-      if (existing) {
-        return existing;
-      }
-
-      if (!canManage) {
-        throw new OrganizationAuthError("organization_not_found");
-      }
-
-      try {
-        const created = await tx.organizationOnboarding.create({
-          data: {
-            organizationId: input.organizationId,
-            status: "NOT_STARTED",
-            currentStep: "BUSINESS_BASICS",
-            completedSteps: [],
-          },
-        });
-
-        if (input.recordStartAudit !== false) {
-          await recordOrganizationAuditEvent(tx, {
-            organizationId: input.organizationId,
-            actorUserId: input.actor.id,
-            action: "ONBOARDING_STARTED",
-          });
-        }
-
-        return created;
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          (error as { code?: string }).code === "P2002"
-        ) {
-          const raced = await tx.organizationOnboarding.findUnique({
-            where: { organizationId: input.organizationId },
-          });
-          if (raced) return raced;
-        }
-        throw error;
-      }
-    });
 
     const readiness = await computeConfigurationReadiness(
       prisma,
@@ -141,20 +85,109 @@ export async function ensureOrganizationOnboarding(input: {
       mapAuthError(error) ?? {
         ok: false,
         reason: "failed",
-        message: "Could not initialize onboarding.",
+        message: "Could not load onboarding.",
       }
     );
   }
 }
 
-export async function getOrganizationOnboarding(input: {
+/**
+ * Intentional onboarding initialization (POST/mutation only).
+ * Idempotent: creates defaults + onboarding once; ONBOARDING_STARTED only on create.
+ */
+export async function startOrganizationOnboarding(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<GetOnboardingResult> {
+  try {
+    await requireOrganizationPermission({
+      user: input.actor,
+      organizationId: input.organizationId,
+      permission: "org.onboarding.manage",
+    });
+
+    const onboarding = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
+      await requireActiveActorInTx(tx, {
+        organizationId: input.organizationId,
+        userId: input.actor.id,
+        permission: "org.onboarding.manage",
+      });
+
+      await initializeBusinessDefaults(tx, input.organizationId);
+
+      const existing = await tx.organizationOnboarding.findUnique({
+        where: { organizationId: input.organizationId },
+      });
+      if (existing) {
+        return { row: existing, created: false as const };
+      }
+
+      try {
+        const created = await tx.organizationOnboarding.create({
+          data: {
+            organizationId: input.organizationId,
+            status: "NOT_STARTED",
+            currentStep: "BUSINESS_BASICS",
+            completedSteps: [],
+          },
+        });
+
+        await recordOrganizationAuditEvent(tx, {
+          organizationId: input.organizationId,
+          actorUserId: input.actor.id,
+          action: "ONBOARDING_STARTED",
+        });
+
+        return { row: created, created: true as const };
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error as { code?: string }).code === "P2002"
+        ) {
+          const raced = await tx.organizationOnboarding.findUnique({
+            where: { organizationId: input.organizationId },
+          });
+          if (raced) return { row: raced, created: false as const };
+        }
+        throw error;
+      }
+    });
+
+    const readiness = await computeConfigurationReadiness(
+      prisma,
+      input.organizationId,
+    );
+
+    return {
+      ok: true,
+      onboarding: toView(onboarding.row, readiness),
+    };
+  } catch (error) {
+    return (
+      mapAuthError(error) ?? {
+        ok: false,
+        reason: "failed",
+        message: "Could not start onboarding.",
+      }
+    );
+  }
+}
+
+/** @deprecated Use startOrganizationOnboarding for mutations; getOrganizationOnboarding for reads. */
+export async function ensureOrganizationOnboarding(input: {
   actor: SafeUser;
   organizationId: string;
+  recordStartAudit?: boolean;
 }): Promise<GetOnboardingResult> {
-  return ensureOrganizationOnboarding({
-    ...input,
-    recordStartAudit: true,
-  });
+  if (input.recordStartAudit === false) {
+    return getOrganizationOnboarding(input);
+  }
+  return startOrganizationOnboarding(input);
 }
 
 export async function advanceOnboardingStep(input: {
@@ -184,12 +217,6 @@ export async function advanceOnboardingStep(input: {
       if (!existing) {
         throw new OrganizationAuthError("organization_not_found");
       }
-      if (
-        input.expectedVersion !== undefined &&
-        existing.version !== input.expectedVersion
-      ) {
-        throw new ConcurrencyError();
-      }
 
       const completed = parseCompletedSteps(existing.completedSteps);
       if (!completed.includes(input.step)) {
@@ -201,19 +228,37 @@ export async function advanceOnboardingStep(input: {
           ? input.nextStep
           : existing.currentStep;
 
-      return tx.organizationOnboarding.update({
-        where: { organizationId: input.organizationId },
+      const status =
+        existing.status === "NOT_STARTED"
+          ? "IN_PROGRESS"
+          : existing.status === "COMPLETED"
+            ? "COMPLETED"
+            : "IN_PROGRESS";
+
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
+
+      const updated = await tx.organizationOnboarding.updateMany({
+        where,
         data: {
-          status:
-            existing.status === "NOT_STARTED"
-              ? "IN_PROGRESS"
-              : existing.status === "COMPLETED"
-                ? "COMPLETED"
-                : "IN_PROGRESS",
+          status,
           currentStep: next,
           completedSteps: completed,
           version: { increment: 1 },
         },
+      });
+
+      if (updated.count !== 1) {
+        throw new ConflictError();
+      }
+
+      return tx.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
       });
     });
 
@@ -223,7 +268,7 @@ export async function advanceOnboardingStep(input: {
     );
     return { ok: true, onboarding: toView(onboarding, readiness) };
   } catch (error) {
-    if (error instanceof ConcurrencyError) {
+    if (error instanceof ConflictError) {
       return {
         ok: false,
         reason: "conflict",
@@ -244,13 +289,16 @@ export type CompleteOnboardingResult =
   { ok: true; onboarding: OnboardingView } | AuthFailure;
 
 /**
- * Intentional completion. Server computes readiness; client cannot force complete.
+ * Intentional completion. Server computes readiness under the shared readiness lock.
  */
-export async function completeOrganizationOnboarding(input: {
-  actor: SafeUser;
-  organizationId: string;
-  expectedVersion?: number;
-}): Promise<CompleteOnboardingResult> {
+export async function completeOrganizationOnboarding(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    expectedVersion?: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<CompleteOnboardingResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -259,26 +307,18 @@ export async function completeOrganizationOnboarding(input: {
     });
 
     const result = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
         permission: "org.onboarding.complete",
       });
 
-      // Serialize completion against concurrent catalogue/profile edits.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`onboarding:${input.organizationId}`}))`;
-
       const existing = await tx.organizationOnboarding.findUnique({
         where: { organizationId: input.organizationId },
       });
       if (!existing) {
         throw new OrganizationAuthError("organization_not_found");
-      }
-      if (
-        input.expectedVersion !== undefined &&
-        existing.version !== input.expectedVersion
-      ) {
-        throw new ConcurrencyError();
       }
 
       const readiness = await computeConfigurationReadiness(
@@ -294,8 +334,16 @@ export async function completeOrganizationOnboarding(input: {
         };
       }
 
-      const updated = await tx.organizationOnboarding.update({
-        where: { organizationId: input.organizationId },
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
+
+      const updatedCount = await tx.organizationOnboarding.updateMany({
+        where,
         data: {
           status: "COMPLETED",
           currentStep: "REVIEW",
@@ -305,6 +353,14 @@ export async function completeOrganizationOnboarding(input: {
           completedByUserId: input.actor.id,
           version: { increment: 1 },
         },
+      });
+
+      if (updatedCount.count !== 1) {
+        throw new ConflictError();
+      }
+
+      const updated = await tx.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
       });
 
       await recordOrganizationAuditEvent(tx, {
@@ -334,7 +390,7 @@ export async function completeOrganizationOnboarding(input: {
       onboarding: toView(result.onboarding, result.readiness),
     };
   } catch (error) {
-    if (error instanceof ConcurrencyError) {
+    if (error instanceof ConflictError) {
       return {
         ok: false,
         reason: "conflict",
@@ -351,11 +407,14 @@ export async function completeOrganizationOnboarding(input: {
   }
 }
 
-export async function reopenOrganizationOnboarding(input: {
-  actor: SafeUser;
-  organizationId: string;
-  expectedVersion?: number;
-}): Promise<CompleteOnboardingResult> {
+export async function reopenOrganizationOnboarding(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    expectedVersion?: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<CompleteOnboardingResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -364,6 +423,7 @@ export async function reopenOrganizationOnboarding(input: {
     });
 
     const updated = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
@@ -376,15 +436,17 @@ export async function reopenOrganizationOnboarding(input: {
       if (!existing) {
         throw new OrganizationAuthError("organization_not_found");
       }
-      if (
-        input.expectedVersion !== undefined &&
-        existing.version !== input.expectedVersion
-      ) {
-        throw new ConcurrencyError();
-      }
 
-      const next = await tx.organizationOnboarding.update({
-        where: { organizationId: input.organizationId },
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
+
+      const updatedCount = await tx.organizationOnboarding.updateMany({
+        where,
         data: {
           status: "IN_PROGRESS",
           isConfigurationReady: false,
@@ -393,6 +455,14 @@ export async function reopenOrganizationOnboarding(input: {
           currentStep: "REVIEW",
           version: { increment: 1 },
         },
+      });
+
+      if (updatedCount.count !== 1) {
+        throw new ConflictError();
+      }
+
+      const next = await tx.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
       });
 
       await recordOrganizationAuditEvent(tx, {
@@ -410,7 +480,7 @@ export async function reopenOrganizationOnboarding(input: {
     );
     return { ok: true, onboarding: toView(updated, readiness) };
   } catch (error) {
-    if (error instanceof ConcurrencyError) {
+    if (error instanceof ConflictError) {
       return {
         ok: false,
         reason: "conflict",
@@ -424,13 +494,6 @@ export async function reopenOrganizationOnboarding(input: {
         message: "Could not reopen onboarding.",
       }
     );
-  }
-}
-
-class ConcurrencyError extends Error {
-  constructor() {
-    super("conflict");
-    this.name = "ConcurrencyError";
   }
 }
 

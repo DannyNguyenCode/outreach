@@ -9,12 +9,15 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
+  acquireOrganizationReadinessLock,
   assertCanReadBusinessInfo,
-  ensureBusinessDefaults,
+  ConflictError,
+  initializeBusinessDefaults,
   mapAuthError,
   refreshConfigurationReadiness,
   requireActiveActorInTx,
   type AuthFailure,
+  type ReadinessMutationTestHooks,
 } from "@/lib/orgs/business-access";
 import {
   businessBasicsSchema,
@@ -30,15 +33,19 @@ export type BusinessConfiguration = {
 };
 
 export type GetBusinessResult =
-  { ok: true; data: BusinessConfiguration } | AuthFailure;
+  | { ok: true; data: BusinessConfiguration }
+  | { ok: false; reason: "not_initialized"; message: string }
+  | AuthFailure;
 
+/**
+ * Read-only business configuration retrieval. Never creates defaults.
+ */
 export async function getBusinessConfiguration(input: {
   actor: SafeUser;
   organizationId: string;
 }): Promise<GetBusinessResult> {
   try {
-    await assertCanReadBusinessInfo(input);
-    await ensureBusinessDefaults(prisma, input.organizationId);
+    await assertCanReadBusinessInfo({ ...input, db: prisma });
 
     const organization = await prisma.organization.findUnique({
       where: { id: input.organizationId },
@@ -48,12 +55,20 @@ export async function getBusinessConfiguration(input: {
       throw new OrganizationAuthError("organization_not_found");
     }
 
-    const profile = await prisma.businessProfile.findUniqueOrThrow({
+    const profile = await prisma.businessProfile.findUnique({
       where: { organizationId: input.organizationId },
     });
-    const location = await prisma.businessLocation.findFirstOrThrow({
+    const location = await prisma.businessLocation.findFirst({
       where: { organizationId: input.organizationId, isPrimary: true },
     });
+
+    if (!profile || !location) {
+      return {
+        ok: false,
+        reason: "not_initialized",
+        message: "Business configuration has not been initialized.",
+      };
+    }
 
     return {
       ok: true,
@@ -75,12 +90,15 @@ export async function getBusinessConfiguration(input: {
   }
 }
 
-export async function updateBusinessBasics(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-  expectedVersion?: number;
-}): Promise<GetBusinessResult> {
+export async function updateBusinessBasics(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+    expectedVersion?: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<GetBusinessResult> {
   const parsed = businessBasicsSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -105,28 +123,24 @@ export async function updateBusinessBasics(input: {
     });
 
     await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
         permission: "org.business.update",
       });
-      await ensureBusinessDefaults(tx, input.organizationId);
+      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const current = await tx.businessProfile.findUnique({
-        where: { organizationId: input.organizationId },
-      });
-      if (!current) {
-        throw new OrganizationAuthError("organization_not_found");
-      }
-      if (
-        input.expectedVersion !== undefined &&
-        current.version !== input.expectedVersion
-      ) {
-        throw new ConflictError();
-      }
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
 
-      await tx.businessProfile.update({
-        where: { organizationId: input.organizationId },
+      const updated = await tx.businessProfile.updateMany({
+        where,
         data: {
           legalName: parsed.data.legalName ?? null,
           displayName: parsed.data.displayName,
@@ -138,6 +152,16 @@ export async function updateBusinessBasics(input: {
           version: { increment: 1 },
         },
       });
+
+      if (updated.count !== 1) {
+        const exists = await tx.businessProfile.findUnique({
+          where: { organizationId: input.organizationId },
+        });
+        if (!exists) {
+          throw new OrganizationAuthError("organization_not_found");
+        }
+        throw new ConflictError();
+      }
 
       await recordOrganizationAuditEvent(tx, {
         organizationId: input.organizationId,
@@ -169,12 +193,15 @@ export async function updateBusinessBasics(input: {
   }
 }
 
-export async function updateContactAndLocation(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-  expectedVersion?: number;
-}): Promise<GetBusinessResult> {
+export async function updateContactAndLocation(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+    expectedVersion?: number;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<GetBusinessResult> {
   const parsed = contactLocationSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -199,28 +226,24 @@ export async function updateContactAndLocation(input: {
     });
 
     await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
         permission: "org.business.update",
       });
-      await ensureBusinessDefaults(tx, input.organizationId);
+      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const current = await tx.businessProfile.findUnique({
-        where: { organizationId: input.organizationId },
-      });
-      if (!current) {
-        throw new OrganizationAuthError("organization_not_found");
-      }
-      if (
-        input.expectedVersion !== undefined &&
-        current.version !== input.expectedVersion
-      ) {
-        throw new ConflictError();
-      }
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
 
-      await tx.businessProfile.update({
-        where: { organizationId: input.organizationId },
+      const updated = await tx.businessProfile.updateMany({
+        where,
         data: {
           primaryEmail: parsed.data.primaryEmail,
           primaryPhoneE164: parsed.data.primaryPhoneE164 ?? null,
@@ -229,6 +252,16 @@ export async function updateContactAndLocation(input: {
           version: { increment: 1 },
         },
       });
+
+      if (updated.count !== 1) {
+        const exists = await tx.businessProfile.findUnique({
+          where: { organizationId: input.organizationId },
+        });
+        if (!exists) {
+          throw new OrganizationAuthError("organization_not_found");
+        }
+        throw new ConflictError();
+      }
 
       await tx.businessLocation.updateMany({
         where: { organizationId: input.organizationId, isPrimary: true },
@@ -273,12 +306,5 @@ export async function updateContactAndLocation(input: {
         message: "Could not update contact and location.",
       }
     );
-  }
-}
-
-class ConflictError extends Error {
-  constructor() {
-    super("conflict");
-    this.name = "ConflictError";
   }
 }

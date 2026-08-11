@@ -9,7 +9,8 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
-  ensureBusinessDefaults,
+  ConflictError,
+  initializeBusinessDefaults,
   mapAuthError,
   requireActiveActorInTx,
   type AuthFailure,
@@ -18,11 +19,12 @@ import { employeeDefaultsSchema } from "@/lib/orgs/business-validation";
 import { prisma } from "@/lib/prisma";
 
 export type SettingsResult =
-  { ok: true; settings: OrganizationSettings } | AuthFailure;
+  | { ok: true; settings: OrganizationSettings }
+  | { ok: false; reason: "not_initialized"; message: string }
+  | AuthFailure;
 
 /**
- * Owners/admins may manage settings. Members cannot read employee-default
- * settings (they are organization policy, not member-facing catalogue data).
+ * Read-only settings retrieval. Never creates defaults.
  */
 export async function getOrganizationSettings(input: {
   actor: SafeUser;
@@ -34,10 +36,16 @@ export async function getOrganizationSettings(input: {
       organizationId: input.organizationId,
       permission: "org.settings.manage",
     });
-    await ensureBusinessDefaults(prisma, input.organizationId);
-    const settings = await prisma.organizationSettings.findUniqueOrThrow({
+    const settings = await prisma.organizationSettings.findUnique({
       where: { organizationId: input.organizationId },
     });
+    if (!settings) {
+      return {
+        ok: false,
+        reason: "not_initialized",
+        message: "Organization settings have not been initialized.",
+      };
+    }
     return { ok: true, settings };
   } catch (error) {
     return (
@@ -85,23 +93,18 @@ export async function updateOrganizationSettings(input: {
         userId: input.actor.id,
         permission: "org.settings.manage",
       });
-      await ensureBusinessDefaults(tx, input.organizationId);
+      await initializeBusinessDefaults(tx, input.organizationId);
 
-      const current = await tx.organizationSettings.findUnique({
-        where: { organizationId: input.organizationId },
-      });
-      if (!current) {
-        throw new OrganizationAuthError("organization_not_found");
-      }
-      if (
-        input.expectedVersion !== undefined &&
-        current.version !== input.expectedVersion
-      ) {
-        throw new ConflictError();
-      }
+      const where =
+        input.expectedVersion !== undefined
+          ? {
+              organizationId: input.organizationId,
+              version: input.expectedVersion,
+            }
+          : { organizationId: input.organizationId };
 
-      const updated = await tx.organizationSettings.update({
-        where: { organizationId: input.organizationId },
+      const updatedCount = await tx.organizationSettings.updateMany({
+        where,
         data: {
           membersCanViewServices: parsed.data.membersCanViewServices,
           membersCanViewProducts: parsed.data.membersCanViewProducts,
@@ -109,6 +112,20 @@ export async function updateOrganizationSettings(input: {
           futureCallingAccessDefault: parsed.data.futureCallingAccessDefault,
           version: { increment: 1 },
         },
+      });
+
+      if (updatedCount.count !== 1) {
+        const exists = await tx.organizationSettings.findUnique({
+          where: { organizationId: input.organizationId },
+        });
+        if (!exists) {
+          throw new OrganizationAuthError("organization_not_found");
+        }
+        throw new ConflictError();
+      }
+
+      const updated = await tx.organizationSettings.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
       });
 
       await recordOrganizationAuditEvent(tx, {
@@ -142,12 +159,5 @@ export async function updateOrganizationSettings(input: {
         message: "Could not update organization settings.",
       }
     );
-  }
-}
-
-class ConflictError extends Error {
-  constructor() {
-    super("conflict");
-    this.name = "ConflictError";
   }
 }

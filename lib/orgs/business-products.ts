@@ -10,11 +10,13 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
+  acquireOrganizationReadinessLock,
   assertCanReadProducts,
   mapAuthError,
   refreshConfigurationReadiness,
   requireActiveActorInTx,
   type AuthFailure,
+  type ReadinessMutationTestHooks,
 } from "@/lib/orgs/business-access";
 import {
   productInputSchema,
@@ -33,7 +35,7 @@ export async function listBusinessProducts(input: {
   organizationId: string;
 }): Promise<ProductsResult> {
   try {
-    await assertCanReadProducts(input);
+    await assertCanReadProducts({ ...input, db: prisma });
     const products = await prisma.businessProduct.findMany({
       where: { organizationId: input.organizationId },
       orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
@@ -50,11 +52,14 @@ export async function listBusinessProducts(input: {
   }
 }
 
-export async function createBusinessProduct(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-}): Promise<ProductResult> {
+export async function createBusinessProduct(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<ProductResult> {
   const parsed = productInputSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -79,6 +84,7 @@ export async function createBusinessProduct(input: {
     });
 
     const product = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
@@ -144,12 +150,15 @@ export async function createBusinessProduct(input: {
   }
 }
 
-export async function updateBusinessProduct(input: {
-  actor: SafeUser;
-  organizationId: string;
-  productId: string;
-  raw: unknown;
-}): Promise<ProductResult> {
+export async function updateBusinessProduct(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    productId: string;
+    raw: unknown;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<ProductResult> {
   const parsed = productInputSchema.safeParse(input.raw);
   if (!parsed.success) {
     const fieldErrors: Record<string, string[]> = {};
@@ -174,6 +183,7 @@ export async function updateBusinessProduct(input: {
     });
 
     const product = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,
@@ -243,11 +253,14 @@ export async function updateBusinessProduct(input: {
   }
 }
 
-export async function deactivateBusinessProduct(input: {
-  actor: SafeUser;
-  organizationId: string;
-  productId: string;
-}): Promise<ProductResult> {
+export async function deactivateBusinessProduct(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    productId: string;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<ProductResult> {
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -256,6 +269,7 @@ export async function deactivateBusinessProduct(input: {
     });
 
     const product = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,

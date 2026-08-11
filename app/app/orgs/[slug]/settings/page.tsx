@@ -106,7 +106,11 @@ export default async function OrganizationSettingsPage({ params }: PageProps) {
       </div>
 
       {!business.ok ? (
-        <p className="text-sm text-[var(--danger)]">{business.message}</p>
+        <p className="text-sm text-[var(--muted)]">
+          {business.reason === "not_initialized"
+            ? "Business configuration has not been started. Use Business onboarding to begin."
+            : business.message}
+        </p>
       ) : canUpdate ? (
         <>
           <section className="space-y-3">

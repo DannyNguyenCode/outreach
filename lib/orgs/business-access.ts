@@ -20,7 +20,6 @@ import {
   type OnboardingStepValue,
 } from "@/lib/orgs/business-validation";
 import { roleHasPermission } from "@/lib/orgs/permissions";
-import { prisma } from "@/lib/prisma";
 
 export type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -31,6 +30,61 @@ export type AuthFailure = {
   fieldErrors?: Record<string, string[]>;
   missingRequirements?: string[];
 };
+
+/**
+ * Test-only seams for deterministic readiness-lock concurrency tests.
+ * Production callers must omit these hooks.
+ */
+export type ReadinessMutationTestHooks = {
+  /** Invoked immediately before acquiring the shared readiness lock. */
+  testBeforeReadinessLock?: () => Promise<void>;
+  /**
+   * Invoked after the shared readiness lock is held and before the
+   * authoritative transactional membership/permission recheck.
+   */
+  testAfterReadinessLock?: () => Promise<void>;
+};
+
+export class ConflictError extends Error {
+  constructor(message = "conflict") {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
+
+/**
+ * Lock key namespace for all readiness-affecting Phase 3A mutations.
+ *
+ * Ordering rule (prevents deadlocks):
+ * 1. Always acquire `organization-readiness:<organizationId>` first.
+ * 2. Only then acquire any specialized locks (`hours:`, `services-order:`,
+ *    `products-order:`) if still needed for that operation.
+ * 3. Never acquire specialized locks before the readiness lock when both are used.
+ * 4. Reorder-only operations that do not affect completion readiness may use
+ *    their specialized locks alone.
+ */
+export function organizationReadinessLockKey(organizationId: string): string {
+  return `organization-readiness:${organizationId}`;
+}
+
+/**
+ * Acquire the shared organization readiness advisory lock inside a transaction.
+ * Must be called before reading or mutating readiness-affecting configuration.
+ */
+export async function acquireOrganizationReadinessLock(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<void> {
+  if (hooks.testBeforeReadinessLock) {
+    await hooks.testBeforeReadinessLock();
+  }
+  const lockKey = organizationReadinessLockKey(organizationId);
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+  if (hooks.testAfterReadinessLock) {
+    await hooks.testAfterReadinessLock();
+  }
+}
 
 export function mapAuthError(error: unknown): AuthFailure | null {
   if (!(error instanceof OrganizationAuthError)) {
@@ -88,6 +142,7 @@ export type ReadinessResult = {
 
 /**
  * Server-side completion readiness. Never trust client isComplete flags.
+ * Caller must hold the shared readiness lock when used for completion decisions.
  */
 export async function computeConfigurationReadiness(
   db: DbClient,
@@ -164,6 +219,10 @@ export async function computeConfigurationReadiness(
   };
 }
 
+/**
+ * Recompute readiness and apply invalidation policy.
+ * Caller must already hold the shared readiness lock.
+ */
 export async function refreshConfigurationReadiness(
   db: DbClient,
   organizationId: string,
@@ -196,7 +255,11 @@ export async function refreshConfigurationReadiness(
   return readiness;
 }
 
-export async function ensureBusinessDefaults(
+/**
+ * Mutating initializer for Phase 3A defaults. Must not be called from GET/read paths.
+ * Intended for intentional start and write mutations that need rows to exist.
+ */
+export async function initializeBusinessDefaults(
   db: DbClient,
   organizationId: string,
 ): Promise<void> {
@@ -223,7 +286,6 @@ export async function ensureBusinessDefaults(
         },
       });
     } catch (error) {
-      // Concurrent primary create — unique partial index may reject.
       if (!(
         error instanceof Error &&
         "code" in error &&
@@ -234,6 +296,9 @@ export async function ensureBusinessDefaults(
     }
   }
 }
+
+/** @deprecated Use initializeBusinessDefaults — alias kept briefly for migration of call sites. */
+export const ensureBusinessDefaults = initializeBusinessDefaults;
 
 export async function markOnboardingStep(
   db: DbClient,
@@ -264,9 +329,14 @@ export async function markOnboardingStep(
   });
 }
 
+/**
+ * Read-only authorization for business info. Does not create settings/profile rows.
+ * Missing settings default to allowing member reads (same as schema defaults).
+ */
 export async function assertCanReadBusinessInfo(input: {
   actor: SafeUser;
   organizationId: string;
+  db: DbClient;
 }): Promise<{ role: OrganizationRole }> {
   const membership = await requireOrganizationPermission({
     user: input.actor,
@@ -275,8 +345,7 @@ export async function assertCanReadBusinessInfo(input: {
   });
 
   if (membership.role === "MEMBER") {
-    await ensureBusinessDefaults(prisma, input.organizationId);
-    const settings = await prisma.organizationSettings.findUnique({
+    const settings = await input.db.organizationSettings.findUnique({
       where: { organizationId: input.organizationId },
     });
     if (settings && !settings.membersCanViewBusinessInfo) {
@@ -290,6 +359,7 @@ export async function assertCanReadBusinessInfo(input: {
 export async function assertCanReadServices(input: {
   actor: SafeUser;
   organizationId: string;
+  db: DbClient;
 }): Promise<{ role: OrganizationRole }> {
   const membership = await requireOrganizationPermission({
     user: input.actor,
@@ -297,8 +367,7 @@ export async function assertCanReadServices(input: {
     permission: "org.services.read",
   });
   if (membership.role === "MEMBER") {
-    await ensureBusinessDefaults(prisma, input.organizationId);
-    const settings = await prisma.organizationSettings.findUnique({
+    const settings = await input.db.organizationSettings.findUnique({
       where: { organizationId: input.organizationId },
     });
     if (settings && !settings.membersCanViewServices) {
@@ -311,6 +380,7 @@ export async function assertCanReadServices(input: {
 export async function assertCanReadProducts(input: {
   actor: SafeUser;
   organizationId: string;
+  db: DbClient;
 }): Promise<{ role: OrganizationRole }> {
   const membership = await requireOrganizationPermission({
     user: input.actor,
@@ -318,8 +388,7 @@ export async function assertCanReadProducts(input: {
     permission: "org.products.read",
   });
   if (membership.role === "MEMBER") {
-    await ensureBusinessDefaults(prisma, input.organizationId);
-    const settings = await prisma.organizationSettings.findUnique({
+    const settings = await input.db.organizationSettings.findUnique({
       where: { organizationId: input.organizationId },
     });
     if (settings && !settings.membersCanViewProducts) {
@@ -327,4 +396,20 @@ export async function assertCanReadProducts(input: {
     }
   }
   return { role: membership.role };
+}
+
+export function parseExpectedVersion(
+  value: unknown,
+): number | undefined | "invalid" {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) && value >= 0 ? value : "invalid";
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const n = Number(value);
+    return Number.isInteger(n) && n >= 0 ? n : "invalid";
+  }
+  return "invalid";
 }

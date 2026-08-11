@@ -23,7 +23,7 @@ import {
 import { deactivateMember } from "@/lib/orgs/memberships";
 import {
   completeOrganizationOnboarding,
-  ensureOrganizationOnboarding,
+  startOrganizationOnboarding,
 } from "@/lib/orgs/onboarding";
 import { replaceOperatingHours } from "@/lib/orgs/operating-hours";
 import { createOrganization } from "@/lib/orgs/organizations";
@@ -111,7 +111,7 @@ describe("Phase 3A business concurrency", () => {
 
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>
-        ensureOrganizationOnboarding({
+        startOrganizationOnboarding({
           actor: owner,
           organizationId: org.organization.id,
         }),
@@ -226,7 +226,7 @@ describe("Phase 3A business concurrency", () => {
     });
     if (!org.ok) return;
 
-    await ensureOrganizationOnboarding({
+    await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });
@@ -316,7 +316,7 @@ describe("Phase 3A business concurrency", () => {
     const token = sent.at(-1)?.text.match(/[?&]token=([A-Za-z0-9_-]+)/)?.[1];
     await acceptOrganizationInvitation({ actor: admin, rawToken: token! });
 
-    await ensureOrganizationOnboarding({
+    await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });

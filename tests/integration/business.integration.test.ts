@@ -25,9 +25,9 @@ import {
 import { createOrganization } from "@/lib/orgs/organizations";
 import {
   completeOrganizationOnboarding,
-  ensureOrganizationOnboarding,
   getOrganizationOnboarding,
   reopenOrganizationOnboarding,
+  startOrganizationOnboarding,
 } from "@/lib/orgs/onboarding";
 import {
   getOperatingHours,
@@ -106,6 +106,10 @@ async function seedReadyConfig(input: {
   businessType?: "SERVICES" | "PRODUCTS" | "BOTH";
 }) {
   const businessType = input.businessType ?? "BOTH";
+  await startOrganizationOnboarding({
+    actor: input.actor,
+    organizationId: input.organizationId,
+  });
   await updateBusinessBasics({
     actor: input.actor,
     organizationId: input.organizationId,
@@ -173,11 +177,11 @@ describe("Phase 3A business onboarding integration", () => {
     expect(org.ok).toBe(true);
     if (!org.ok) return;
 
-    const first = await ensureOrganizationOnboarding({
+    const first = await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });
-    const second = await ensureOrganizationOnboarding({
+    const second = await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });
@@ -264,7 +268,7 @@ describe("Phase 3A business onboarding integration", () => {
       slug: `ready-${randomUUID().slice(0, 8)}`,
     });
     if (!org.ok) return;
-    await ensureOrganizationOnboarding({
+    await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });
@@ -303,7 +307,7 @@ describe("Phase 3A business onboarding integration", () => {
       slug: `reopen-${randomUUID().slice(0, 8)}`,
     });
     if (!org.ok) return;
-    await ensureOrganizationOnboarding({
+    await startOrganizationOnboarding({
       actor: owner,
       organizationId: org.organization.id,
     });

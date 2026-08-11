@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { enumToStepPath } from "@/components/orgs/onboarding/onboarding-progress";
+import { StartOnboardingForm } from "@/components/orgs/onboarding/start-onboarding-form";
 import { requireVerifiedUser } from "@/lib/auth/session";
 import { setActiveOrganization } from "@/lib/orgs/active-organization";
 import {
@@ -60,6 +61,34 @@ export default async function OnboardingEntryPage({ params }: PageProps) {
   });
 
   if (!onboarding.ok) {
+    if (onboarding.reason === "not_started") {
+      const canStart = roleHasPermission(
+        membership.role,
+        "org.onboarding.manage",
+      );
+      return (
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--muted)]">
+            <Link
+              href={`/app/orgs/${slug}`}
+              className="underline-offset-2 hover:underline"
+            >
+              ← {membership.organization.name}
+            </Link>
+          </p>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Business onboarding
+          </h1>
+          {canStart ? (
+            <StartOnboardingForm organizationSlug={slug} />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">
+              Onboarding has not been started yet.
+            </p>
+          )}
+        </div>
+      );
+    }
     notFound();
   }
 

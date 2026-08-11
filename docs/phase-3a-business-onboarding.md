@@ -110,6 +110,26 @@ Settings never override server permission policy and cannot elevate a `MEMBER` t
 
 Deferred: granular custom roles / permission builder UI.
 
+## Concurrency and readiness locking
+
+All readiness-affecting mutations acquire a shared transaction advisory lock:
+
+```text
+organization-readiness:<organizationId>
+```
+
+Lock ordering (deadlock prevention):
+
+1. Acquire `organization-readiness:<organizationId>` first.
+2. Only then acquire specialized locks (`hours:`, `services-order:`, `products-order:`) when needed.
+3. Reorder-only operations that do not affect completion readiness may use specialized locks alone.
+
+Versioned writes use atomic conditional `updateMany` scoped by organization and expected version.
+
+## GET non-mutation
+
+Read helpers never create defaults, onboarding rows, or audit events. Intentional initialization uses `startOrganizationOnboarding()` via POST (`startOnboardingAction`).
+
 ## Onboarding-state lifecycle
 
 `OrganizationOnboarding` is authoritative (not URL or localStorage).

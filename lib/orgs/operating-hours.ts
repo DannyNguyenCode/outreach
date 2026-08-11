@@ -9,10 +9,12 @@ import {
   requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import {
+  acquireOrganizationReadinessLock,
   mapAuthError,
   refreshConfigurationReadiness,
   requireActiveActorInTx,
   type AuthFailure,
+  type ReadinessMutationTestHooks,
 } from "@/lib/orgs/business-access";
 import {
   DAYS_OF_WEEK,
@@ -66,11 +68,14 @@ export async function getOperatingHours(input: {
  * Replace the full weekly schedule atomically.
  * Semantics: start inclusive, end exclusive; overnight rejected; no partial weeks.
  */
-export async function replaceOperatingHours(input: {
-  actor: SafeUser;
-  organizationId: string;
-  raw: unknown;
-}): Promise<GetHoursResult> {
+export async function replaceOperatingHours(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    raw: unknown;
+  },
+  hooks: ReadinessMutationTestHooks = {},
+): Promise<GetHoursResult> {
   const parsed = replaceOperatingHoursSchema.safeParse(input.raw);
   if (!parsed.success) {
     return {
@@ -163,6 +168,8 @@ export async function replaceOperatingHours(input: {
     });
 
     const intervals = await prisma.$transaction(async (tx) => {
+      // Lock order: readiness first, then hours-specific schedule lock.
+      await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(tx, {
         organizationId: input.organizationId,
         userId: input.actor.id,

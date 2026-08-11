@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 import type { ActionState } from "@/app/actions/auth-state";
 import {
@@ -37,6 +38,7 @@ import {
   advanceOnboardingStep,
   completeOrganizationOnboarding,
   reopenOrganizationOnboarding,
+  startOrganizationOnboarding,
 } from "@/lib/orgs/onboarding";
 import { updateOrganizationSettings } from "@/lib/orgs/organization-settings";
 import { prisma } from "@/lib/prisma";
@@ -548,6 +550,29 @@ export async function markCatalogueStepAction(
   if (!result.ok) return failureFromService(result);
   revalidateOrgPaths(resolved.slug);
   return { status: "success", message: "Catalogue step saved." };
+}
+
+export async function startOnboardingAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const resolved = await resolveOrgFromForm(formData);
+  if (resolved.error || !resolved.membership) return resolved.error!;
+
+  const limited = await rateLimitOrReject(
+    "onboarding-complete",
+    `user:${resolved.user.id}:org:${resolved.membership.organizationId}:start`,
+  );
+  if (limited) return limited;
+
+  const result = await startOrganizationOnboarding({
+    actor: resolved.user,
+    organizationId: resolved.membership.organizationId,
+  });
+
+  if (!result.ok) return failureFromService(result);
+  revalidateOrgPaths(resolved.slug);
+  redirect(`/app/orgs/${resolved.slug}/onboarding/basics`);
 }
 
 export async function completeOnboardingAction(

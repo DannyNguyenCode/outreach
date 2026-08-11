@@ -11,6 +11,7 @@ import {
 } from "@/components/orgs/onboarding/defaults-and-review";
 import { OnboardingShell } from "@/components/orgs/onboarding/onboarding-shell";
 import { OperatingHoursForm } from "@/components/orgs/onboarding/operating-hours-form";
+import { StartOnboardingForm } from "@/components/orgs/onboarding/start-onboarding-form";
 import { stepPathToEnum } from "@/components/orgs/onboarding/onboarding-progress";
 import { requireVerifiedUser } from "@/lib/auth/session";
 import { setActiveOrganization } from "@/lib/orgs/active-organization";
@@ -79,6 +80,22 @@ export default async function OnboardingStepPage({ params }: PageProps) {
     organizationId: membership.organizationId,
   });
   if (!onboardingResult.ok) {
+    if (onboardingResult.reason === "not_started") {
+      return (
+        <div className="space-y-4">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Business onboarding
+          </h1>
+          {roleHasPermission(membership.role, "org.onboarding.manage") ? (
+            <StartOnboardingForm organizationSlug={slug} />
+          ) : (
+            <p className="text-sm text-[var(--muted)]">
+              Onboarding has not been started yet.
+            </p>
+          )}
+        </div>
+      );
+    }
     notFound();
   }
 

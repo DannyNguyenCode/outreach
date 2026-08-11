@@ -83,10 +83,16 @@ test.describe("Phase 3A business onboarding", () => {
       new RegExp(`/app/orgs/${slug}/onboarding`),
     );
 
-    // Basics
+    // Intentional start (GET must not initialize)
     await expect(
       ownerPage.getByRole("heading", { name: "Business onboarding" }),
     ).toBeVisible();
+    await ownerPage.getByRole("button", { name: "Start onboarding" }).click();
+    await expect(ownerPage).toHaveURL(
+      new RegExp(`/app/orgs/${slug}/onboarding/basics`),
+    );
+
+    // Basics
     await ownerPage
       .getByLabel("Customer-facing display name")
       .fill("Acme Care");
@@ -209,7 +215,7 @@ test.describe("Phase 3A business onboarding", () => {
 
     await memberPage.goto(`/app/orgs/${slug}/onboarding/review`);
     await expect(
-      memberPage.getByText(/cannot view onboarding|Onboarding unavailable/i),
+      memberPage.getByRole("heading", { name: "Onboarding unavailable" }),
     ).toBeVisible();
 
     // Promote member to admin
@@ -230,11 +236,17 @@ test.describe("Phase 3A business onboarding", () => {
       .locator("li")
       .filter({ hasText: memberEmail });
     await rowAfterPromote.getByRole("button", { name: "Offboard" }).click();
+    await expect(
+      ownerPage
+        .locator("li")
+        .filter({ hasText: memberEmail })
+        .getByText(/INACTIVE/i),
+    ).toBeVisible();
 
     await memberPage.goto(`/app/orgs/${slug}/settings`);
-    await expect(memberPage.getByRole("heading", { level: 1 })).not.toHaveText(
-      /Organization settings/i,
-    );
+    await expect(
+      memberPage.getByRole("heading", { name: "Page not found" }),
+    ).toBeVisible();
 
     // Isolation: another org remains separate
     const otherSlug = `e2e-ob-other-${randomUUID().slice(0, 8)}`;
@@ -244,9 +256,17 @@ test.describe("Phase 3A business onboarding", () => {
     await ownerPage
       .getByRole("button", { name: "Create organization" })
       .click();
+    await expect(ownerPage).toHaveURL(new RegExp(`/app/orgs/${otherSlug}`));
     await ownerPage.goto(`/app/orgs/${slug}/settings`);
-    await expect(ownerPage.getByText(/Acme Care Updated/i)).toBeVisible();
+    await expect(
+      ownerPage.getByLabel("Customer-facing display name"),
+    ).toHaveValue("Acme Care Updated");
     await ownerPage.goto(`/app/orgs/${otherSlug}/settings`);
+    await expect(
+      ownerPage.getByText(
+        /Business configuration has not been started/i,
+      ),
+    ).toBeVisible();
     await expect(ownerPage.getByText(/Acme Care Updated/i)).toHaveCount(0);
 
     await ownerContext.close();
