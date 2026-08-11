@@ -17,7 +17,7 @@ Included:
 - Audit events for sensitive organization actions
 - Unit, integration, concurrency, and Playwright coverage
 
-Excluded (later phases): business onboarding, prospects/CRM, calling, Twilio, billing, MFA, social login.
+Excluded (later phases): prospects/CRM, calling, Twilio, billing, MFA, social login. Business onboarding is covered in Phase 3A (`docs/phase-3a-business-onboarding.md`).
 
 ## Architecture
 
@@ -147,6 +147,7 @@ Migrations:
 
 - Phase 1: `20260810000000_phase_01_authentication`, `20260810010000_auth_token_active_unique`
 - Phase 2: `20260810020000_phase_02_organizations`
+- Phase 3A: see `docs/phase-3a-business-onboarding.md`
 
 Apply only to disposable local/CI Postgres or a positively confirmed development Supabase project. Do not use `prisma db push` as a substitute. Do not apply to production from local machines.
 

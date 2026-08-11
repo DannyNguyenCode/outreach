@@ -29,6 +29,8 @@ model User {
   invitationsSent      OrganizationInvitation[]  @relation("InvitationInviter")
   membershipDeactivations Membership[]           @relation("MembershipDeactivator")
   auditEvents          OrganizationAuditEvent[]  @relation("AuditActor")
+  onboardingsCompleted OrganizationOnboarding[]  @relation("OnboardingCompleter")
+  onboardingsReopened  OrganizationOnboarding[]  @relation("OnboardingReopener")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -91,20 +93,82 @@ enum OrganizationAuditAction {
   INVITATION_ACCEPTED
   MEMBER_ROLE_CHANGED
   MEMBER_DEACTIVATED
+  BUSINESS_PROFILE_UPDATED
+  OPERATING_HOURS_UPDATED
+  SERVICE_CREATED
+  SERVICE_UPDATED
+  SERVICE_DEACTIVATED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  PRODUCT_DEACTIVATED
+  ORGANIZATION_SETTINGS_UPDATED
+  ONBOARDING_STARTED
+  ONBOARDING_COMPLETED
+  ONBOARDING_REOPENED
+}
+
+enum BusinessType {
+  SERVICES
+  PRODUCTS
+  BOTH
+}
+
+enum PreferredContactMethod {
+  EMAIL
+  PHONE
+  WEBSITE
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum OnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum OnboardingStep {
+  BUSINESS_BASICS
+  CONTACT_LOCATION
+  OPERATING_HOURS
+  CATALOGUE
+  EMPLOYEE_DEFAULTS
+  REVIEW
+}
+
+/// Generic default for future calling features. Does not grant telephony access.
+enum FutureCallingAccessDefault {
+  DISABLED
+  STANDARD
 }
 
 /// Tenant root for Phase 2 multi-organization support.
 model Organization {
-  id          String                    @id @default(cuid())
-  name        String
+  id                String                    @id @default(cuid())
+  name              String
   /// URL-safe unique slug. Normalized at write time; not silently rewritten on rename.
-  slug        String                    @unique
-  createdAt   DateTime                  @default(now())
-  updatedAt   DateTime                  @updatedAt
-  memberships Membership[]
-  invitations OrganizationInvitation[]
-  auditEvents OrganizationAuditEvent[]
-  activeUsers User[]                    @relation("UserActiveOrganization")
+  slug              String                    @unique
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  memberships       Membership[]
+  invitations       OrganizationInvitation[]
+  auditEvents       OrganizationAuditEvent[]
+  activeUsers       User[]                    @relation("UserActiveOrganization")
+  businessProfile   BusinessProfile?
+  businessLocations BusinessLocation[]
+  operatingHours    OperatingHourInterval[]
+  services          BusinessService[]
+  products          BusinessProduct[]
+  settings          OrganizationSettings?
+  onboarding        OrganizationOnboarding?
 
   @@index([createdAt])
 }
@@ -153,7 +217,7 @@ model OrganizationInvitation {
   /// Partial unique index created in Phase 2 migration (one usable invite per org+email).
 }
 
-/// Focused audit trail for sensitive Phase 2 organization actions.
+/// Focused audit trail for sensitive Phase 2+ organization actions.
 model OrganizationAuditEvent {
   id             String                   @id @default(cuid())
   organizationId String
@@ -167,4 +231,151 @@ model OrganizationAuditEvent {
 
   @@index([organizationId, createdAt])
   @@index([actorUserId, createdAt])
+}
+
+/// Singular business identity and contact configuration for an organization.
+/// System organization name/slug remain on Organization; displayName is customer-facing.
+model BusinessProfile {
+  id                     String                  @id @default(cuid())
+  organizationId         String                  @unique
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  legalName              String?
+  displayName            String?
+  description            String?
+  industry               String?
+  websiteUrl             String?
+  primaryEmail           String?
+  /// E.164 when a valid country context exists; otherwise a normalized digit form.
+  primaryPhoneE164       String?
+  preferredContactMethod PreferredContactMethod?
+  /// IANA time zone identifier (e.g. America/Toronto). Never a raw UTC offset.
+  timeZone               String?
+  businessType           BusinessType?
+  /// Optional remote logo URL only — no file upload in Phase 3A.
+  logoUrl                String?
+  /// Optimistic concurrency token for profile updates.
+  version                Int                     @default(0)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+}
+
+/// Organization-owned location. Phase 3A manages one primary location;
+/// additional non-primary rows may be added later without schema redesign.
+model BusinessLocation {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  label          String       @default("Primary")
+  isPrimary      Boolean      @default(true)
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  region         String?
+  postalCode     String?
+  /// ISO 3166-1 alpha-2 country code.
+  countryCode    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  /// Partial unique index in migration: one primary location per organization.
+}
+
+/// Normalized weekly operating-hour intervals.
+/// Times are minutes from local midnight; start inclusive, end exclusive.
+/// Overnight intervals (end <= start) are rejected. Closed days use isClosed=true
+/// with null start/end and sortOrder 0.
+model OperatingHourInterval {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  dayOfWeek      DayOfWeek
+  isClosed       Boolean      @default(false)
+  startMinute    Int?
+  endMinute      Int?
+  sortOrder      Int          @default(0)
+  customerNote   String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, dayOfWeek, sortOrder])
+  @@index([organizationId, dayOfWeek])
+}
+
+/// Organization service catalogue entry. Duplicate names are allowed within a tenant.
+/// Prefer isActive=false over destructive deletion.
+model BusinessService {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  isActive         Boolean      @default(true)
+  displayOrder     Int          @default(0)
+  priceDescription String?
+  durationMinutes  Int?
+  category         String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([organizationId, displayOrder])
+  @@index([organizationId, isActive, displayOrder])
+}
+
+/// Minimal product catalogue for later conversation context.
+/// SKU uniqueness is organization-scoped when sku is non-null (partial unique index).
+model BusinessProduct {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  isActive         Boolean      @default(true)
+  displayOrder     Int          @default(0)
+  sku              String?
+  priceDescription String?
+  category         String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([organizationId, displayOrder])
+  @@index([organizationId, isActive, displayOrder])
+}
+
+/// Explicit typed employee-access defaults. Cannot grant MEMBER owner/admin powers.
+model OrganizationSettings {
+  id                         String                      @id @default(cuid())
+  organizationId             String                      @unique
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membersCanViewServices     Boolean                     @default(true)
+  membersCanViewProducts     Boolean                     @default(true)
+  membersCanViewBusinessInfo Boolean                     @default(true)
+  futureCallingAccessDefault FutureCallingAccessDefault  @default(DISABLED)
+  version                    Int                         @default(0)
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+}
+
+/// Authoritative onboarding progress. URL/localStorage are never the source of truth.
+model OrganizationOnboarding {
+  id                    String          @id @default(cuid())
+  organizationId        String          @unique
+  organization          Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status                OnboardingStatus @default(NOT_STARTED)
+  currentStep           OnboardingStep  @default(BUSINESS_BASICS)
+  /// JSON string array of completed OnboardingStep values (validated in application code).
+  completedSteps        Json            @default("[]")
+  /// Server-computed readiness for later Phase 3B prerequisites.
+  isConfigurationReady  Boolean         @default(false)
+  completedAt           DateTime?
+  completedByUserId     String?
+  completedBy           User?           @relation("OnboardingCompleter", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  reopenedAt            DateTime?
+  reopenedByUserId      String?
+  reopenedBy            User?           @relation("OnboardingReopener", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
+  version               Int             @default(0)
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([status])
 }

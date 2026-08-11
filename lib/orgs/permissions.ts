@@ -1,8 +1,11 @@
 import type { OrganizationRole } from "@prisma/client";
 
 /**
- * Centralized Phase 2 organization permission policy.
+ * Centralized organization permission policy (Phase 2 + Phase 3A).
  * UI visibility is not authorization — every mutation must call these helpers.
+ *
+ * Phase 3A employee-default settings may further restrict MEMBER reads for
+ * business info / catalogues. Settings never grant manage permissions.
  */
 
 export type OrganizationPermission =
@@ -15,7 +18,20 @@ export type OrganizationPermission =
   | "org.members.promote_admin"
   | "org.members.demote_admin"
   | "org.members.deactivate"
-  | "org.owner.manage";
+  | "org.owner.manage"
+  | "org.business.read"
+  | "org.business.update"
+  | "org.hours.read"
+  | "org.hours.update"
+  | "org.services.read"
+  | "org.services.manage"
+  | "org.products.read"
+  | "org.products.manage"
+  | "org.onboarding.view"
+  | "org.onboarding.manage"
+  | "org.onboarding.complete"
+  | "org.onboarding.reopen"
+  | "org.settings.manage";
 
 const ROLE_PERMISSIONS: Record<
   OrganizationRole,
@@ -32,6 +48,19 @@ const ROLE_PERMISSIONS: Record<
     "org.members.demote_admin",
     "org.members.deactivate",
     "org.owner.manage",
+    "org.business.read",
+    "org.business.update",
+    "org.hours.read",
+    "org.hours.update",
+    "org.services.read",
+    "org.services.manage",
+    "org.products.read",
+    "org.products.manage",
+    "org.onboarding.view",
+    "org.onboarding.manage",
+    "org.onboarding.complete",
+    "org.onboarding.reopen",
+    "org.settings.manage",
   ]),
   ADMIN: new Set([
     "org.view",
@@ -43,8 +72,28 @@ const ROLE_PERMISSIONS: Record<
     "org.members.promote_admin",
     // Demoting an admin is conditional — see canChangeMemberRole.
     "org.members.deactivate",
+    "org.business.read",
+    "org.business.update",
+    "org.hours.read",
+    "org.hours.update",
+    "org.services.read",
+    "org.services.manage",
+    "org.products.read",
+    "org.products.manage",
+    "org.onboarding.view",
+    "org.onboarding.manage",
+    "org.onboarding.complete",
+    "org.onboarding.reopen",
+    "org.settings.manage",
   ]),
-  MEMBER: new Set(["org.view", "org.members.view"]),
+  MEMBER: new Set([
+    "org.view",
+    "org.members.view",
+    "org.business.read",
+    "org.hours.read",
+    "org.services.read",
+    "org.products.read",
+  ]),
 };
 
 export function roleHasPermission(
