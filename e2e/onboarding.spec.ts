@@ -263,9 +263,7 @@ test.describe("Phase 3A business onboarding", () => {
     ).toHaveValue("Acme Care Updated");
     await ownerPage.goto(`/app/orgs/${otherSlug}/settings`);
     await expect(
-      ownerPage.getByText(
-        /Business configuration has not been started/i,
-      ),
+      ownerPage.getByText(/Business configuration has not been started/i),
     ).toBeVisible();
     await expect(ownerPage.getByText(/Acme Care Updated/i)).toHaveCount(0);
 
