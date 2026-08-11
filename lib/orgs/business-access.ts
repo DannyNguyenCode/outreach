@@ -51,6 +51,17 @@ export type ReadinessMutationTestHooks = {
   testBeforeMembershipLock?: () => Promise<void>;
   /** Invoked after the actor membership row lock is held. */
   testAfterMembershipLock?: () => Promise<void>;
+  /**
+   * Invoked after the configuration write (and audit) inside the transaction
+   * but before the optional onboarding progress transition. Production must omit.
+   */
+  testAfterConfigWriteBeforeProgress?: () => Promise<void>;
+  /**
+   * Invoked after the mutation transaction commits successfully and before the
+   * service returns its success payload. Must not perform auth-dependent reads
+   * of the response; used only to prove demotion/deactivation after commit.
+   */
+  testAfterTransactionCommit?: () => Promise<void>;
 };
 
 /** Test seams for membership role/status mutations (demotion / offboarding). */

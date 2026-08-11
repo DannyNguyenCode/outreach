@@ -187,6 +187,10 @@ export async function updateOrganizationSettings(
         },
       });
 
+      if (hooks.testAfterConfigWriteBeforeProgress) {
+        await hooks.testAfterConfigWriteBeforeProgress();
+      }
+
       if (input.progress && progressVersion !== undefined) {
         await advanceOnboardingStepInTx(tx, {
           organizationId: input.organizationId,
@@ -198,6 +202,10 @@ export async function updateOrganizationSettings(
 
       return updated;
     });
+
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
 
     return { ok: true, settings };
   } catch (error) {

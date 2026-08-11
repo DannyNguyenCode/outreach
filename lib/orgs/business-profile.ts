@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { BusinessLocation, BusinessProfile } from "@prisma/client";
+import type { BusinessLocation, BusinessProfile, Prisma } from "@prisma/client";
 
 import type { SafeUser } from "@/lib/auth/users";
 import { recordOrganizationAuditEvent } from "@/lib/orgs/audit";
@@ -26,6 +26,32 @@ import {
 } from "@/lib/orgs/business-validation";
 import { advanceOnboardingStepInTx } from "@/lib/orgs/onboarding";
 import { prisma } from "@/lib/prisma";
+
+/**
+ * Load configuration for a mutation response inside an open transaction.
+ * Does not re-authorize — caller must already hold membership authorization.
+ */
+async function loadBusinessConfigurationInTx(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+): Promise<BusinessConfiguration> {
+  const organization = await tx.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { name: true, slug: true },
+  });
+  const profile = await tx.businessProfile.findUniqueOrThrow({
+    where: { organizationId },
+  });
+  const location = await tx.businessLocation.findFirstOrThrow({
+    where: { organizationId, isPrimary: true },
+  });
+  return {
+    profile,
+    location,
+    organizationName: organization.name,
+    organizationSlug: organization.slug,
+  };
+}
 
 export type BusinessConfiguration = {
   profile: BusinessProfile;
@@ -173,7 +199,7 @@ export async function updateBusinessBasics(
       permission: "org.business.update",
     });
 
-    await prisma.$transaction(async (tx) => {
+    const data = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(
         tx,
@@ -220,6 +246,10 @@ export async function updateBusinessBasics(
         metadata: { section: "basics", businessType: parsed.data.businessType },
       });
 
+      if (hooks.testAfterConfigWriteBeforeProgress) {
+        await hooks.testAfterConfigWriteBeforeProgress();
+      }
+
       if (progressParsed.progress) {
         await advanceOnboardingStepInTx(tx, {
           organizationId: input.organizationId,
@@ -230,9 +260,14 @@ export async function updateBusinessBasics(
       }
 
       await refreshConfigurationReadiness(tx, input.organizationId);
+      return loadBusinessConfigurationInTx(tx, input.organizationId);
     });
 
-    return getBusinessConfiguration(input);
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+
+    return { ok: true, data };
   } catch (error) {
     if (error instanceof ConflictError) {
       return {
@@ -300,7 +335,7 @@ export async function updateContactAndLocation(
       permission: "org.business.update",
     });
 
-    await prisma.$transaction(async (tx) => {
+    const data = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(
         tx,
@@ -360,6 +395,10 @@ export async function updateContactAndLocation(
         },
       });
 
+      if (hooks.testAfterConfigWriteBeforeProgress) {
+        await hooks.testAfterConfigWriteBeforeProgress();
+      }
+
       if (progressParsed.progress) {
         await advanceOnboardingStepInTx(tx, {
           organizationId: input.organizationId,
@@ -370,9 +409,14 @@ export async function updateContactAndLocation(
       }
 
       await refreshConfigurationReadiness(tx, input.organizationId);
+      return loadBusinessConfigurationInTx(tx, input.organizationId);
     });
 
-    return getBusinessConfiguration(input);
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+
+    return { ok: true, data };
   } catch (error) {
     if (error instanceof ConflictError) {
       return {

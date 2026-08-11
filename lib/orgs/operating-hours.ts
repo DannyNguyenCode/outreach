@@ -229,6 +229,10 @@ export async function replaceOperatingHours(
         metadata: { intervalCount: normalized.length },
       });
 
+      if (hooks.testAfterConfigWriteBeforeProgress) {
+        await hooks.testAfterConfigWriteBeforeProgress();
+      }
+
       if (input.progress && progressVersion !== undefined) {
         await advanceOnboardingStepInTx(tx, {
           organizationId: input.organizationId,
@@ -245,6 +249,10 @@ export async function replaceOperatingHours(
         orderBy: [{ dayOfWeek: "asc" }, { sortOrder: "asc" }],
       });
     });
+
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
 
     return {
       ok: true,

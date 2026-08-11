@@ -136,50 +136,61 @@ export async function startOrganizationOnboarding(
       const existing = await tx.organizationOnboarding.findUnique({
         where: { organizationId: input.organizationId },
       });
-      if (existing) {
-        return { row: existing, created: false as const };
-      }
-
-      try {
-        const created = await tx.organizationOnboarding.create({
-          data: {
-            organizationId: input.organizationId,
-            status: "NOT_STARTED",
-            currentStep: "BUSINESS_BASICS",
-            completedSteps: [],
-          },
-        });
-
-        await recordOrganizationAuditEvent(tx, {
-          organizationId: input.organizationId,
-          actorUserId: input.actor.id,
-          action: "ONBOARDING_STARTED",
-        });
-
-        return { row: created, created: true as const };
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          (error as { code?: string }).code === "P2002"
-        ) {
-          const raced = await tx.organizationOnboarding.findUnique({
-            where: { organizationId: input.organizationId },
+      let row = existing;
+      if (!row) {
+        try {
+          row = await tx.organizationOnboarding.create({
+            data: {
+              organizationId: input.organizationId,
+              status: "NOT_STARTED",
+              currentStep: "BUSINESS_BASICS",
+              completedSteps: [],
+            },
           });
-          if (raced) return { row: raced, created: false as const };
+
+          await recordOrganizationAuditEvent(tx, {
+            organizationId: input.organizationId,
+            actorUserId: input.actor.id,
+            action: "ONBOARDING_STARTED",
+          });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as { code?: string }).code === "P2002"
+          ) {
+            const raced = await tx.organizationOnboarding.findUnique({
+              where: { organizationId: input.organizationId },
+            });
+            if (raced) {
+              row = raced;
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
         }
-        throw error;
       }
+
+      if (!row) {
+        throw new OrganizationAuthError("organization_not_found");
+      }
+
+      const readiness = await computeConfigurationReadiness(
+        tx,
+        input.organizationId,
+      );
+      return toView(row, readiness);
     });
 
-    const readiness = await computeConfigurationReadiness(
-      prisma,
-      input.organizationId,
-    );
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
 
     return {
       ok: true,
-      onboarding: toView(onboarding.row, readiness),
+      onboarding,
     };
   } catch (error) {
     return (
@@ -304,19 +315,24 @@ export async function advanceOnboardingStep(
         hooks,
       );
 
-      return advanceOnboardingStepInTx(tx, {
+      const row = await advanceOnboardingStepInTx(tx, {
         organizationId: input.organizationId,
         step: input.step,
         nextStep: input.nextStep,
         expectedVersion: versionParsed.version,
       });
+      const readiness = await computeConfigurationReadiness(
+        tx,
+        input.organizationId,
+      );
+      return toView(row, readiness);
     });
 
-    const readiness = await computeConfigurationReadiness(
-      prisma,
-      input.organizationId,
-    );
-    return { ok: true, onboarding: toView(onboarding, readiness) };
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+
+    return { ok: true, onboarding };
   } catch (error) {
     if (error instanceof ConflictError) {
       return {
@@ -445,6 +461,10 @@ export async function completeOrganizationOnboarding(
       };
     }
 
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+
     return {
       ok: true,
       onboarding: toView(result.onboarding, result.readiness),
@@ -492,7 +512,7 @@ export async function reopenOrganizationOnboarding(
       permission: "org.onboarding.reopen",
     });
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const onboarding = await prisma.$transaction(async (tx) => {
       await acquireOrganizationReadinessLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(
         tx,
@@ -540,14 +560,18 @@ export async function reopenOrganizationOnboarding(
         action: "ONBOARDING_REOPENED",
       });
 
-      return next;
+      const readiness = await computeConfigurationReadiness(
+        tx,
+        input.organizationId,
+      );
+      return toView(next, readiness);
     });
 
-    const readiness = await computeConfigurationReadiness(
-      prisma,
-      input.organizationId,
-    );
-    return { ok: true, onboarding: toView(updated, readiness) };
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+
+    return { ok: true, onboarding };
   } catch (error) {
     if (error instanceof ConflictError) {
       return {
