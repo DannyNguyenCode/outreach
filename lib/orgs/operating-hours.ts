@@ -4,7 +4,10 @@ import type { DayOfWeek, OperatingHourInterval } from "@prisma/client";
 
 import type { SafeUser } from "@/lib/auth/users";
 import { recordOrganizationAuditEvent } from "@/lib/orgs/audit";
-import { requireOrganizationPermission } from "@/lib/orgs/authorization";
+import {
+  OrganizationAuthError,
+  requireOrganizationPermission,
+} from "@/lib/orgs/authorization";
 import {
   acquireOrganizationReadinessLock,
   ConflictError,
@@ -205,6 +208,13 @@ export async function replaceOperatingHours(
       );
 
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`hours:${input.organizationId}`}))`;
+
+      const profile = await tx.businessProfile.findUnique({
+        where: { organizationId: input.organizationId },
+      });
+      if (!profile) {
+        throw new OrganizationAuthError("organization_not_found");
+      }
 
       await tx.operatingHourInterval.deleteMany({
         where: { organizationId: input.organizationId },

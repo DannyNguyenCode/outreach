@@ -133,6 +133,11 @@ describe("Phase 3A business concurrency", () => {
     });
     if (!org.ok) return;
 
+    await startOrganizationOnboarding({
+      actor: owner,
+      organizationId: org.organization.id,
+    });
+
     const weekA = defaultWeek();
     const weekB = defaultWeek().map((day) =>
       day.isClosed ? day : { ...day, startTime: "10:00", endTime: "18:00" },

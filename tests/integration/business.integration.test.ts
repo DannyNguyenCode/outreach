@@ -212,6 +212,11 @@ describe("Phase 3A business onboarding integration", () => {
     });
     if (!org.ok) return;
 
+    await startOrganizationOnboarding({
+      actor: owner,
+      organizationId: org.organization.id,
+    });
+
     const ok = await replaceOperatingHours({
       actor: owner,
       organizationId: org.organization.id,

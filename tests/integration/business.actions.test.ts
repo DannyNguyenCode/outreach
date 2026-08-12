@@ -35,10 +35,14 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
 import {
+  createServiceAction,
+  deactivateServiceAction,
   replaceOperatingHoursAction,
+  reorderServicesAction,
   updateBusinessBasicsAction,
   updateContactLocationAction,
   updateEmployeeDefaultsAction,
+  updateServiceAction,
 } from "@/app/actions/business";
 import type { ActionState } from "@/app/actions/auth-state";
 import { hashPassword } from "@/lib/auth/password";
@@ -52,8 +56,6 @@ import { resetApplicationData } from "@/tests/integration/reset";
 /**
  * Server-action boundary tests for Phase 3A.
  * Mocks only auth/session and Next.js framework boundaries; mutation services hit real PostgreSQL.
- *
- * Service/product catalogue actions omit expectedVersion parsing — not covered here.
  */
 
 const mockMailer: EmailSender = {
@@ -201,37 +203,204 @@ async function startOnboarding(actor: SafeUser, organizationId: string) {
   if (!result.ok) throw new Error(`start onboarding failed: ${result.reason}`);
 }
 
-type AuditCounts = {
-  BUSINESS_PROFILE_UPDATED: number;
-  OPERATING_HOURS_UPDATED: number;
-  ORGANIZATION_SETTINGS_UPDATED: number;
-  ONBOARDING_STARTED: number;
-  total: number;
+function toIso(value: Date | null | undefined): string | null {
+  return value ? value.toISOString() : null;
+}
+
+type AuditProjection = {
+  id: string;
+  action: string;
+  actorUserId: string | null;
+  metadata: unknown;
+};
+
+type HourIntervalSnapshot = {
+  id: string;
+  organizationId: string;
+  dayOfWeek: string;
+  isClosed: boolean;
+  startMinute: number | null;
+  endMinute: number | null;
+  sortOrder: number;
+  customerNote: string | null;
+};
+
+type ProfileSnapshot = {
+  id: string;
+  organizationId: string;
+  legalName: string | null;
+  displayName: string | null;
+  description: string | null;
+  industry: string | null;
+  websiteUrl: string | null;
+  primaryEmail: string | null;
+  primaryPhoneE164: string | null;
+  preferredContactMethod: string | null;
+  timeZone: string | null;
+  businessType: string | null;
+  logoUrl: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PrimaryLocationSnapshot = {
+  id: string;
+  organizationId: string;
+  label: string;
+  isPrimary: boolean;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  countryCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type SettingsSnapshot = {
+  id: string;
+  organizationId: string;
+  membersCanViewServices: boolean;
+  membersCanViewProducts: boolean;
+  membersCanViewBusinessInfo: boolean;
+  futureCallingAccessDefault: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type OnboardingSnapshot = {
+  id: string;
+  organizationId: string;
+  status: string;
+  currentStep: string;
+  completedSteps: unknown;
+  isConfigurationReady: boolean;
+  version: number;
+  completedAt: string | null;
+  completedByUserId: string | null;
+  reopenedAt: string | null;
+  reopenedByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type CatalogueServiceSnapshot = {
+  id: string;
+  name: string;
+  isActive: boolean;
+  displayOrder: number;
+  organizationId: string;
+};
+
+type CatalogueProductSnapshot = {
+  id: string;
+  name: string;
+  sku: string | null;
+  isActive: boolean;
+  displayOrder: number;
+  organizationId: string;
 };
 
 type DbSnapshot = {
-  profile: {
-    version: number;
-    displayName: string | null;
-    industry: string | null;
-    primaryEmail: string | null;
-  } | null;
-  settings: {
-    version: number;
-    membersCanViewServices: boolean;
-    membersCanViewProducts: boolean;
-    membersCanViewBusinessInfo: boolean;
-    futureCallingAccessDefault: string;
-  } | null;
-  onboarding: {
-    version: number;
-    currentStep: string;
-    status: string;
-    completedSteps: unknown;
-  } | null;
-  hoursCount: number;
-  audits: AuditCounts;
+  organizationId: string;
+  profile: ProfileSnapshot | null;
+  primaryLocation: PrimaryLocationSnapshot | null;
+  settings: SettingsSnapshot | null;
+  hours: HourIntervalSnapshot[];
+  onboarding: OnboardingSnapshot | null;
+  audits: AuditProjection[];
+  services: CatalogueServiceSnapshot[];
+  products: CatalogueProductSnapshot[];
 };
+
+function mapProfile(
+  profile: Awaited<ReturnType<PrismaClient["businessProfile"]["findUnique"]>>,
+): ProfileSnapshot | null {
+  if (!profile) return null;
+  return {
+    id: profile.id,
+    organizationId: profile.organizationId,
+    legalName: profile.legalName,
+    displayName: profile.displayName,
+    description: profile.description,
+    industry: profile.industry,
+    websiteUrl: profile.websiteUrl,
+    primaryEmail: profile.primaryEmail,
+    primaryPhoneE164: profile.primaryPhoneE164,
+    preferredContactMethod: profile.preferredContactMethod,
+    timeZone: profile.timeZone,
+    businessType: profile.businessType,
+    logoUrl: profile.logoUrl,
+    version: profile.version,
+    createdAt: profile.createdAt.toISOString(),
+    updatedAt: profile.updatedAt.toISOString(),
+  };
+}
+
+function mapPrimaryLocation(
+  location: Awaited<ReturnType<PrismaClient["businessLocation"]["findFirst"]>>,
+): PrimaryLocationSnapshot | null {
+  if (!location) return null;
+  return {
+    id: location.id,
+    organizationId: location.organizationId,
+    label: location.label,
+    isPrimary: location.isPrimary,
+    addressLine1: location.addressLine1,
+    addressLine2: location.addressLine2,
+    city: location.city,
+    region: location.region,
+    postalCode: location.postalCode,
+    countryCode: location.countryCode,
+    createdAt: location.createdAt.toISOString(),
+    updatedAt: location.updatedAt.toISOString(),
+  };
+}
+
+function mapSettings(
+  settings: Awaited<
+    ReturnType<PrismaClient["organizationSettings"]["findUnique"]>
+  >,
+): SettingsSnapshot | null {
+  if (!settings) return null;
+  return {
+    id: settings.id,
+    organizationId: settings.organizationId,
+    membersCanViewServices: settings.membersCanViewServices,
+    membersCanViewProducts: settings.membersCanViewProducts,
+    membersCanViewBusinessInfo: settings.membersCanViewBusinessInfo,
+    futureCallingAccessDefault: settings.futureCallingAccessDefault,
+    version: settings.version,
+    createdAt: settings.createdAt.toISOString(),
+    updatedAt: settings.updatedAt.toISOString(),
+  };
+}
+
+function mapOnboarding(
+  onboarding: Awaited<
+    ReturnType<PrismaClient["organizationOnboarding"]["findUnique"]>
+  >,
+): OnboardingSnapshot | null {
+  if (!onboarding) return null;
+  return {
+    id: onboarding.id,
+    organizationId: onboarding.organizationId,
+    status: onboarding.status,
+    currentStep: onboarding.currentStep,
+    completedSteps: onboarding.completedSteps,
+    isConfigurationReady: onboarding.isConfigurationReady,
+    version: onboarding.version,
+    completedAt: toIso(onboarding.completedAt),
+    completedByUserId: onboarding.completedByUserId,
+    reopenedAt: toIso(onboarding.reopenedAt),
+    reopenedByUserId: onboarding.reopenedByUserId,
+    createdAt: onboarding.createdAt.toISOString(),
+    updatedAt: onboarding.updatedAt.toISOString(),
+  };
+}
 
 async function captureSnapshot(
   prisma: PrismaClient,
@@ -239,76 +408,111 @@ async function captureSnapshot(
 ): Promise<DbSnapshot> {
   const [
     profile,
+    primaryLocation,
     settings,
+    hours,
     onboarding,
-    hoursCount,
-    profileAudits,
-    hoursAudits,
-    settingsAudits,
-    startedAudits,
-    totalAudits,
+    audits,
+    services,
+    products,
   ] = await Promise.all([
-    prisma.businessProfile.findUnique({
+    prisma.businessProfile.findUnique({ where: { organizationId } }),
+    prisma.businessLocation.findFirst({
+      where: { organizationId, isPrimary: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.organizationSettings.findUnique({ where: { organizationId } }),
+    prisma.operatingHourInterval.findMany({
       where: { organizationId },
+      orderBy: [{ dayOfWeek: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+    }),
+    prisma.organizationOnboarding.findUnique({ where: { organizationId } }),
+    prisma.organizationAuditEvent.findMany({
+      where: { organizationId },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: {
-        version: true,
-        displayName: true,
-        industry: true,
-        primaryEmail: true,
+        id: true,
+        action: true,
+        actorUserId: true,
+        metadata: true,
       },
     }),
-    prisma.organizationSettings.findUnique({
+    prisma.businessService.findMany({
       where: { organizationId },
+      orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
       select: {
-        version: true,
-        membersCanViewServices: true,
-        membersCanViewProducts: true,
-        membersCanViewBusinessInfo: true,
-        futureCallingAccessDefault: true,
+        id: true,
+        name: true,
+        isActive: true,
+        displayOrder: true,
+        organizationId: true,
       },
     }),
-    prisma.organizationOnboarding.findUnique({
+    prisma.businessProduct.findMany({
       where: { organizationId },
+      orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
       select: {
-        version: true,
-        currentStep: true,
-        status: true,
-        completedSteps: true,
+        id: true,
+        name: true,
+        sku: true,
+        isActive: true,
+        displayOrder: true,
+        organizationId: true,
       },
     }),
-    prisma.operatingHourInterval.count({ where: { organizationId } }),
-    prisma.organizationAuditEvent.count({
-      where: { organizationId, action: "BUSINESS_PROFILE_UPDATED" },
-    }),
-    prisma.organizationAuditEvent.count({
-      where: { organizationId, action: "OPERATING_HOURS_UPDATED" },
-    }),
-    prisma.organizationAuditEvent.count({
-      where: { organizationId, action: "ORGANIZATION_SETTINGS_UPDATED" },
-    }),
-    prisma.organizationAuditEvent.count({
-      where: { organizationId, action: "ONBOARDING_STARTED" },
-    }),
-    prisma.organizationAuditEvent.count({ where: { organizationId } }),
   ]);
 
   return {
-    profile,
-    settings,
-    onboarding,
-    hoursCount,
-    audits: {
-      BUSINESS_PROFILE_UPDATED: profileAudits,
-      OPERATING_HOURS_UPDATED: hoursAudits,
-      ORGANIZATION_SETTINGS_UPDATED: settingsAudits,
-      ONBOARDING_STARTED: startedAudits,
-      total: totalAudits,
-    },
+    organizationId,
+    profile: mapProfile(profile),
+    primaryLocation: mapPrimaryLocation(primaryLocation),
+    settings: mapSettings(settings),
+    hours: hours.map((interval) => ({
+      id: interval.id,
+      organizationId: interval.organizationId,
+      dayOfWeek: interval.dayOfWeek,
+      isClosed: interval.isClosed,
+      startMinute: interval.startMinute,
+      endMinute: interval.endMinute,
+      sortOrder: interval.sortOrder,
+      customerNote: interval.customerNote,
+    })),
+    onboarding: mapOnboarding(onboarding),
+    audits,
+    services,
+    products,
   };
+}
+
+function countAudit(snapshot: DbSnapshot, action: string): number {
+  return snapshot.audits.filter((event) => event.action === action).length;
 }
 
 function expectZeroWrites(before: DbSnapshot, after: DbSnapshot) {
   expect(after).toEqual(before);
+}
+
+async function assertPreStartRecordsAbsent(
+  prisma: PrismaClient,
+  organizationId: string,
+) {
+  await Promise.all([
+    expect(
+      prisma.businessProfile.count({ where: { organizationId } }),
+    ).resolves.toBe(0),
+    expect(
+      prisma.businessLocation.count({ where: { organizationId } }),
+    ).resolves.toBe(0),
+    expect(
+      prisma.organizationSettings.count({ where: { organizationId } }),
+    ).resolves.toBe(0),
+    expect(
+      prisma.operatingHourInterval.count({ where: { organizationId } }),
+    ).resolves.toBe(0),
+    expect(
+      prisma.organizationOnboarding.count({ where: { organizationId } }),
+    ).resolves.toBe(0),
+  ]);
 }
 
 function applyVersionFields(
@@ -602,8 +806,8 @@ describe("Phase 3A business server actions", () => {
         expect(after.onboarding!.version).toBe(before.onboarding!.version + 1);
         expect(after.profile!.displayName).toBe("Action Test Co");
         expect(after.onboarding!.currentStep).toBe("CONTACT_LOCATION");
-        expect(after.audits.BUSINESS_PROFILE_UPDATED).toBe(
-          before.audits.BUSINESS_PROFILE_UPDATED + 1,
+        expect(countAudit(after, "BUSINESS_PROFILE_UPDATED")).toBe(
+          countAudit(before, "BUSINESS_PROFILE_UPDATED") + 1,
         );
       });
     });
@@ -691,6 +895,30 @@ describe("Phase 3A business server actions", () => {
           });
         },
       );
+
+      it("rejects completely omitted onboardingExpectedVersion with zero writes", async () => {
+        const { organizationId, slug, profile } = await seedContactContext(
+          "act-contact-omit-onboarding",
+        );
+        const formData = new FormData();
+        formData.set("organizationSlug", slug);
+        formData.set("markStep", "CONTACT_LOCATION");
+        formData.set("expectedVersion", String(profile.version));
+        formData.set("primaryEmail", "contact@example.com");
+        formData.set("primaryPhone", "4165551234");
+        formData.set("timeZone", "America/Toronto");
+        formData.set("countryCode", "CA");
+        formData.set("city", "Toronto");
+
+        const result = await expectVersionValidationFailure({
+          prisma,
+          organizationId,
+          run: () => updateContactLocationAction(initialActionState, formData),
+        });
+        expect(
+          result.fieldErrors?.onboardingExpectedVersion?.length,
+        ).toBeGreaterThan(0);
+      });
 
       it("rejects stale expectedVersion with zero writes", async () => {
         const { organizationId, slug, profile, onboarding } =
@@ -846,11 +1074,11 @@ describe("Phase 3A business server actions", () => {
 
         expect(result.status).toBe("success");
         const after = await captureSnapshot(prisma, organizationId);
-        expect(after.hoursCount).toBe(7);
+        expect(after.hours).toHaveLength(7);
         expect(after.onboarding!.version).toBe(before.onboarding!.version + 1);
         expect(after.onboarding!.currentStep).toBe("CATALOGUE");
-        expect(after.audits.OPERATING_HOURS_UPDATED).toBe(
-          before.audits.OPERATING_HOURS_UPDATED + 1,
+        expect(countAudit(after, "OPERATING_HOURS_UPDATED")).toBe(
+          countAudit(before, "OPERATING_HOURS_UPDATED") + 1,
         );
       });
     });
@@ -938,8 +1166,31 @@ describe("Phase 3A business server actions", () => {
         },
       );
 
+      it("rejects completely omitted onboardingExpectedVersion with zero writes", async () => {
+        const { organizationId, slug, settings } = await seedDefaultsContext(
+          "act-defaults-omit-onboarding",
+        );
+        const formData = new FormData();
+        formData.set("organizationSlug", slug);
+        formData.set("markStep", "EMPLOYEE_DEFAULTS");
+        formData.set("expectedVersion", String(settings.version));
+        formData.set("membersCanViewServices", "on");
+        formData.set("membersCanViewProducts", "on");
+        formData.set("membersCanViewBusinessInfo", "on");
+        formData.set("futureCallingAccessDefault", "DISABLED");
+
+        const result = await expectVersionValidationFailure({
+          prisma,
+          organizationId,
+          run: () => updateEmployeeDefaultsAction(initialActionState, formData),
+        });
+        expect(
+          result.fieldErrors?.onboardingExpectedVersion?.length,
+        ).toBeGreaterThan(0);
+      });
+
       it("rejects stale expectedVersion with zero writes", async () => {
-        const { organizationId, slug, onboarding, settings } =
+        const { organizationId, slug, settings, onboarding } =
           await seedDefaultsContext("act-defaults-stale-primary");
         const result = await expectVersionValidationFailure({
           prisma,
@@ -996,8 +1247,8 @@ describe("Phase 3A business server actions", () => {
         expect(after.onboarding!.version).toBe(before.onboarding!.version + 1);
         expect(after.settings!.membersCanViewServices).toBe(true);
         expect(after.onboarding!.currentStep).toBe("REVIEW");
-        expect(after.audits.ORGANIZATION_SETTINGS_UPDATED).toBe(
-          before.audits.ORGANIZATION_SETTINGS_UPDATED + 1,
+        expect(countAudit(after, "ORGANIZATION_SETTINGS_UPDATED")).toBe(
+          countAudit(before, "ORGANIZATION_SETTINGS_UPDATED") + 1,
         );
       });
     });
@@ -1204,34 +1455,334 @@ describe("Phase 3A business server actions", () => {
     });
   });
 
-  describe("pre-start organization (updateBusinessBasicsAction)", () => {
-    it("does not initialize onboarding or business config with forged versions", async () => {
+  describe("snapshot sensitivity", () => {
+    it("mutating primary location city changes snapshot", async () => {
+      const { organizationId } = await (async () => {
+        const { owner, organizationId, slug } = await createOrgWithOwner(
+          prisma,
+          "act-snap-loc",
+          "Snapshot Location Org",
+        );
+        await startOnboarding(owner, organizationId);
+        setActor(owner);
+        const profile = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId },
+        });
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId },
+          });
+        await updateContactLocationAction(
+          initialActionState,
+          buildContactFormData({
+            organizationSlug: slug,
+            expectedVersion: String(profile.version),
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        );
+        return { organizationId };
+      })();
+
+      const before = await captureSnapshot(prisma, organizationId);
+      await prisma.businessLocation.updateMany({
+        where: { organizationId, isPrimary: true },
+        data: { city: "Vancouver" },
+      });
+      const after = await captureSnapshot(prisma, organizationId);
+
+      expect(after).not.toEqual(before);
+      expect(after.primaryLocation?.city).toBe("Vancouver");
+    });
+
+    it("replacing hours with same count but different times changes snapshot", async () => {
+      const { organizationId, slug, onboarding } = await (async () => {
+        const { owner, organizationId, slug } = await createOrgWithOwner(
+          prisma,
+          "act-snap-hours",
+          "Snapshot Hours Org",
+        );
+        await startOnboarding(owner, organizationId);
+        setActor(owner);
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId },
+          });
+        await replaceOperatingHoursAction(
+          initialActionState,
+          buildHoursFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        );
+        const refreshedOnboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId },
+          });
+        return { organizationId, slug, onboarding: refreshedOnboarding };
+      })();
+
+      const before = await captureSnapshot(prisma, organizationId);
+      const shiftedWeek = defaultWeek().map((day) =>
+        day.isClosed ? day : { ...day, startTime: "10:00", endTime: "18:00" },
+      );
+
+      const formData = buildHoursFormData({
+        organizationSlug: slug,
+        markStep: false,
+      });
+      formData.set("intervalsJson", JSON.stringify(shiftedWeek));
+
+      const result = await replaceOperatingHoursAction(
+        initialActionState,
+        formData,
+      );
+      expect(result.status).toBe("success");
+
+      const after = await captureSnapshot(prisma, organizationId);
+      expect(after.hours).toHaveLength(before.hours.length);
+      expect(after).not.toEqual(before);
+      expect(after.onboarding?.version).toBe(onboarding.version);
+    });
+  });
+
+  describe("pre-start organization (all four combined actions)", () => {
+    const preStartCases: Array<{
+      id: string;
+      action: BusinessActionRunner;
+      build: (slug: string) => FormData;
+    }> = [
+      {
+        id: "basics",
+        action: updateBusinessBasicsAction,
+        build: (slug) =>
+          buildBasicsFormData({
+            organizationSlug: slug,
+            expectedVersion: "0",
+            onboardingExpectedVersion: "0",
+          }),
+      },
+      {
+        id: "contact",
+        action: updateContactLocationAction,
+        build: (slug) =>
+          buildContactFormData({
+            organizationSlug: slug,
+            expectedVersion: "0",
+            onboardingExpectedVersion: "0",
+          }),
+      },
+      {
+        id: "hours",
+        action: replaceOperatingHoursAction,
+        build: (slug) =>
+          buildHoursFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: "0",
+          }),
+      },
+      {
+        id: "defaults",
+        action: updateEmployeeDefaultsAction,
+        build: (slug) =>
+          buildEmployeeDefaultsFormData({
+            organizationSlug: slug,
+            expectedVersion: "0",
+            onboardingExpectedVersion: "0",
+          }),
+      },
+    ];
+
+    describe.each(preStartCases)("$id", ({ id, action, build }) => {
+      it("does not initialize onboarding or business config with forged versions", async () => {
+        const { owner, organizationId, slug } = await createOrgWithOwner(
+          prisma,
+          `act-prestart-${id}`,
+          "Pre Start Org",
+        );
+        setActor(owner);
+        const before = await captureSnapshot(prisma, organizationId);
+        await assertPreStartRecordsAbsent(prisma, organizationId);
+
+        const result = await action(initialActionState, build(slug));
+
+        expect(result.status).toBe("error");
+        expect(result.message).toBe("Organization not found.");
+        const after = await captureSnapshot(prisma, organizationId);
+        expectZeroWrites(before, after);
+        await assertPreStartRecordsAbsent(prisma, organizationId);
+        expect(countAudit(after, "BUSINESS_PROFILE_UPDATED")).toBe(
+          countAudit(before, "BUSINESS_PROFILE_UPDATED"),
+        );
+        expect(countAudit(after, "OPERATING_HOURS_UPDATED")).toBe(
+          countAudit(before, "OPERATING_HOURS_UPDATED"),
+        );
+        expect(countAudit(after, "ORGANIZATION_SETTINGS_UPDATED")).toBe(
+          countAudit(before, "ORGANIZATION_SETTINGS_UPDATED"),
+        );
+        expect(countAudit(after, "ONBOARDING_STARTED")).toBe(
+          countAudit(before, "ONBOARDING_STARTED"),
+        );
+      });
+    });
+  });
+
+  describe("catalogue actions — no action-level expectedVersion", () => {
+    /**
+     * Inventory disposition:
+     * - createServiceAction / updateServiceAction / deactivateServiceAction / reorderServicesAction
+     * - createProductAction / updateProductAction / deactivateProductAction / reorderProductsAction
+     *
+     * They do NOT accept expectedVersion or onboardingExpectedVersion; parsing is N/A.
+     * Entity payload validation runs before mutation. Concurrency uses the shared
+     * organization readiness advisory lock plus membership FOR UPDATE (and reorder
+     * advisory locks). All mutations are tenant-scoped by organizationId. Catalogue
+     * onboarding progress is handled separately via markCatalogueStepAction with
+     * onboardingExpectedVersion — not in these catalogue CRUD actions.
+     */
+
+    async function seedCatalogueOrg(prefix: string) {
       const { owner, organizationId, slug } = await createOrgWithOwner(
         prisma,
-        "act-prestart",
-        "Pre Start Org",
+        prefix,
+        "Catalogue Action Org",
       );
+      await startOnboarding(owner, organizationId);
       setActor(owner);
-      const before = await captureSnapshot(prisma, organizationId);
-      expect(before.profile).toBeNull();
-      expect(before.onboarding).toBeNull();
-      expect(before.settings).toBeNull();
+      return { owner, organizationId, slug };
+    }
 
-      const result = await updateBusinessBasicsAction(
+    it("createServiceAction ignores expectedVersion and onboardingExpectedVersion", async () => {
+      const { organizationId, slug } = await seedCatalogueOrg(
+        "act-cat-create-ignore",
+      );
+      const before = await captureSnapshot(prisma, organizationId);
+
+      const formData = new FormData();
+      formData.set("organizationSlug", slug);
+      formData.set("expectedVersion", "999");
+      formData.set("onboardingExpectedVersion", "999");
+      formData.set("name", "Version Ignored Service");
+
+      const result = await createServiceAction(initialActionState, formData);
+
+      expect(result.status).toBe("success");
+      const after = await captureSnapshot(prisma, organizationId);
+      expect(after.services).toHaveLength(before.services.length + 1);
+      expect(
+        after.services.some((s) => s.name === "Version Ignored Service"),
+      ).toBe(true);
+    });
+
+    it("createServiceAction rejects empty name with zero catalogue writes", async () => {
+      const { organizationId, slug } = await seedCatalogueOrg(
+        "act-cat-create-empty",
+      );
+      const before = await captureSnapshot(prisma, organizationId);
+
+      const formData = new FormData();
+      formData.set("organizationSlug", slug);
+      formData.set("name", "");
+
+      const result = await createServiceAction(initialActionState, formData);
+
+      expect(result.status).toBe("error");
+      expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+    });
+
+    it("cross-tenant updateServiceAction cannot modify another org service", async () => {
+      const orgA = await seedCatalogueOrg("act-cat-xa");
+      const orgB = await seedCatalogueOrg("act-cat-xb");
+
+      const serviceB = await prisma.businessService.create({
+        data: {
+          organizationId: orgB.organizationId,
+          name: "Org B Service",
+          displayOrder: 0,
+        },
+      });
+
+      setActor(orgA.owner);
+      const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+      const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+
+      const formData = new FormData();
+      formData.set("organizationSlug", orgA.slug);
+      formData.set("serviceId", serviceB.id);
+      formData.set("name", "Cross Tenant Hijack");
+
+      const result = await updateServiceAction(initialActionState, formData);
+
+      expect(result.status).toBe("error");
+      expect(result.message).toBe("Organization not found.");
+      expectZeroWrites(
+        beforeA,
+        await captureSnapshot(prisma, orgA.organizationId),
+      );
+      expectZeroWrites(
+        beforeB,
+        await captureSnapshot(prisma, orgB.organizationId),
+      );
+    });
+
+    it("cross-tenant deactivateServiceAction cannot modify another org service", async () => {
+      const orgA = await seedCatalogueOrg("act-cat-da");
+      const orgB = await seedCatalogueOrg("act-cat-db");
+
+      const serviceB = await prisma.businessService.create({
+        data: {
+          organizationId: orgB.organizationId,
+          name: "Org B Deactivate Target",
+          displayOrder: 0,
+        },
+      });
+
+      setActor(orgA.owner);
+      const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+      const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+
+      const formData = new FormData();
+      formData.set("organizationSlug", orgA.slug);
+      formData.set("serviceId", serviceB.id);
+
+      const result = await deactivateServiceAction(
         initialActionState,
-        buildBasicsFormData({
-          organizationSlug: slug,
-          expectedVersion: "0",
-          onboardingExpectedVersion: "0",
-        }),
+        formData,
       );
 
       expect(result.status).toBe("error");
-      const after = await captureSnapshot(prisma, organizationId);
-      expect(after.profile).toBeNull();
-      expect(after.onboarding).toBeNull();
-      expect(after.settings).toBeNull();
-      expectZeroWrites(before, after);
+      expect(result.message).toBe("Organization not found.");
+      expectZeroWrites(
+        beforeA,
+        await captureSnapshot(prisma, orgA.organizationId),
+      );
+      expectZeroWrites(
+        beforeB,
+        await captureSnapshot(prisma, orgB.organizationId),
+      );
+    });
+
+    it("reorderServicesAction rejects malformed orderedIdsJson with zero writes", async () => {
+      const { organizationId, slug } = await seedCatalogueOrg(
+        "act-cat-reorder-bad",
+      );
+      await prisma.businessService.create({
+        data: {
+          organizationId,
+          name: "Reorder Target",
+          displayOrder: 0,
+        },
+      });
+      const before = await captureSnapshot(prisma, organizationId);
+
+      const formData = new FormData();
+      formData.set("organizationSlug", slug);
+      formData.set("orderedIdsJson", "not-valid-json");
+
+      const result = await reorderServicesAction(initialActionState, formData);
+
+      expect(result.status).toBe("error");
+      expect(result.message).toBe("Invalid reorder payload.");
+      expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
     });
   });
 });

@@ -2489,182 +2489,124 @@ describe("Phase 3A lifecycle, atomic progress, and membership auth races", () =>
     });
   });
 
-  describe("post-commit response races (updateBusinessBasics)", () => {
-    async function seedAdminAtBasics(
-      prefix: string,
-      orgName: string,
-    ): Promise<{
+  describe("post-commit response races (configuration and onboarding lifecycle)", () => {
+    type AdminRaceCtx = {
       owner: SafeUser;
       admin: SafeUser;
       organizationId: string;
       membershipId: string;
-      profileVersion: number;
-      onboardingVersion: number;
-    }> {
+    };
+
+    type MutationHooks = {
+      testAfterTransactionCommit?: () => Promise<void>;
+      testBeforeMembershipLock?: () => Promise<void>;
+    };
+
+    type MutationOutcome = {
+      ok: boolean;
+      reason?: string;
+      onboarding?: {
+        currentStep: string;
+        status: string;
+        version?: number;
+        isConfigurationReady?: boolean;
+      };
+    };
+
+    const AUTH_FAILURE_REASONS = [
+      "forbidden",
+      "inactive_membership",
+      "not_a_member",
+    ] as const;
+
+    function earlyWeek() {
+      return defaultWeek().map((day) =>
+        day.dayOfWeek === "MONDAY"
+          ? { ...day, startTime: "08:00", endTime: "16:00" }
+          : day,
+      );
+    }
+
+    async function seedAdminMembership(
+      prefix: string,
+      orgName: string,
+    ): Promise<AdminRaceCtx> {
       const { owner, organizationId } = await createOrgWithOwner(
         prisma,
         prefix,
         orgName,
       );
       const admin = await addAdmin(prisma, organizationId, `${prefix}-admin`);
-      const { profile, onboarding } = await seedAtBasicsStep(
-        prisma,
-        owner,
-        organizationId,
-      );
       const membership = await prisma.membership.findFirstOrThrow({
         where: { organizationId, userId: admin.id },
       });
-      return {
-        owner,
-        admin,
-        organizationId,
-        membershipId: membership.id,
-        profileVersion: profile.version,
-        onboardingVersion: onboarding.version,
-      };
+      return { owner, admin, organizationId, membershipId: membership.id };
     }
 
-    it("successful mutation then demotion still returns committed data", async () => {
-      const ctx = await seedAdminAtBasics(
-        "lc-post-demote",
-        "Lifecycle Post Commit Demote",
-      );
-
-      const result = await updateBusinessBasics(
-        {
-          actor: ctx.admin,
-          organizationId: ctx.organizationId,
-          expectedVersion: ctx.profileVersion,
-          raw: basicsRaw("Committed Before Demote"),
-          progress: {
-            step: "BUSINESS_BASICS",
-            nextStep: "CONTACT_LOCATION",
-            expectedVersion: ctx.onboardingVersion,
-          },
-        },
-        {
-          testAfterTransactionCommit: async () => {
-            const demote = await changeMemberRole({
-              actor: ctx.owner,
-              organizationId: ctx.organizationId,
-              membershipId: ctx.membershipId,
-              nextRole: "MEMBER",
-            });
-            expect(demote.ok).toBe(true);
-          },
-        },
-      );
-      expect(result.ok).toBe(true);
-
-      const profile = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
-      });
-      expect(profile.displayName).toBe("Committed Before Demote");
-      expect(profile.version).toBe(ctx.profileVersion + 1);
-
-      expect(
-        await prisma.organizationAuditEvent.count({
-          where: {
-            organizationId: ctx.organizationId,
-            action: "BUSINESS_PROFILE_UPDATED",
-          },
-        }),
-      ).toBe(1);
-
+    async function expectDemoted(ctx: AdminRaceCtx) {
       const role = await prisma.membership.findUniqueOrThrow({
         where: { id: ctx.membershipId },
       });
       expect(role.role).toBe("MEMBER");
+    }
 
-      const later = await updateBusinessBasics({
-        actor: ctx.admin,
-        organizationId: ctx.organizationId,
-        expectedVersion: profile.version,
-        raw: basicsRaw("Denied After Demote"),
-      });
-      expect(later.ok).toBe(false);
-    });
-
-    it("successful mutation then deactivation still returns committed data", async () => {
-      const ctx = await seedAdminAtBasics(
-        "lc-post-deact",
-        "Lifecycle Post Commit Deactivate",
-      );
-
-      const result = await updateBusinessBasics(
-        {
-          actor: ctx.admin,
-          organizationId: ctx.organizationId,
-          expectedVersion: ctx.profileVersion,
-          raw: basicsRaw("Committed Before Deactivate"),
-          progress: {
-            step: "BUSINESS_BASICS",
-            nextStep: "CONTACT_LOCATION",
-            expectedVersion: ctx.onboardingVersion,
-          },
-        },
-        {
-          testAfterTransactionCommit: async () => {
-            const deactivated = await deactivateMember({
-              actor: ctx.owner,
-              organizationId: ctx.organizationId,
-              membershipId: ctx.membershipId,
-            });
-            expect(deactivated.ok).toBe(true);
-          },
-        },
-      );
-      expect(result.ok).toBe(true);
-
-      const profile = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
-      });
-      expect(profile.displayName).toBe("Committed Before Deactivate");
-
-      expect(
-        await prisma.organizationAuditEvent.count({
-          where: {
-            organizationId: ctx.organizationId,
-            action: "BUSINESS_PROFILE_UPDATED",
-          },
-        }),
-      ).toBe(1);
-
+    async function expectDeactivated(ctx: AdminRaceCtx) {
       const row = await prisma.membership.findUniqueOrThrow({
         where: { id: ctx.membershipId },
       });
       expect(row.status).toBe("INACTIVE");
+    }
 
-      const later = await updateBusinessBasics({
-        actor: ctx.admin,
-        organizationId: ctx.organizationId,
-        expectedVersion: profile.version,
-        raw: basicsRaw("Denied After Deactivate"),
-      });
-      expect(later.ok).toBe(false);
-    });
+    function expectAuthFailure(result: MutationOutcome) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(AUTH_FAILURE_REASONS).toContain(result.reason);
+      }
+    }
 
-    it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
-      const ctx = await seedAdminAtBasics(
-        "lc-auth-loss-d",
-        "Lifecycle Auth Loss Demote",
-      );
-
-      const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
-      });
-      const onboardingBefore =
-        await prisma.organizationOnboarding.findUniqueOrThrow({
-          where: { organizationId: ctx.organizationId },
-        });
-      const profileAuditsBefore = await prisma.organizationAuditEvent.count({
-        where: {
-          organizationId: ctx.organizationId,
-          action: "BUSINESS_PROFILE_UPDATED",
+    async function runMutationThenDemotion(
+      ctx: AdminRaceCtx,
+      runMutation: (hooks: MutationHooks) => Promise<MutationOutcome>,
+    ) {
+      const result = await runMutation({
+        testAfterTransactionCommit: async () => {
+          const demote = await changeMemberRole({
+            actor: ctx.owner,
+            organizationId: ctx.organizationId,
+            membershipId: ctx.membershipId,
+            nextRole: "MEMBER",
+          });
+          expect(demote.ok).toBe(true);
         },
       });
+      expect(result.ok).toBe(true);
+      await expectDemoted(ctx);
+      return result;
+    }
 
+    async function runMutationThenDeactivation(
+      ctx: AdminRaceCtx,
+      runMutation: (hooks: MutationHooks) => Promise<MutationOutcome>,
+    ) {
+      const result = await runMutation({
+        testAfterTransactionCommit: async () => {
+          const deactivated = await deactivateMember({
+            actor: ctx.owner,
+            organizationId: ctx.organizationId,
+            membershipId: ctx.membershipId,
+          });
+          expect(deactivated.ok).toBe(true);
+        },
+      });
+      expect(result.ok).toBe(true);
+      await expectDeactivated(ctx);
+      return result;
+    }
+
+    async function runAuthLossFirstDemotion(
+      ctx: AdminRaceCtx,
+      runMutation: (hooks: MutationHooks) => Promise<MutationOutcome>,
+    ) {
       const demotionHeld = createGate();
       const mutationStarted = createGate();
 
@@ -2685,81 +2627,26 @@ describe("Phase 3A lifecycle, atomic progress, and membership auth races", () =>
 
       await demotionHeld.waitUntilReached();
 
-      const updatePromise = updateBusinessBasics(
-        {
-          actor: ctx.admin,
-          organizationId: ctx.organizationId,
-          expectedVersion: ctx.profileVersion,
-          raw: basicsRaw("Should Not Persist"),
-          progress: {
-            step: "BUSINESS_BASICS",
-            nextStep: "CONTACT_LOCATION",
-            expectedVersion: ctx.onboardingVersion,
-          },
+      const mutationPromise = runMutation({
+        testBeforeMembershipLock: async () => {
+          mutationStarted.markReached();
         },
-        {
-          testBeforeMembershipLock: async () => {
-            mutationStarted.markReached();
-          },
-        },
-      );
+      });
 
       await mutationStarted.waitUntilReached();
       demotionHeld.release();
 
       const demote = await demotePromise;
-      const update = await updatePromise;
+      const mutation = await mutationPromise;
       expect(demote.ok).toBe(true);
-      expect(update.ok).toBe(false);
-      if (!update.ok) {
-        expect(["forbidden", "inactive_membership", "not_a_member"]).toContain(
-          update.reason,
-        );
-      }
+      expectAuthFailure(mutation);
+      return mutation;
+    }
 
-      const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
-      });
-      expect(profileAfter.displayName).toBe(profileBefore.displayName);
-      expect(profileAfter.version).toBe(profileBefore.version);
-
-      const onboardingAfter =
-        await prisma.organizationOnboarding.findUniqueOrThrow({
-          where: { organizationId: ctx.organizationId },
-        });
-      expect(onboardingSnapshot(onboardingAfter)).toEqual(
-        onboardingSnapshot(onboardingBefore),
-      );
-      expect(
-        await prisma.organizationAuditEvent.count({
-          where: {
-            organizationId: ctx.organizationId,
-            action: "BUSINESS_PROFILE_UPDATED",
-          },
-        }),
-      ).toBe(profileAuditsBefore);
-    });
-
-    it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
-      const ctx = await seedAdminAtBasics(
-        "lc-auth-loss-a",
-        "Lifecycle Auth Loss Deactivate",
-      );
-
-      const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
-      });
-      const onboardingBefore =
-        await prisma.organizationOnboarding.findUniqueOrThrow({
-          where: { organizationId: ctx.organizationId },
-        });
-      const profileAuditsBefore = await prisma.organizationAuditEvent.count({
-        where: {
-          organizationId: ctx.organizationId,
-          action: "BUSINESS_PROFILE_UPDATED",
-        },
-      });
-
+    async function runAuthLossFirstDeactivation(
+      ctx: AdminRaceCtx,
+      runMutation: (hooks: MutationHooks) => Promise<MutationOutcome>,
+    ) {
       const deactivationHeld = createGate();
       const mutationStarted = createGate();
 
@@ -2779,59 +2666,1540 @@ describe("Phase 3A lifecycle, atomic progress, and membership auth races", () =>
 
       await deactivationHeld.waitUntilReached();
 
-      const updatePromise = updateBusinessBasics(
-        {
-          actor: ctx.admin,
-          organizationId: ctx.organizationId,
-          expectedVersion: ctx.profileVersion,
-          raw: basicsRaw("Should Not Persist"),
-          progress: {
-            step: "BUSINESS_BASICS",
-            nextStep: "CONTACT_LOCATION",
-            expectedVersion: ctx.onboardingVersion,
-          },
+      const mutationPromise = runMutation({
+        testBeforeMembershipLock: async () => {
+          mutationStarted.markReached();
         },
-        {
-          testBeforeMembershipLock: async () => {
-            mutationStarted.markReached();
-          },
-        },
-      );
+      });
 
       await mutationStarted.waitUntilReached();
       deactivationHeld.release();
 
       const deactivated = await deactivatePromise;
-      const update = await updatePromise;
+      const mutation = await mutationPromise;
       expect(deactivated.ok).toBe(true);
-      expect(update.ok).toBe(false);
-      if (!update.ok) {
-        expect(["forbidden", "inactive_membership", "not_a_member"]).toContain(
-          update.reason,
-        );
-      }
+      expectAuthFailure(mutation);
+      return mutation;
+    }
 
-      const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
-        where: { organizationId: ctx.organizationId },
+    async function seedAdminAtBasics(prefix: string, orgName: string) {
+      const ctx = await seedAdminMembership(prefix, orgName);
+      const { profile, onboarding } = await seedAtBasicsStep(
+        prisma,
+        ctx.owner,
+        ctx.organizationId,
+      );
+      return {
+        ...ctx,
+        profileVersion: profile.version,
+        onboardingVersion: onboarding.version,
+      };
+    }
+
+    async function seedAdminAtContact(prefix: string, orgName: string) {
+      const ctx = await seedAdminMembership(prefix, orgName);
+      const { profile, onboarding } = await seedAtContactStep(
+        prisma,
+        ctx.owner,
+        ctx.organizationId,
+      );
+      return {
+        ...ctx,
+        profileVersion: profile.version,
+        onboardingVersion: onboarding.version,
+      };
+    }
+
+    async function seedAdminAtHours(prefix: string, orgName: string) {
+      const ctx = await seedAdminMembership(prefix, orgName);
+      const { onboarding } = await seedAtHoursStep(
+        prisma,
+        ctx.owner,
+        ctx.organizationId,
+      );
+      return { ...ctx, onboardingVersion: onboarding.version };
+    }
+
+    async function seedAdminAtCatalogue(prefix: string, orgName: string) {
+      const ctx = await seedAdminMembership(prefix, orgName);
+      const { onboarding, settings } = await seedAtCatalogueStep(
+        prisma,
+        ctx.owner,
+        ctx.organizationId,
+      );
+      return {
+        ...ctx,
+        onboardingVersion: onboarding.version,
+        settingsVersion: settings.version,
+      };
+    }
+
+    async function seedAdminNoOnboarding(prefix: string, orgName: string) {
+      const ctx = await seedAdminMembership(prefix, orgName);
+      expect(
+        await prisma.organizationOnboarding.count({
+          where: { organizationId: ctx.organizationId },
+        }),
+      ).toBe(0);
+      return ctx;
+    }
+
+    async function seedAdminReady(prefix: string, orgName: string) {
+      const { owner, organizationId } = await createOrgWithOwner(
+        prisma,
+        prefix,
+        orgName,
+      );
+      await seedReadyConfig({
+        prisma,
+        actor: owner,
+        organizationId,
+        businessType: "SERVICES",
       });
-      expect(profileAfter.displayName).toBe(profileBefore.displayName);
-      expect(profileAfter.version).toBe(profileBefore.version);
+      const admin = await addAdmin(prisma, organizationId, `${prefix}-admin`);
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+      const onboarding = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      return {
+        owner,
+        admin,
+        organizationId,
+        membershipId: membership.id,
+        onboardingVersion: onboarding.version,
+      };
+    }
 
-      const onboardingAfter =
-        await prisma.organizationOnboarding.findUniqueOrThrow({
+    async function seedAdminCompleted(prefix: string, orgName: string) {
+      const { owner, organizationId } = await createOrgWithOwner(
+        prisma,
+        prefix,
+        orgName,
+      );
+      await seedReadyConfig({
+        prisma,
+        actor: owner,
+        organizationId,
+        businessType: "SERVICES",
+      });
+      const completed = await completeOrganizationOnboarding({
+        actor: owner,
+        organizationId,
+      });
+      if (!completed.ok) {
+        throw new Error(`seed complete failed: ${completed.reason}`);
+      }
+      const admin = await addAdmin(prisma, organizationId, `${prefix}-admin`);
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+      const onboarding = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      return {
+        owner,
+        admin,
+        organizationId,
+        membershipId: membership.id,
+        onboardingVersion: onboarding.version,
+      };
+    }
+
+    describe("updateBusinessBasics", () => {
+      const auditAction = "BUSINESS_PROFILE_UPDATED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-post-basics-demote",
+          "Post Commit Basics Demote",
+        );
+
+        await runMutationThenDemotion(ctx, (hooks) =>
+          updateBusinessBasics(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: basicsRaw("Committed Before Demote"),
+              progress: {
+                step: "BUSINESS_BASICS",
+                nextStep: "CONTACT_LOCATION",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profile = await prisma.businessProfile.findUniqueOrThrow({
           where: { organizationId: ctx.organizationId },
         });
-      expect(onboardingSnapshot(onboardingAfter)).toEqual(
-        onboardingSnapshot(onboardingBefore),
-      );
-      expect(
-        await prisma.organizationAuditEvent.count({
-          where: {
-            organizationId: ctx.organizationId,
-            action: "BUSINESS_PROFILE_UPDATED",
-          },
-        }),
-      ).toBe(profileAuditsBefore);
+        expect(profile.displayName).toBe("Committed Before Demote");
+        expect(profile.version).toBe(ctx.profileVersion + 1);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await updateBusinessBasics({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: profile.version,
+          raw: basicsRaw("Denied After Demote"),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-post-basics-deact",
+          "Post Commit Basics Deactivate",
+        );
+
+        await runMutationThenDeactivation(ctx, (hooks) =>
+          updateBusinessBasics(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: basicsRaw("Committed Before Deactivate"),
+              progress: {
+                step: "BUSINESS_BASICS",
+                nextStep: "CONTACT_LOCATION",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profile = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profile.displayName).toBe("Committed Before Deactivate");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await updateBusinessBasics({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: profile.version,
+          raw: basicsRaw("Denied After Deactivate"),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-auth-basics-d",
+          "Auth Loss Basics Demote",
+        );
+        const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          updateBusinessBasics(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: basicsRaw("Should Not Persist"),
+              progress: {
+                step: "BUSINESS_BASICS",
+                nextStep: "CONTACT_LOCATION",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profileAfter.displayName).toBe(profileBefore.displayName);
+        expect(profileAfter.version).toBe(profileBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-auth-basics-a",
+          "Auth Loss Basics Deactivate",
+        );
+        const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          updateBusinessBasics(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: basicsRaw("Should Not Persist"),
+              progress: {
+                step: "BUSINESS_BASICS",
+                nextStep: "CONTACT_LOCATION",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profileAfter.displayName).toBe(profileBefore.displayName);
+        expect(profileAfter.version).toBe(profileBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("updateContactAndLocation", () => {
+      const auditAction = "BUSINESS_PROFILE_UPDATED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminAtContact(
+          "lc-post-contact-demote",
+          "Post Commit Contact Demote",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runMutationThenDemotion(ctx, (hooks) =>
+          updateContactAndLocation(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: contactRaw("committed-demote@example.com"),
+              progress: {
+                step: "CONTACT_LOCATION",
+                nextStep: "OPERATING_HOURS",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profile = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profile.primaryEmail).toBe("committed-demote@example.com");
+        expect(profile.version).toBe(ctx.profileVersion + 1);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore + 1);
+
+        const later = await updateContactAndLocation({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: profile.version,
+          raw: contactRaw("denied@example.com"),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminAtContact(
+          "lc-post-contact-deact",
+          "Post Commit Contact Deactivate",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runMutationThenDeactivation(ctx, (hooks) =>
+          updateContactAndLocation(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: contactRaw("committed-deact@example.com"),
+              progress: {
+                step: "CONTACT_LOCATION",
+                nextStep: "OPERATING_HOURS",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profile = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profile.primaryEmail).toBe("committed-deact@example.com");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore + 1);
+
+        const later = await updateContactAndLocation({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: profile.version,
+          raw: contactRaw("denied@example.com"),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtContact(
+          "lc-auth-contact-d",
+          "Auth Loss Contact Demote",
+        );
+        const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          updateContactAndLocation(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: contactRaw("should-not@example.com"),
+              progress: {
+                step: "CONTACT_LOCATION",
+                nextStep: "OPERATING_HOURS",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profileAfter.primaryEmail).toBe(profileBefore.primaryEmail);
+        expect(profileAfter.version).toBe(profileBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtContact(
+          "lc-auth-contact-a",
+          "Auth Loss Contact Deactivate",
+        );
+        const profileBefore = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          updateContactAndLocation(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.profileVersion,
+              raw: contactRaw("should-not@example.com"),
+              progress: {
+                step: "CONTACT_LOCATION",
+                nextStep: "OPERATING_HOURS",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const profileAfter = await prisma.businessProfile.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(profileAfter.primaryEmail).toBe(profileBefore.primaryEmail);
+        expect(profileAfter.version).toBe(profileBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("replaceOperatingHours", () => {
+      const auditAction = "OPERATING_HOURS_UPDATED";
+
+      async function mondayStartMinute(organizationId: string) {
+        const row = await prisma.operatingHourInterval.findFirst({
+          where: { organizationId, dayOfWeek: "MONDAY" },
+        });
+        return row?.startMinute ?? null;
+      }
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminAtHours(
+          "lc-post-hours-demote",
+          "Post Commit Hours Demote",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runMutationThenDemotion(ctx, (hooks) =>
+          replaceOperatingHours(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              raw: { intervals: earlyWeek() },
+              progress: {
+                step: "OPERATING_HOURS",
+                nextStep: "CATALOGUE",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        expect(await mondayStartMinute(ctx.organizationId)).toBe(8 * 60);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore + 1);
+
+        const later = await replaceOperatingHours({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          raw: { intervals: defaultWeek() },
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminAtHours(
+          "lc-post-hours-deact",
+          "Post Commit Hours Deactivate",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runMutationThenDeactivation(ctx, (hooks) =>
+          replaceOperatingHours(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              raw: { intervals: earlyWeek() },
+              progress: {
+                step: "OPERATING_HOURS",
+                nextStep: "CATALOGUE",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        expect(await mondayStartMinute(ctx.organizationId)).toBe(8 * 60);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore + 1);
+
+        const later = await replaceOperatingHours({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          raw: { intervals: defaultWeek() },
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtHours(
+          "lc-auth-hours-d",
+          "Auth Loss Hours Demote",
+        );
+        const mondayBefore = await mondayStartMinute(ctx.organizationId);
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          replaceOperatingHours(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              raw: { intervals: earlyWeek() },
+              progress: {
+                step: "OPERATING_HOURS",
+                nextStep: "CATALOGUE",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        expect(await mondayStartMinute(ctx.organizationId)).toBe(mondayBefore);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtHours(
+          "lc-auth-hours-a",
+          "Auth Loss Hours Deactivate",
+        );
+        const mondayBefore = await mondayStartMinute(ctx.organizationId);
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          replaceOperatingHours(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              raw: { intervals: earlyWeek() },
+              progress: {
+                step: "OPERATING_HOURS",
+                nextStep: "CATALOGUE",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        expect(await mondayStartMinute(ctx.organizationId)).toBe(mondayBefore);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("updateOrganizationSettings", () => {
+      const auditAction = "ORGANIZATION_SETTINGS_UPDATED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminAtCatalogue(
+          "lc-post-settings-demote",
+          "Post Commit Settings Demote",
+        );
+
+        await runMutationThenDemotion(ctx, (hooks) =>
+          updateOrganizationSettings(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.settingsVersion,
+              raw: settingsRaw({ membersCanViewServices: true }),
+              progress: {
+                step: "EMPLOYEE_DEFAULTS",
+                nextStep: "REVIEW",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const settings = await prisma.organizationSettings.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(settings.membersCanViewServices).toBe(true);
+        expect(settings.version).toBe(ctx.settingsVersion + 1);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await updateOrganizationSettings({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: settings.version,
+          raw: settingsRaw({ membersCanViewProducts: false }),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminAtCatalogue(
+          "lc-post-settings-deact",
+          "Post Commit Settings Deactivate",
+        );
+
+        await runMutationThenDeactivation(ctx, (hooks) =>
+          updateOrganizationSettings(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.settingsVersion,
+              raw: settingsRaw({ membersCanViewServices: true }),
+              progress: {
+                step: "EMPLOYEE_DEFAULTS",
+                nextStep: "REVIEW",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const settings = await prisma.organizationSettings.findUniqueOrThrow({
+          where: { organizationId: ctx.organizationId },
+        });
+        expect(settings.membersCanViewServices).toBe(true);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await updateOrganizationSettings({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: settings.version,
+          raw: settingsRaw({ membersCanViewProducts: false }),
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtCatalogue(
+          "lc-auth-settings-d",
+          "Auth Loss Settings Demote",
+        );
+        const settingsBefore =
+          await prisma.organizationSettings.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          updateOrganizationSettings(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.settingsVersion,
+              raw: settingsRaw({ membersCanViewServices: true }),
+              progress: {
+                step: "EMPLOYEE_DEFAULTS",
+                nextStep: "REVIEW",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const settingsAfter =
+          await prisma.organizationSettings.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(settingsAfter.membersCanViewServices).toBe(
+          settingsBefore.membersCanViewServices,
+        );
+        expect(settingsAfter.version).toBe(settingsBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtCatalogue(
+          "lc-auth-settings-a",
+          "Auth Loss Settings Deactivate",
+        );
+        const settingsBefore =
+          await prisma.organizationSettings.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          updateOrganizationSettings(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.settingsVersion,
+              raw: settingsRaw({ membersCanViewServices: true }),
+              progress: {
+                step: "EMPLOYEE_DEFAULTS",
+                nextStep: "REVIEW",
+                expectedVersion: ctx.onboardingVersion,
+              },
+            },
+            hooks,
+          ),
+        );
+
+        const settingsAfter =
+          await prisma.organizationSettings.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(settingsAfter.membersCanViewServices).toBe(
+          settingsBefore.membersCanViewServices,
+        );
+        expect(settingsAfter.version).toBe(settingsBefore.version);
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("startOrganizationOnboarding", () => {
+      const auditAction = "ONBOARDING_STARTED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminNoOnboarding(
+          "lc-post-start-demote",
+          "Post Commit Start Demote",
+        );
+
+        const result = await runMutationThenDemotion(ctx, (hooks) =>
+          startOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.currentStep).toBe("BUSINESS_BASICS");
+          expect(result.onboarding!.status).toBe("NOT_STARTED");
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.currentStep).toBe("BUSINESS_BASICS");
+        expect(onboarding.status).toBe("NOT_STARTED");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await startOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminNoOnboarding(
+          "lc-post-start-deact",
+          "Post Commit Start Deactivate",
+        );
+
+        const result = await runMutationThenDeactivation(ctx, (hooks) =>
+          startOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.status).toBe("NOT_STARTED");
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.status).toBe("NOT_STARTED");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await startOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminNoOnboarding(
+          "lc-auth-start-d",
+          "Auth Loss Start Demote",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          startOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+
+        expect(
+          await prisma.organizationOnboarding.count({
+            where: { organizationId: ctx.organizationId },
+          }),
+        ).toBe(0);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminNoOnboarding(
+          "lc-auth-start-a",
+          "Auth Loss Start Deactivate",
+        );
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          startOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+
+        expect(
+          await prisma.organizationOnboarding.count({
+            where: { organizationId: ctx.organizationId },
+          }),
+        ).toBe(0);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("advanceOnboardingStep", () => {
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-post-advance-demote",
+          "Post Commit Advance Demote",
+        );
+
+        const result = await runMutationThenDemotion(ctx, (hooks) =>
+          advanceOnboardingStep(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              step: "BUSINESS_BASICS",
+              nextStep: "CONTACT_LOCATION",
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.currentStep).toBe("CONTACT_LOCATION");
+          expect(result.onboarding!.version).toBe(ctx.onboardingVersion + 1);
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.currentStep).toBe("CONTACT_LOCATION");
+        expect(onboarding.version).toBe(ctx.onboardingVersion + 1);
+
+        const later = await advanceOnboardingStep({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          step: "CONTACT_LOCATION",
+          nextStep: "OPERATING_HOURS",
+          expectedVersion: onboarding.version,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-post-advance-deact",
+          "Post Commit Advance Deactivate",
+        );
+
+        const result = await runMutationThenDeactivation(ctx, (hooks) =>
+          advanceOnboardingStep(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              step: "BUSINESS_BASICS",
+              nextStep: "CONTACT_LOCATION",
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.currentStep).toBe("CONTACT_LOCATION");
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.currentStep).toBe("CONTACT_LOCATION");
+
+        const later = await advanceOnboardingStep({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          step: "CONTACT_LOCATION",
+          nextStep: "OPERATING_HOURS",
+          expectedVersion: onboarding.version,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-auth-advance-d",
+          "Auth Loss Advance Demote",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          advanceOnboardingStep(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              step: "BUSINESS_BASICS",
+              nextStep: "CONTACT_LOCATION",
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminAtBasics(
+          "lc-auth-advance-a",
+          "Auth Loss Advance Deactivate",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          advanceOnboardingStep(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              step: "BUSINESS_BASICS",
+              nextStep: "CONTACT_LOCATION",
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+      });
+    });
+
+    describe("completeOrganizationOnboarding", () => {
+      const auditAction = "ONBOARDING_COMPLETED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminReady(
+          "lc-post-complete-demote",
+          "Post Commit Complete Demote",
+        );
+
+        const result = await runMutationThenDemotion(ctx, (hooks) =>
+          completeOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.status).toBe("COMPLETED");
+          expect(result.onboarding!.isConfigurationReady).toBe(true);
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.status).toBe("COMPLETED");
+        expect(onboarding.isConfigurationReady).toBe(true);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await completeOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminReady(
+          "lc-post-complete-deact",
+          "Post Commit Complete Deactivate",
+        );
+
+        const result = await runMutationThenDeactivation(ctx, (hooks) =>
+          completeOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.status).toBe("COMPLETED");
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.status).toBe("COMPLETED");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await completeOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminReady(
+          "lc-auth-complete-d",
+          "Auth Loss Complete Demote",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          completeOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(onboardingAfter.isConfigurationReady).toBe(
+          onboardingBefore.isConfigurationReady,
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminReady(
+          "lc-auth-complete-a",
+          "Auth Loss Complete Deactivate",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          completeOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(onboardingAfter.isConfigurationReady).toBe(
+          onboardingBefore.isConfigurationReady,
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+    });
+
+    describe("reopenOrganizationOnboarding", () => {
+      const auditAction = "ONBOARDING_REOPENED";
+
+      it("successful mutation then demotion still returns committed data", async () => {
+        const ctx = await seedAdminCompleted(
+          "lc-post-reopen-demote",
+          "Post Commit Reopen Demote",
+        );
+
+        const result = await runMutationThenDemotion(ctx, (hooks) =>
+          reopenOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.status).toBe("IN_PROGRESS");
+          expect(result.onboarding!.isConfigurationReady).toBe(false);
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.status).toBe("IN_PROGRESS");
+        expect(onboarding.isConfigurationReady).toBe(false);
+        expect(onboarding.version).toBe(ctx.onboardingVersion + 1);
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await reopenOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: onboarding.version,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("successful mutation then deactivation still returns committed data", async () => {
+        const ctx = await seedAdminCompleted(
+          "lc-post-reopen-deact",
+          "Post Commit Reopen Deactivate",
+        );
+
+        const result = await runMutationThenDeactivation(ctx, (hooks) =>
+          reopenOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.onboarding!.status).toBe("IN_PROGRESS");
+        }
+
+        const onboarding =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboarding.status).toBe("IN_PROGRESS");
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(1);
+
+        const later = await reopenOrganizationOnboarding({
+          actor: ctx.admin,
+          organizationId: ctx.organizationId,
+          expectedVersion: onboarding.version,
+        });
+        expect(later.ok).toBe(false);
+      });
+
+      it("auth-loss-first: demotion before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminCompleted(
+          "lc-auth-reopen-d",
+          "Auth Loss Reopen Demote",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDemotion(ctx, (hooks) =>
+          reopenOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(onboardingAfter.isConfigurationReady).toBe(
+          onboardingBefore.isConfigurationReady,
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
+
+      it("auth-loss-first: deactivation before membership check leaves zero writes", async () => {
+        const ctx = await seedAdminCompleted(
+          "lc-auth-reopen-a",
+          "Auth Loss Reopen Deactivate",
+        );
+        const onboardingBefore =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        const auditsBefore = await prisma.organizationAuditEvent.count({
+          where: { organizationId: ctx.organizationId, action: auditAction },
+        });
+
+        await runAuthLossFirstDeactivation(ctx, (hooks) =>
+          reopenOrganizationOnboarding(
+            {
+              actor: ctx.admin,
+              organizationId: ctx.organizationId,
+              expectedVersion: ctx.onboardingVersion,
+            },
+            hooks,
+          ),
+        );
+
+        const onboardingAfter =
+          await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId: ctx.organizationId },
+          });
+        expect(onboardingSnapshot(onboardingAfter)).toEqual(
+          onboardingSnapshot(onboardingBefore),
+        );
+        expect(onboardingAfter.isConfigurationReady).toBe(
+          onboardingBefore.isConfigurationReady,
+        );
+        expect(
+          await prisma.organizationAuditEvent.count({
+            where: { organizationId: ctx.organizationId, action: auditAction },
+          }),
+        ).toBe(auditsBefore);
+      });
     });
   });
 });
