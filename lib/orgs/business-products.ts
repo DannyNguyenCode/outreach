@@ -368,14 +368,16 @@ export async function reorderBusinessProducts(
         select: { id: true },
       });
       const existingIds = new Set(existing.map((p) => p.id));
+      const orderedIds = parsed.data.orderedIds;
       if (
-        parsed.data.orderedIds.length !== existingIds.size ||
-        parsed.data.orderedIds.some((id) => !existingIds.has(id))
+        orderedIds.length !== existingIds.size ||
+        new Set(orderedIds).size !== orderedIds.length ||
+        orderedIds.some((id) => !existingIds.has(id))
       ) {
         throw new OrganizationAuthError("forbidden");
       }
 
-      for (const [index, id] of parsed.data.orderedIds.entries()) {
+      for (const [index, id] of orderedIds.entries()) {
         await tx.businessProduct.updateMany({
           where: { id, organizationId: input.organizationId },
           data: { displayOrder: index },

@@ -35,13 +35,18 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
 import {
+  createProductAction,
   createServiceAction,
+  deactivateProductAction,
   deactivateServiceAction,
+  markCatalogueStepAction,
   replaceOperatingHoursAction,
+  reorderProductsAction,
   reorderServicesAction,
   updateBusinessBasicsAction,
   updateContactLocationAction,
   updateEmployeeDefaultsAction,
+  updateProductAction,
   updateServiceAction,
 } from "@/app/actions/business";
 import type { ActionState } from "@/app/actions/auth-state";
@@ -49,7 +54,13 @@ import { hashPassword } from "@/lib/auth/password";
 import type { SafeUser } from "@/lib/auth/users";
 import { setMailerForTests, type EmailSender } from "@/lib/email/mailer";
 import { resetServerEnvCache } from "@/lib/env/server";
-import { startOrganizationOnboarding } from "@/lib/orgs/onboarding";
+import { computeConfigurationReadiness } from "@/lib/orgs/business-access";
+import { changeMemberRole, deactivateMember } from "@/lib/orgs/memberships";
+import {
+  advanceOnboardingStep,
+  completeOrganizationOnboarding,
+  startOrganizationOnboarding,
+} from "@/lib/orgs/onboarding";
 import { createOrganization } from "@/lib/orgs/organizations";
 import { resetApplicationData } from "@/tests/integration/reset";
 
@@ -515,6 +526,23 @@ async function assertPreStartRecordsAbsent(
   ]);
 }
 
+function createGate() {
+  let release!: () => void;
+  let reached!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reachedPromise = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  return {
+    waitUntilReached: () => reachedPromise,
+    markReached: reached,
+    waitForRelease: () => released,
+    release,
+  };
+}
+
 function applyVersionFields(
   formData: FormData,
   fields: Partial<Record<VersionField, string | null>>,
@@ -609,6 +637,88 @@ function buildEmployeeDefaultsFormData(input: {
   formData.set("membersCanViewProducts", "on");
   formData.set("membersCanViewBusinessInfo", "on");
   formData.set("futureCallingAccessDefault", "DISABLED");
+  return formData;
+}
+
+function buildProductCreateFormData(input: {
+  organizationSlug: string;
+  name?: string | null;
+  sku?: string | null;
+  isActive?: boolean;
+  expectedVersion?: string;
+  onboardingExpectedVersion?: string;
+}) {
+  const formData = new FormData();
+  formData.set("organizationSlug", input.organizationSlug);
+  if (input.name !== null && input.name !== undefined) {
+    formData.set("name", input.name);
+  }
+  if (input.sku !== null && input.sku !== undefined) {
+    formData.set("sku", input.sku);
+  }
+  if (input.isActive === false) {
+    formData.set("isActive", "false");
+  }
+  if (input.expectedVersion !== undefined) {
+    formData.set("expectedVersion", input.expectedVersion);
+  }
+  if (input.onboardingExpectedVersion !== undefined) {
+    formData.set("onboardingExpectedVersion", input.onboardingExpectedVersion);
+  }
+  return formData;
+}
+
+function buildProductUpdateFormData(input: {
+  organizationSlug: string;
+  productId: string;
+  name: string;
+  sku?: string;
+  expectedVersion?: string;
+  onboardingExpectedVersion?: string;
+}) {
+  const formData = new FormData();
+  formData.set("organizationSlug", input.organizationSlug);
+  formData.set("productId", input.productId);
+  formData.set("name", input.name);
+  if (input.sku !== undefined) {
+    formData.set("sku", input.sku);
+  }
+  applyVersionFields(formData, {
+    expectedVersion: input.expectedVersion,
+    onboardingExpectedVersion: input.onboardingExpectedVersion,
+  });
+  return formData;
+}
+
+function buildProductDeactivateFormData(input: {
+  organizationSlug: string;
+  productId: string;
+}) {
+  const formData = new FormData();
+  formData.set("organizationSlug", input.organizationSlug);
+  formData.set("productId", input.productId);
+  return formData;
+}
+
+function buildProductReorderFormData(input: {
+  organizationSlug: string;
+  orderedIdsJson: string;
+}) {
+  const formData = new FormData();
+  formData.set("organizationSlug", input.organizationSlug);
+  formData.set("orderedIdsJson", input.orderedIdsJson);
+  return formData;
+}
+
+function buildMarkCatalogueStepFormData(input: {
+  organizationSlug: string;
+  onboardingExpectedVersion?: string | null;
+}) {
+  const formData = new FormData();
+  formData.set("organizationSlug", input.organizationSlug);
+  applyVersionFields(formData, {
+    onboardingExpectedVersion: input.onboardingExpectedVersion,
+  });
   return formData;
 }
 
@@ -1628,16 +1738,21 @@ describe("Phase 3A business server actions", () => {
 
   describe("catalogue actions — no action-level expectedVersion", () => {
     /**
-     * Inventory disposition:
-     * - createServiceAction / updateServiceAction / deactivateServiceAction / reorderServicesAction
-     * - createProductAction / updateProductAction / deactivateProductAction / reorderProductsAction
+     * Executed coverage (Phase 3A action boundary):
+     * - Services: create / update / deactivate / reorder (partial matrix above)
+     * - Products: create / update / deactivate / reorder (full matrix below)
      *
-     * They do NOT accept expectedVersion or onboardingExpectedVersion; parsing is N/A.
-     * Entity payload validation runs before mutation. Concurrency uses the shared
-     * organization readiness advisory lock plus membership FOR UPDATE (and reorder
-     * advisory locks). All mutations are tenant-scoped by organizationId. Catalogue
-     * onboarding progress is handled separately via markCatalogueStepAction with
-     * onboardingExpectedVersion — not in these catalogue CRUD actions.
+     * Products intentionally do NOT parse expectedVersion/onboardingExpectedVersion.
+     * Concurrency via:
+     * - create/update/deactivate: readiness advisory lock → membership FOR UPDATE →
+     *   refreshConfigurationReadiness; audits PRODUCT_*
+     * - reorder: membership FOR UPDATE → products-order:<orgId> advisory lock (NO
+     *   readiness lock — same as services reorder); audit PRODUCT_UPDATED w/ reorder
+     * Tenant scope: always organizationId in where clauses.
+     * Validation: productInputSchema (name 1–120, sku optional max 64 [A-Za-z0-9._-])
+     * before mutation. Extra version fields in FormData are ignored.
+     * Onboarding progress: markCatalogueStepAction (separate describe) uses
+     * onboardingExpectedVersion only.
      */
 
     async function seedCatalogueOrg(prefix: string) {
@@ -1649,6 +1764,85 @@ describe("Phase 3A business server actions", () => {
       await startOnboarding(owner, organizationId);
       setActor(owner);
       return { owner, organizationId, slug };
+    }
+
+    async function seedCompletedCatalogueOrg(prefix: string) {
+      const ctx = await seedCatalogueOrg(prefix);
+      await prisma.businessProfile.update({
+        where: { organizationId: ctx.organizationId },
+        data: {
+          displayName: "Done Co",
+          industry: "Retail",
+          businessType: "BOTH",
+          primaryEmail: "done@example.com",
+          primaryPhoneE164: "+14165551234",
+          timeZone: "America/Toronto",
+        },
+      });
+      await prisma.businessLocation.updateMany({
+        where: { organizationId: ctx.organizationId, isPrimary: true },
+        data: { countryCode: "CA", city: "Toronto" },
+      });
+      await replaceOperatingHoursAction(
+        initialActionState,
+        buildHoursFormData({
+          organizationSlug: ctx.slug,
+          markStep: false,
+        }),
+      );
+      await createServiceAction(
+        initialActionState,
+        (() => {
+          const fd = new FormData();
+          fd.set("organizationSlug", ctx.slug);
+          fd.set("name", "Completion Service");
+          return fd;
+        })(),
+      );
+      await createProductAction(
+        initialActionState,
+        buildProductCreateFormData({
+          organizationSlug: ctx.slug,
+          name: "Completion Widget",
+          sku: "DONE-1",
+        }),
+      );
+      await createProductAction(
+        initialActionState,
+        buildProductCreateFormData({
+          organizationSlug: ctx.slug,
+          name: "Spare Widget",
+          sku: "DONE-2",
+        }),
+      );
+      const completed = await completeOrganizationOnboarding({
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+      });
+      if (!completed.ok)
+        throw new Error(`complete failed: ${completed.reason}`);
+      return ctx;
+    }
+
+    async function createProductInOrg(
+      organizationId: string,
+      slug: string,
+      name: string,
+      sku?: string,
+    ) {
+      const result = await createProductAction(
+        initialActionState,
+        buildProductCreateFormData({
+          organizationSlug: slug,
+          name,
+          sku,
+        }),
+      );
+      expect(result.status).toBe("success");
+      const product = await prisma.businessProduct.findFirstOrThrow({
+        where: { organizationId, name },
+      });
+      return product;
     }
 
     it("createServiceAction ignores expectedVersion and onboardingExpectedVersion", async () => {
@@ -1783,6 +1977,1502 @@ describe("Phase 3A business server actions", () => {
       expect(result.status).toBe("error");
       expect(result.message).toBe("Invalid reorder payload.");
       expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+    });
+
+    describe("createProductAction", () => {
+      it("creates product with name and sku, org-scoped, PRODUCT_CREATED audit", async () => {
+        const { organizationId, slug } =
+          await seedCatalogueOrg("act-prod-create-ok");
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await createProductAction(
+          initialActionState,
+          buildProductCreateFormData({
+            organizationSlug: slug,
+            name: "Widget Pro",
+            sku: "WDG-001",
+            expectedVersion: "999",
+            onboardingExpectedVersion: "999",
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products).toHaveLength(before.products.length + 1);
+        const created = after.products.find((p) => p.name === "Widget Pro");
+        expect(created).toBeDefined();
+        expect(created!.sku).toBe("WDG-001");
+        expect(created!.organizationId).toBe(organizationId);
+        expect(countAudit(after, "PRODUCT_CREATED")).toBe(
+          countAudit(before, "PRODUCT_CREATED") + 1,
+        );
+      });
+
+      it.each([
+        ["missing name", { omitName: true }],
+        ["whitespace name", { name: "   " }],
+        ["name too long", { name: "x".repeat(121) }],
+        ["invalid sku chars", { name: "Valid", sku: "bad sku!" }],
+        ["sku too long", { name: "Valid", sku: "a".repeat(65) }],
+      ] as const)(
+        "rejects %s with controlled error and zero writes",
+        async (_label, input) => {
+          const { organizationId, slug } = await seedCatalogueOrg(
+            `act-prod-inv-${_label.replace(/\s+/g, "-")}`,
+          );
+          const before = await captureSnapshot(prisma, organizationId);
+          const formData = buildProductCreateFormData({
+            organizationSlug: slug,
+            name: "omitName" in input ? undefined : input.name,
+            sku: "sku" in input ? input.sku : undefined,
+          });
+          if ("omitName" in input) {
+            formData.delete("name");
+          }
+
+          const result = await createProductAction(
+            initialActionState,
+            formData,
+          );
+
+          expect(result.status).toBe("error");
+          expectZeroWrites(
+            before,
+            await captureSnapshot(prisma, organizationId),
+          );
+        },
+      );
+
+      it("pre-start create allowed without initializing onboarding or business defaults", async () => {
+        const { owner, organizationId, slug } = await createOrgWithOwner(
+          prisma,
+          "act-prod-prestart",
+          "Pre Start Product Org",
+        );
+        setActor(owner);
+        await assertPreStartRecordsAbsent(prisma, organizationId);
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await createProductAction(
+          initialActionState,
+          buildProductCreateFormData({
+            organizationSlug: slug,
+            name: "Pre Start Widget",
+            sku: "PRE-1",
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products).toHaveLength(1);
+        expect(after.products[0].name).toBe("Pre Start Widget");
+        expect(after.onboarding).toBeNull();
+        expect(after.profile).toBeNull();
+        expect(after.settings).toBeNull();
+        expect(after.hours).toHaveLength(0);
+        expect(after.primaryLocation).toBeNull();
+        expect(countAudit(after, "PRODUCT_CREATED")).toBe(
+          countAudit(before, "PRODUCT_CREATED") + 1,
+        );
+        expect(countAudit(after, "ONBOARDING_STARTED")).toBe(
+          countAudit(before, "ONBOARDING_STARTED"),
+        );
+      });
+    });
+
+    describe("updateProductAction", () => {
+      it("updates target product only and ignores extra version fields", async () => {
+        const { organizationId, slug } =
+          await seedCatalogueOrg("act-prod-update-ok");
+        const p1 = await createProductInOrg(
+          organizationId,
+          slug,
+          "Alpha",
+          "A1",
+        );
+        const p2 = await createProductInOrg(organizationId, slug, "Beta", "B1");
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await updateProductAction(
+          initialActionState,
+          buildProductUpdateFormData({
+            organizationSlug: slug,
+            productId: p1.id,
+            name: "Alpha Updated",
+            sku: "A1-NEW",
+            expectedVersion: "999",
+            onboardingExpectedVersion: "999",
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        const updated = after.products.find((p) => p.id === p1.id);
+        const untouched = after.products.find((p) => p.id === p2.id);
+        expect(updated!.name).toBe("Alpha Updated");
+        expect(updated!.sku).toBe("A1-NEW");
+        expect(untouched!.name).toBe("Beta");
+        expect(countAudit(after, "PRODUCT_UPDATED")).toBe(
+          countAudit(before, "PRODUCT_UPDATED") + 1,
+        );
+      });
+
+      it.each([
+        ["missing productId", ""],
+        ["unknown productId", "clh123456789012345678901234"],
+      ])("rejects %s with zero writes", async (_label, productId) => {
+        const { organizationId, slug } = await seedCatalogueOrg(
+          "act-prod-update-bad-id",
+        );
+        const before = await captureSnapshot(prisma, organizationId);
+        const formData = buildProductUpdateFormData({
+          organizationSlug: slug,
+          productId,
+          name: "Nope",
+        });
+        if (_label === "missing productId") {
+          formData.delete("productId");
+        }
+
+        const result = await updateProductAction(initialActionState, formData);
+
+        expect(result.status).toBe("error");
+        expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+      });
+
+      it("rejects empty name with zero writes", async () => {
+        const { organizationId, slug } = await seedCatalogueOrg(
+          "act-prod-update-empty",
+        );
+        const product = await createProductInOrg(
+          organizationId,
+          slug,
+          "To Update",
+        );
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await updateProductAction(
+          initialActionState,
+          buildProductUpdateFormData({
+            organizationSlug: slug,
+            productId: product.id,
+            name: "   ",
+          }),
+        );
+
+        expect(result.status).toBe("error");
+        expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+      });
+
+      it("cross-tenant update with own slug and foreign productId leaves both orgs unchanged", async () => {
+        const orgA = await seedCatalogueOrg("act-prod-xupd-a");
+        const orgB = await seedCatalogueOrg("act-prod-xupd-b");
+        const productB = await createProductInOrg(
+          orgB.organizationId,
+          orgB.slug,
+          "Org B Product",
+        );
+        setActor(orgA.owner);
+        const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+        const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+
+        const result = await updateProductAction(
+          initialActionState,
+          buildProductUpdateFormData({
+            organizationSlug: orgA.slug,
+            productId: productB.id,
+            name: "Hijacked",
+          }),
+        );
+
+        expect(result.status).toBe("error");
+        expect(result.message).toBe("Organization not found.");
+        expectZeroWrites(
+          beforeA,
+          await captureSnapshot(prisma, orgA.organizationId),
+        );
+        expectZeroWrites(
+          beforeB,
+          await captureSnapshot(prisma, orgB.organizationId),
+        );
+      });
+
+      it("still succeeds after onboarding completion (products not frozen)", async () => {
+        const { organizationId, slug } = await seedCompletedCatalogueOrg(
+          "act-prod-post-complete-upd",
+        );
+        const product = await prisma.businessProduct.findFirstOrThrow({
+          where: { organizationId },
+        });
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await updateProductAction(
+          initialActionState,
+          buildProductUpdateFormData({
+            organizationSlug: slug,
+            productId: product.id,
+            name: "Post Complete Name",
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products.find((p) => p.id === product.id)!.name).toBe(
+          "Post Complete Name",
+        );
+        expect(after.onboarding!.status).toBe("COMPLETED");
+        expect(countAudit(after, "PRODUCT_UPDATED")).toBe(
+          countAudit(before, "PRODUCT_UPDATED") + 1,
+        );
+      });
+    });
+
+    describe("deactivateProductAction", () => {
+      it("deactivates target only and writes PRODUCT_DEACTIVATED once", async () => {
+        const { organizationId, slug } =
+          await seedCatalogueOrg("act-prod-deact-ok");
+        const p1 = await createProductInOrg(organizationId, slug, "Keep", "K1");
+        const p2 = await createProductInOrg(
+          organizationId,
+          slug,
+          "Remove",
+          "R1",
+        );
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await deactivateProductAction(
+          initialActionState,
+          buildProductDeactivateFormData({
+            organizationSlug: slug,
+            productId: p2.id,
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products.find((p) => p.id === p1.id)!.isActive).toBe(true);
+        expect(after.products.find((p) => p.id === p2.id)!.isActive).toBe(
+          false,
+        );
+        expect(countAudit(after, "PRODUCT_DEACTIVATED")).toBe(
+          countAudit(before, "PRODUCT_DEACTIVATED") + 1,
+        );
+      });
+
+      it.each([
+        ["missing productId", ""],
+        ["unknown productId", "clh123456789012345678901234"],
+      ])(
+        "rejects %s with zero writes on both orgs for cross-tenant",
+        async (_label, productId) => {
+          const orgA = await seedCatalogueOrg("act-prod-deact-bad-a");
+          const orgB = await seedCatalogueOrg("act-prod-deact-bad-b");
+          const productB = await createProductInOrg(
+            orgB.organizationId,
+            orgB.slug,
+            "Target",
+          );
+          setActor(orgA.owner);
+          const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+          const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+          const formData = buildProductDeactivateFormData({
+            organizationSlug: orgA.slug,
+            productId: _label === "missing productId" ? productId : productB.id,
+          });
+          if (_label === "missing productId") {
+            formData.delete("productId");
+          }
+
+          const result = await deactivateProductAction(
+            initialActionState,
+            formData,
+          );
+
+          expect(result.status).toBe("error");
+          expectZeroWrites(
+            beforeA,
+            await captureSnapshot(prisma, orgA.organizationId),
+          );
+          expectZeroWrites(
+            beforeB,
+            await captureSnapshot(prisma, orgB.organizationId),
+          );
+        },
+      );
+
+      it("repeat deactivate is idempotent (ok with isActive false)", async () => {
+        const { organizationId, slug } = await seedCatalogueOrg(
+          "act-prod-deact-repeat",
+        );
+        const product = await createProductInOrg(
+          organizationId,
+          slug,
+          "Once",
+          "O1",
+        );
+        const first = await deactivateProductAction(
+          initialActionState,
+          buildProductDeactivateFormData({
+            organizationSlug: slug,
+            productId: product.id,
+          }),
+        );
+        expect(first.status).toBe("success");
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const second = await deactivateProductAction(
+          initialActionState,
+          buildProductDeactivateFormData({
+            organizationSlug: slug,
+            productId: product.id,
+          }),
+        );
+
+        expect(second.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products.find((p) => p.id === product.id)!.isActive).toBe(
+          false,
+        );
+        expect(countAudit(after, "PRODUCT_DEACTIVATED")).toBe(
+          countAudit(before, "PRODUCT_DEACTIVATED") + 1,
+        );
+      });
+
+      it("still allowed after onboarding completion", async () => {
+        const { organizationId, slug } = await seedCompletedCatalogueOrg(
+          "act-prod-post-complete-deact",
+        );
+        const product = await prisma.businessProduct.findFirstOrThrow({
+          where: { organizationId, sku: "DONE-2" },
+        });
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await deactivateProductAction(
+          initialActionState,
+          buildProductDeactivateFormData({
+            organizationSlug: slug,
+            productId: product.id,
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products.find((p) => p.id === product.id)!.isActive).toBe(
+          false,
+        );
+        // Deactivate is allowed after completion; spare catalogue item keeps readiness.
+        expect(after.onboarding!.status).toBe("COMPLETED");
+        expect(countAudit(after, "PRODUCT_DEACTIVATED")).toBe(
+          countAudit(before, "PRODUCT_DEACTIVATED") + 1,
+        );
+      });
+    });
+
+    describe("reorderProductsAction", () => {
+      async function seedThreeProducts(organizationId: string, slug: string) {
+        const created = [];
+        for (const name of ["P-A", "P-B", "P-C"]) {
+          created.push(await createProductInOrg(organizationId, slug, name));
+        }
+        return created;
+      }
+
+      it("reorders products exactly and writes one PRODUCT_UPDATED reorder audit", async () => {
+        const { organizationId, slug } = await seedCatalogueOrg(
+          "act-prod-reorder-ok",
+        );
+        const [pA, pB, pC] = await seedThreeProducts(organizationId, slug);
+        const before = await captureSnapshot(prisma, organizationId);
+        const targetOrder = [pC.id, pA.id, pB.id];
+
+        const result = await reorderProductsAction(
+          initialActionState,
+          buildProductReorderFormData({
+            organizationSlug: slug,
+            orderedIdsJson: JSON.stringify(targetOrder),
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.products.map((p) => p.id)).toEqual(targetOrder);
+        expect(after.products.every((p) => p.isActive)).toBe(true);
+        const reorderAudits = after.audits.filter(
+          (e) =>
+            e.action === "PRODUCT_UPDATED" &&
+            (e.metadata as { reorder?: boolean })?.reorder === true,
+        );
+        expect(reorderAudits).toHaveLength(
+          before.audits.filter(
+            (e) =>
+              e.action === "PRODUCT_UPDATED" &&
+              (e.metadata as { reorder?: boolean })?.reorder === true,
+          ).length + 1,
+        );
+      });
+
+      it.each([
+        ["malformed JSON", "not-json"],
+        ["non-array payload", JSON.stringify({})],
+        ["invalid cuid in list", JSON.stringify(["not-a-cuid"])],
+      ])("rejects %s with zero writes", async (_label, orderedIdsJson) => {
+        const { organizationId, slug } = await seedCatalogueOrg(
+          "act-prod-reorder-val",
+        );
+        await seedThreeProducts(organizationId, slug);
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await reorderProductsAction(
+          initialActionState,
+          buildProductReorderFormData({
+            organizationSlug: slug,
+            orderedIdsJson,
+          }),
+        );
+
+        expect(result.status).toBe("error");
+        expect(result.message).toBe("Invalid reorder payload.");
+        expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+      });
+
+      it("rejects duplicate, missing, unknown, and cross-tenant ids with zero writes", async () => {
+        const orgA = await seedCatalogueOrg("act-prod-reorder-xa");
+        const orgB = await seedCatalogueOrg("act-prod-reorder-xb");
+        setActor(orgA.owner);
+        const [a1, a2, a3] = await seedThreeProducts(
+          orgA.organizationId,
+          orgA.slug,
+        );
+        setActor(orgB.owner);
+        const b1 = await createProductInOrg(
+          orgB.organizationId,
+          orgB.slug,
+          "Foreign",
+        );
+        setActor(orgA.owner);
+        const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+        const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+
+        const cases = [
+          JSON.stringify([a1.id, a1.id, a2.id]),
+          JSON.stringify([a1.id, a2.id]),
+          JSON.stringify([a1.id, a2.id, a3.id, "clh123456789012345678901234"]),
+          JSON.stringify([b1.id, a2.id, a3.id]),
+        ];
+
+        for (const orderedIdsJson of cases) {
+          const result = await reorderProductsAction(
+            initialActionState,
+            buildProductReorderFormData({
+              organizationSlug: orgA.slug,
+              orderedIdsJson,
+            }),
+          );
+          expect(result.status).toBe("error");
+          expect(result.message).toBe(
+            "You do not have permission to perform this action.",
+          );
+        }
+
+        expectZeroWrites(
+          beforeA,
+          await captureSnapshot(prisma, orgA.organizationId),
+        );
+        expectZeroWrites(
+          beforeB,
+          await captureSnapshot(prisma, orgB.organizationId),
+        );
+      });
+    });
+
+    describe("catalogue product/service auth matrix", () => {
+      type CatalogueAuthCase = {
+        id: string;
+        name: string;
+        run: (slug: string, productId?: string) => FormData;
+        action: BusinessActionRunner;
+        needsProduct?: boolean;
+      };
+
+      const authCases: CatalogueAuthCase[] = [
+        {
+          id: "create-product",
+          name: "createProductAction",
+          run: (slug) =>
+            buildProductCreateFormData({
+              organizationSlug: slug,
+              name: "Auth Product",
+            }),
+          action: createProductAction,
+        },
+        {
+          id: "update-product",
+          name: "updateProductAction",
+          run: (slug, productId) =>
+            buildProductUpdateFormData({
+              organizationSlug: slug,
+              productId: productId!,
+              name: "Auth Updated",
+            }),
+          action: updateProductAction,
+          needsProduct: true,
+        },
+        {
+          id: "deactivate-product",
+          name: "deactivateProductAction",
+          run: (slug, productId) =>
+            buildProductDeactivateFormData({
+              organizationSlug: slug,
+              productId: productId!,
+            }),
+          action: deactivateProductAction,
+          needsProduct: true,
+        },
+        {
+          id: "reorder-products",
+          name: "reorderProductsAction",
+          run: (slug, productId) =>
+            buildProductReorderFormData({
+              organizationSlug: slug,
+              orderedIdsJson: JSON.stringify([productId!]),
+            }),
+          action: reorderProductsAction,
+          needsProduct: true,
+        },
+      ];
+
+      async function seededProductOrg(prefix: string) {
+        const ctx = await seedCatalogueOrg(prefix);
+        const product = await createProductInOrg(
+          ctx.organizationId,
+          ctx.slug,
+          "Auth Target",
+        );
+        return { ...ctx, productId: product.id };
+      }
+
+      describe.each(authCases)("$name", ({ id, run, action, needsProduct }) => {
+        it("unauthenticated throws NEXT_REDIRECT with zero writes", async () => {
+          const { organizationId, slug, productId } = await seededProductOrg(
+            `act-pau-${id}`,
+          );
+          setUnauthenticated(`/app/orgs/${slug}/onboarding`);
+          const before = await captureSnapshot(prisma, organizationId);
+
+          await expect(
+            action(
+              initialActionState,
+              run(slug, needsProduct ? productId : undefined),
+            ),
+          ).rejects.toThrow(/NEXT_REDIRECT/);
+
+          expectZeroWrites(
+            before,
+            await captureSnapshot(prisma, organizationId),
+          );
+        });
+
+        it("inactive membership returns access error with zero writes", async () => {
+          const { organizationId, slug, productId } = await seededProductOrg(
+            `act-pin-${id}`,
+          );
+          const inactive = await addInactiveMember(
+            prisma,
+            organizationId,
+            `act-pin-u-${id}`,
+          );
+          setActor(inactive);
+          const before = await captureSnapshot(prisma, organizationId);
+
+          const result = await action(
+            initialActionState,
+            run(slug, needsProduct ? productId : undefined),
+          );
+
+          expect(result.status).toBe("error");
+          expect(result.message).toBe(
+            "You do not have access to this organization.",
+          );
+          expectZeroWrites(
+            before,
+            await captureSnapshot(prisma, organizationId),
+          );
+        });
+
+        it("MEMBER role is forbidden with zero writes", async () => {
+          const { organizationId, slug, productId } = await seededProductOrg(
+            `act-pmb-${id}`,
+          );
+          const member = await addMember(
+            prisma,
+            organizationId,
+            `act-pmb-u-${id}`,
+            "MEMBER",
+          );
+          setActor(member);
+          const before = await captureSnapshot(prisma, organizationId);
+
+          const result = await action(
+            initialActionState,
+            run(slug, needsProduct ? productId : undefined),
+          );
+
+          expect(result.status).toBe("error");
+          expect(result.message).toBe(
+            "You do not have permission to perform this action.",
+          );
+          expectZeroWrites(
+            before,
+            await captureSnapshot(prisma, organizationId),
+          );
+        });
+
+        it("cross-tenant slug cannot modify either organization", async () => {
+          const orgA = await seededProductOrg(`act-pxa-${id}`);
+          const orgB = await seededProductOrg(`act-pxb-${id}`);
+          setActor(orgA.owner);
+          const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+          const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+
+          const result = await action(
+            initialActionState,
+            run(orgB.slug, needsProduct ? orgB.productId : undefined),
+          );
+
+          expect(result.status).toBe("error");
+          expect(result.message).toBe(
+            "You do not have access to this organization.",
+          );
+          expectZeroWrites(
+            beforeA,
+            await captureSnapshot(prisma, orgA.organizationId),
+          );
+          expectZeroWrites(
+            beforeB,
+            await captureSnapshot(prisma, orgB.organizationId),
+          );
+        });
+      });
+    });
+  });
+
+  describe("markCatalogueStepAction", () => {
+    async function seedCatalogueStepContext(prefix: string) {
+      const { owner, organizationId, slug } = await createOrgWithOwner(
+        prisma,
+        prefix,
+        "Catalogue Step Org",
+      );
+      await startOnboarding(owner, organizationId);
+      const onboarding = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      setActor(owner);
+      return { owner, organizationId, slug, onboarding };
+    }
+
+    async function seedReadinessFixtures(input: {
+      owner: SafeUser;
+      organizationId: string;
+      slug: string;
+      businessType: "SERVICES" | "PRODUCTS" | "BOTH";
+      withActiveService?: boolean;
+      withActiveProduct?: boolean;
+      inactiveProduct?: boolean;
+    }) {
+      const profile = await prisma.businessProfile.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
+      });
+      const onboarding = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId: input.organizationId },
+      });
+      await updateBusinessBasicsAction(
+        initialActionState,
+        buildBasicsFormData({
+          organizationSlug: input.slug,
+          expectedVersion: String(profile.version),
+          onboardingExpectedVersion: String(onboarding.version),
+          markStep: false,
+        }),
+      );
+      await prisma.businessProfile.update({
+        where: { organizationId: input.organizationId },
+        data: { businessType: input.businessType },
+      });
+      await updateContactLocationAction(
+        initialActionState,
+        buildContactFormData({
+          organizationSlug: input.slug,
+          expectedVersion: String(
+            (
+              await prisma.businessProfile.findUniqueOrThrow({
+                where: { organizationId: input.organizationId },
+              })
+            ).version,
+          ),
+          onboardingExpectedVersion: String(
+            (
+              await prisma.organizationOnboarding.findUniqueOrThrow({
+                where: { organizationId: input.organizationId },
+              })
+            ).version,
+          ),
+          markStep: false,
+        }),
+      );
+      const onboarding4 = await prisma.organizationOnboarding.findUniqueOrThrow(
+        {
+          where: { organizationId: input.organizationId },
+        },
+      );
+      await replaceOperatingHoursAction(
+        initialActionState,
+        buildHoursFormData({
+          organizationSlug: input.slug,
+          onboardingExpectedVersion: String(onboarding4.version),
+          markStep: false,
+        }),
+      );
+      if (input.withActiveService) {
+        await createServiceAction(
+          initialActionState,
+          (() => {
+            const fd = new FormData();
+            fd.set("organizationSlug", input.slug);
+            fd.set("name", "Ready Service");
+            return fd;
+          })(),
+        );
+      }
+      if (input.withActiveProduct) {
+        await createProductAction(
+          initialActionState,
+          buildProductCreateFormData({
+            organizationSlug: input.slug,
+            name: "Ready Product",
+            sku: `RDY-${randomUUID().slice(0, 6)}`,
+            isActive: input.inactiveProduct ? false : true,
+          }),
+        );
+      }
+    }
+
+    describe("version validation", () => {
+      it("rejects omitted onboardingExpectedVersion with zero writes", async () => {
+        const { organizationId, slug } =
+          await seedCatalogueStepContext("act-catstep-omit");
+        const formData = new FormData();
+        formData.set("organizationSlug", slug);
+        const result = await expectVersionValidationFailure({
+          prisma,
+          organizationId,
+          run: () => markCatalogueStepAction(initialActionState, formData),
+        });
+        expect(
+          result.fieldErrors?.onboardingExpectedVersion?.length,
+        ).toBeGreaterThan(0);
+      });
+
+      it("rejects empty onboardingExpectedVersion with zero writes", async () => {
+        const { organizationId, slug } =
+          await seedCatalogueStepContext("act-catstep-empty");
+        const result = await expectVersionValidationFailure({
+          prisma,
+          organizationId,
+          run: () =>
+            markCatalogueStepAction(
+              initialActionState,
+              buildMarkCatalogueStepFormData({
+                organizationSlug: slug,
+                onboardingExpectedVersion: "",
+              }),
+            ),
+        });
+        expect(
+          result.fieldErrors?.onboardingExpectedVersion?.length,
+        ).toBeGreaterThan(0);
+      });
+
+      it.each(MALFORMED_VERSION_VALUES)(
+        "rejects malformed onboardingExpectedVersion (%s) with zero writes",
+        async (_label, badValue) => {
+          const { organizationId, slug } =
+            await seedCatalogueStepContext("act-catstep-bad");
+          await expectVersionValidationFailure({
+            prisma,
+            organizationId,
+            run: () =>
+              markCatalogueStepAction(
+                initialActionState,
+                buildMarkCatalogueStepFormData({
+                  organizationSlug: slug,
+                  onboardingExpectedVersion: badValue,
+                }),
+              ),
+          });
+        },
+      );
+
+      it("rejects stale onboardingExpectedVersion with zero writes", async () => {
+        const { organizationId, slug, onboarding } =
+          await seedCatalogueStepContext("act-catstep-stale");
+        const result = await expectVersionValidationFailure({
+          prisma,
+          organizationId,
+          run: () =>
+            markCatalogueStepAction(
+              initialActionState,
+              buildMarkCatalogueStepFormData({
+                organizationSlug: slug,
+                onboardingExpectedVersion: String(onboarding.version + 99),
+              }),
+            ),
+        });
+        expect(result.message).toMatch(/elsewhere|Reload/i);
+      });
+
+      it("accepts current version, advances step once, no progress audit", async () => {
+        const { organizationId, slug, onboarding } =
+          await seedCatalogueStepContext("act-catstep-ok");
+        const before = await captureSnapshot(prisma, organizationId);
+
+        const result = await markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        );
+
+        expect(result.status).toBe("success");
+        const after = await captureSnapshot(prisma, organizationId);
+        expect(after.onboarding!.currentStep).toBe("EMPLOYEE_DEFAULTS");
+        expect(after.onboarding!.version).toBe(before.onboarding!.version + 1);
+        expect(
+          (after.onboarding!.completedSteps as string[]).includes("CATALOGUE"),
+        ).toBe(true);
+        expect(after.services).toEqual(before.services);
+        expect(after.products).toEqual(before.products);
+        expect(countAudit(after, "ONBOARDING_STARTED")).toBe(
+          countAudit(before, "ONBOARDING_STARTED"),
+        );
+        expect(
+          after.audits.filter((e) => e.action.startsWith("ONBOARDING_")).length,
+        ).toBe(
+          before.audits.filter((e) => e.action.startsWith("ONBOARDING_"))
+            .length,
+        );
+      });
+
+      it("resubmitting stale version after success is rejected", async () => {
+        const { organizationId, slug, onboarding } =
+          await seedCatalogueStepContext("act-catstep-resubmit");
+        const first = await markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        );
+        expect(first.status).toBe("success");
+        const afterFirst = await captureSnapshot(prisma, organizationId);
+
+        const second = await markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        );
+
+        expect(second.status).toBe("error");
+        expect(second.message).toMatch(/elsewhere|Reload/i);
+        const afterSecond = await captureSnapshot(prisma, organizationId);
+        expect(afterSecond.onboarding!.version).toBe(
+          afterFirst.onboarding!.version,
+        );
+      });
+    });
+
+    describe("authorization", () => {
+      it("unauthenticated throws NEXT_REDIRECT with zero writes", async () => {
+        const { organizationId, slug, onboarding } =
+          await seedCatalogueStepContext("act-catstep-unauth");
+        setUnauthenticated(`/app/orgs/${slug}/onboarding`);
+        const before = await captureSnapshot(prisma, organizationId);
+
+        await expect(
+          markCatalogueStepAction(
+            initialActionState,
+            buildMarkCatalogueStepFormData({
+              organizationSlug: slug,
+              onboardingExpectedVersion: String(onboarding.version),
+            }),
+          ),
+        ).rejects.toThrow(/NEXT_REDIRECT/);
+
+        expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+      });
+
+      it("inactive membership, MEMBER, and cross-tenant slug leave zero writes", async () => {
+        const orgA = await seedCatalogueStepContext("act-catstep-auth-a");
+        const orgB = await seedCatalogueStepContext("act-catstep-auth-b");
+        const inactive = await addInactiveMember(
+          prisma,
+          orgA.organizationId,
+          "act-catstep-inactive",
+        );
+        const member = await addMember(
+          prisma,
+          orgA.organizationId,
+          "act-catstep-member",
+          "MEMBER",
+        );
+
+        for (const [actor, message] of [
+          [inactive, "You do not have access to this organization."],
+          [member, "You do not have permission to perform this action."],
+        ] as const) {
+          setActor(actor);
+          const before = await captureSnapshot(prisma, orgA.organizationId);
+          const result = await markCatalogueStepAction(
+            initialActionState,
+            buildMarkCatalogueStepFormData({
+              organizationSlug: orgA.slug,
+              onboardingExpectedVersion: String(orgA.onboarding.version),
+            }),
+          );
+          expect(result.status).toBe("error");
+          expect(result.message).toBe(message);
+          expectZeroWrites(
+            before,
+            await captureSnapshot(prisma, orgA.organizationId),
+          );
+        }
+
+        setActor(orgA.owner);
+        const beforeA = await captureSnapshot(prisma, orgA.organizationId);
+        const beforeB = await captureSnapshot(prisma, orgB.organizationId);
+        const cross = await markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: orgB.slug,
+            onboardingExpectedVersion: String(orgB.onboarding.version),
+          }),
+        );
+        expect(cross.status).toBe("error");
+        expect(cross.message).toBe(
+          "You do not have access to this organization.",
+        );
+        expectZeroWrites(
+          beforeA,
+          await captureSnapshot(prisma, orgA.organizationId),
+        );
+        expectZeroWrites(
+          beforeB,
+          await captureSnapshot(prisma, orgB.organizationId),
+        );
+      });
+    });
+
+    it("pre-start request does not initialize onboarding or business defaults", async () => {
+      const { owner, organizationId, slug } = await createOrgWithOwner(
+        prisma,
+        "act-catstep-prestart",
+        "Pre Start Catalogue",
+      );
+      setActor(owner);
+      await assertPreStartRecordsAbsent(prisma, organizationId);
+      const before = await captureSnapshot(prisma, organizationId);
+
+      const result = await markCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: "0",
+        }),
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.message).toBe("Organization not found.");
+      expectZeroWrites(before, await captureSnapshot(prisma, organizationId));
+      await assertPreStartRecordsAbsent(prisma, organizationId);
+    });
+
+    it("after completion returns already_completed without version change", async () => {
+      const { owner, organizationId, slug } = await createOrgWithOwner(
+        prisma,
+        "act-catstep-complete",
+        "Completed Catalogue",
+      );
+      await startOnboarding(owner, organizationId);
+      setActor(owner);
+      await seedReadinessFixtures({
+        owner,
+        organizationId,
+        slug,
+        businessType: "SERVICES",
+        withActiveService: true,
+      });
+      const completed = await completeOrganizationOnboarding({
+        actor: owner,
+        organizationId,
+      });
+      expect(completed.ok).toBe(true);
+      const onboardingBefore =
+        await prisma.organizationOnboarding.findUniqueOrThrow({
+          where: { organizationId },
+        });
+      const before = await captureSnapshot(prisma, organizationId);
+
+      const result = await markCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboardingBefore.version),
+        }),
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.message).toBe(
+        "Onboarding is complete. Reopen it before changing progress.",
+      );
+      const after = await captureSnapshot(prisma, organizationId);
+      expect(after.onboarding!.status).toBe("COMPLETED");
+      expect(after.onboarding!.version).toBe(onboardingBefore.version);
+      expectZeroWrites(before, after);
+    });
+
+    describe("readiness after successful mark (step not readiness-gated)", () => {
+      it.each([
+        ["SERVICES with active service", "SERVICES", true, false, true],
+        ["PRODUCTS with active product", "PRODUCTS", false, true, true],
+        ["BOTH with service and product", "BOTH", true, true, true],
+        ["BOTH missing product", "BOTH", true, false, false],
+        ["PRODUCTS with inactive product only", "PRODUCTS", false, true, false],
+      ] as const)(
+        "%s → ready=%s",
+        async (
+          _label,
+          businessType,
+          withActiveService,
+          withActiveProduct,
+          expectedReady,
+        ) => {
+          const { owner, organizationId, slug } = await createOrgWithOwner(
+            prisma,
+            `act-catstep-ready-${businessType}`,
+            "Readiness Org",
+          );
+          await startOnboarding(owner, organizationId);
+          setActor(owner);
+          await seedReadinessFixtures({
+            owner,
+            organizationId,
+            slug,
+            businessType,
+            withActiveService,
+            withActiveProduct,
+            inactiveProduct: _label.includes("inactive"),
+          });
+          const onboarding =
+            await prisma.organizationOnboarding.findUniqueOrThrow({
+              where: { organizationId },
+            });
+
+          const result = await markCatalogueStepAction(
+            initialActionState,
+            buildMarkCatalogueStepFormData({
+              organizationSlug: slug,
+              onboardingExpectedVersion: String(onboarding.version),
+            }),
+          );
+          expect(result.status).toBe("success");
+
+          const readiness = await computeConfigurationReadiness(
+            prisma,
+            organizationId,
+          );
+          expect(readiness.ready).toBe(expectedReady);
+          const row = await prisma.organizationOnboarding.findUniqueOrThrow({
+            where: { organizationId },
+          });
+          expect(row.currentStep).toBe("EMPLOYEE_DEFAULTS");
+        },
+      );
+    });
+
+    it("concurrent markCatalogueStepAction with same version yields one success", async () => {
+      const { organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-pall");
+
+      const [aResult, bResult] = await Promise.all([
+        markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        ),
+        markCatalogueStepAction(
+          initialActionState,
+          buildMarkCatalogueStepFormData({
+            organizationSlug: slug,
+            onboardingExpectedVersion: String(onboarding.version),
+          }),
+        ),
+      ]);
+
+      const outcomes = [aResult, bResult];
+      expect(outcomes.filter((r) => r.status === "success")).toHaveLength(1);
+      expect(
+        outcomes.filter(
+          (r) =>
+            r.status === "error" && /elsewhere|Reload/i.test(r.message ?? ""),
+        ),
+      ).toHaveLength(1);
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+      expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
+    });
+
+    it("deterministic advanceOnboardingStep CATALOGUE race serializes version", async () => {
+      const { owner, organizationId, onboarding } =
+        await seedCatalogueStepContext("act-catstep-gate");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-gate-admin",
+        "ADMIN",
+      );
+
+      const aHeld = createGate();
+      const bStarted = createGate();
+      const bGotLock = createGate();
+
+      const aPromise = advanceOnboardingStep(
+        {
+          actor: owner,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testAfterMembershipLock: async () => {
+            aHeld.markReached();
+            await aHeld.waitForRelease();
+          },
+        },
+      );
+      await aHeld.waitUntilReached();
+
+      const bPromise = advanceOnboardingStep(
+        {
+          actor: admin,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testBeforeReadinessLock: async () => {
+            bStarted.markReached();
+          },
+          testAfterReadinessLock: async () => {
+            bGotLock.markReached();
+          },
+        },
+      );
+      await bStarted.waitUntilReached();
+      aHeld.release();
+
+      const aResult = await aPromise;
+      await bGotLock.waitUntilReached();
+      const bResult = await bPromise;
+
+      expect(aResult.ok).toBe(true);
+      expect(bResult.ok).toBe(false);
+      if (!bResult.ok) expect(bResult.reason).toBe("conflict");
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+      expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
+    });
+
+    it("demotion-first prevents CATALOGUE advance with zero writes", async () => {
+      const { owner, organizationId, onboarding } =
+        await seedCatalogueStepContext("act-catstep-demote-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-demote-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const demotionHeld = createGate();
+      const advanceStarted = createGate();
+
+      const demotePromise = changeMemberRole(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+          nextRole: "MEMBER",
+        },
+        {
+          testAfterTargetMembershipLock: async () => {
+            demotionHeld.markReached();
+            await demotionHeld.waitForRelease();
+          },
+        },
+      );
+      await demotionHeld.waitUntilReached();
+
+      const advancePromise = advanceOnboardingStep(
+        {
+          actor: admin,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testBeforeMembershipLock: async () => {
+            advanceStarted.markReached();
+          },
+        },
+      );
+      await advanceStarted.waitUntilReached();
+      demotionHeld.release();
+
+      const demote = await demotePromise;
+      const advanced = await advancePromise;
+      expect(demote.ok).toBe(true);
+      expect(advanced.ok).toBe(false);
+      if (!advanced.ok) {
+        expect(["forbidden", "inactive_membership", "not_a_member"]).toContain(
+          advanced.reason,
+        );
+      }
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version);
+      expect(after.currentStep).toBe(onboarding.currentStep);
+    });
+
+    it("CATALOGUE advance-first then demotion commits; later privileged ops fail", async () => {
+      const { owner, organizationId, onboarding } =
+        await seedCatalogueStepContext("act-catstep-adv-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-adv-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const advanceHeld = createGate();
+      const demotionStarted = createGate();
+
+      const advancePromise = advanceOnboardingStep(
+        {
+          actor: admin,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testAfterMembershipLock: async () => {
+            advanceHeld.markReached();
+            await advanceHeld.waitForRelease();
+          },
+        },
+      );
+      await advanceHeld.waitUntilReached();
+
+      const demotePromise = changeMemberRole(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+          nextRole: "MEMBER",
+        },
+        {
+          testBeforeTargetMembershipLock: async () => {
+            demotionStarted.markReached();
+          },
+        },
+      );
+      await demotionStarted.waitUntilReached();
+      advanceHeld.release();
+
+      const advanced = await advancePromise;
+      const demote = await demotePromise;
+      expect(advanced.ok).toBe(true);
+      expect(demote.ok).toBe(true);
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+      expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
+
+      const later = await advanceOnboardingStep({
+        actor: admin,
+        organizationId,
+        step: "EMPLOYEE_DEFAULTS",
+        nextStep: "REVIEW",
+        expectedVersion: after.version,
+      });
+      expect(later.ok).toBe(false);
+    });
+
+    it("deactivation-first prevents CATALOGUE advance with zero writes", async () => {
+      const { owner, organizationId, onboarding } =
+        await seedCatalogueStepContext("act-catstep-deact-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-deact-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const deactivationHeld = createGate();
+      const advanceStarted = createGate();
+
+      const deactivatePromise = deactivateMember(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+        },
+        {
+          testAfterTargetMembershipLock: async () => {
+            deactivationHeld.markReached();
+            await deactivationHeld.waitForRelease();
+          },
+        },
+      );
+      await deactivationHeld.waitUntilReached();
+
+      const advancePromise = advanceOnboardingStep(
+        {
+          actor: admin,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testBeforeMembershipLock: async () => {
+            advanceStarted.markReached();
+          },
+        },
+      );
+      await advanceStarted.waitUntilReached();
+      deactivationHeld.release();
+
+      const deactivated = await deactivatePromise;
+      const advanced = await advancePromise;
+      expect(deactivated.ok).toBe(true);
+      expect(advanced.ok).toBe(false);
+      if (!advanced.ok) {
+        expect(["forbidden", "inactive_membership", "not_a_member"]).toContain(
+          advanced.reason,
+        );
+      }
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version);
+    });
+
+    it("CATALOGUE advance-first then deactivation commits; later privileged ops fail", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-adv-deact");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-adv-deact-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const advanceHeld = createGate();
+      const deactivationStarted = createGate();
+
+      const advancePromise = advanceOnboardingStep(
+        {
+          actor: admin,
+          organizationId,
+          step: "CATALOGUE",
+          nextStep: "EMPLOYEE_DEFAULTS",
+          expectedVersion: onboarding.version,
+        },
+        {
+          testAfterMembershipLock: async () => {
+            advanceHeld.markReached();
+            await advanceHeld.waitForRelease();
+          },
+        },
+      );
+      await advanceHeld.waitUntilReached();
+
+      const deactivatePromise = deactivateMember(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+        },
+        {
+          testBeforeTargetMembershipLock: async () => {
+            deactivationStarted.markReached();
+          },
+        },
+      );
+      await deactivationStarted.waitUntilReached();
+      advanceHeld.release();
+
+      const advanced = await advancePromise;
+      const deactivated = await deactivatePromise;
+      expect(advanced.ok).toBe(true);
+      expect(deactivated.ok).toBe(true);
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+
+      setActor(admin);
+      const laterAsAdmin = await markCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(after.version),
+        }),
+      );
+      expect(laterAsAdmin.status).toBe("error");
+      expect(laterAsAdmin.message).toMatch(/no longer active|access/i);
     });
   });
 });

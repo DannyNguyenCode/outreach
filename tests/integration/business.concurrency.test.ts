@@ -15,7 +15,10 @@ import {
   deactivateBusinessService,
   reorderBusinessServices,
 } from "@/lib/orgs/business-services";
-import { createBusinessProduct } from "@/lib/orgs/business-products";
+import {
+  createBusinessProduct,
+  reorderBusinessProducts,
+} from "@/lib/orgs/business-products";
 import {
   acceptOrganizationInvitation,
   createOrganizationInvitation,
@@ -221,6 +224,83 @@ describe("Phase 3A business concurrency", () => {
     expect([order1.join(","), order2.join(",")].includes(ids.join(","))).toBe(
       true,
     );
+  });
+
+  it("concurrent product reordering remains consistent", async () => {
+    const owner = await createVerifiedUser(prisma, "c-prod");
+    const org = await createOrganization(owner, {
+      name: "Concurrent Products",
+      slug: `c-prod-${randomUUID().slice(0, 8)}`,
+    });
+    if (!org.ok) return;
+
+    const created = [];
+    for (const name of ["P-A", "P-B", "P-C"]) {
+      const result = await createBusinessProduct({
+        actor: owner,
+        organizationId: org.organization.id,
+        raw: { name, sku: `${name}-${randomUUID().slice(0, 4)}` },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) created.push(result.product);
+    }
+
+    const order1 = [created[2].id, created[0].id, created[1].id];
+    const order2 = [created[1].id, created[2].id, created[0].id];
+
+    await Promise.all([
+      reorderBusinessProducts({
+        actor: owner,
+        organizationId: org.organization.id,
+        raw: { orderedIds: order1 },
+      }),
+      reorderBusinessProducts({
+        actor: owner,
+        organizationId: org.organization.id,
+        raw: { orderedIds: order2 },
+      }),
+    ]);
+
+    const products = await prisma.businessProduct.findMany({
+      where: { organizationId: org.organization.id },
+      orderBy: { displayOrder: "asc" },
+    });
+    const ids = products.map((p) => p.id);
+    expect(ids.length).toBe(3);
+    expect(new Set(ids).size).toBe(3);
+    expect([order1.join(","), order2.join(",")].includes(ids.join(","))).toBe(
+      true,
+    );
+  });
+
+  it("concurrent product creates succeed with unique display orders", async () => {
+    const owner = await createVerifiedUser(prisma, "c-prod-create");
+    const org = await createOrganization(owner, {
+      name: "Concurrent Product Creates",
+      slug: `c-prod-create-${randomUUID().slice(0, 8)}`,
+    });
+    if (!org.ok) return;
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, (_, index) =>
+        createBusinessProduct({
+          actor: owner,
+          organizationId: org.organization.id,
+          raw: {
+            name: `Concurrent Product ${index}`,
+            sku: `CP-${index}-${randomUUID().slice(0, 4)}`,
+          },
+        }),
+      ),
+    );
+
+    expect(results.every((r) => r.ok)).toBe(true);
+    const products = await prisma.businessProduct.findMany({
+      where: { organizationId: org.organization.id },
+    });
+    expect(products).toHaveLength(5);
+    const orders = products.map((p) => p.displayOrder);
+    expect(new Set(orders).size).toBe(5);
   });
 
   it("completion racing with last service deactivation cannot leave false ready", async () => {
