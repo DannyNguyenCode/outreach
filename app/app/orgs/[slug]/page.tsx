@@ -65,6 +65,22 @@ export default async function OrganizationHomePage({
         <ul className="flex flex-wrap gap-3 text-sm">
           <li>
             <Link
+              href={`/app/orgs/${slug}/onboarding`}
+              className="rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 hover:bg-[var(--background)]"
+            >
+              Business onboarding
+            </Link>
+          </li>
+          <li>
+            <Link
+              href={`/app/orgs/${slug}/settings`}
+              className="rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 hover:bg-[var(--background)]"
+            >
+              Organization settings
+            </Link>
+          </li>
+          <li>
+            <Link
               href={`/app/orgs/${slug}/members`}
               className="rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 hover:bg-[var(--background)]"
             >

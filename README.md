@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: Phase 2 organizations in progress. See [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) for multi-tenant membership, invitations, and authorization. Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
+> Project status: Phase 3A business onboarding in progress on `feature/phase-03a-business-onboarding`. See [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md). Phase 2 notes remain in [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md). Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Product vision
 
