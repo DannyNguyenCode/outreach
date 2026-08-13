@@ -52,6 +52,16 @@ export type ReadinessMutationTestHooks = {
   /** Invoked after the actor membership row lock is held. */
   testAfterMembershipLock?: () => Promise<void>;
   /**
+   * Invoked immediately before acquiring a specialized catalogue order lock
+   * (`products-order:` / `services-order:`). Production must omit.
+   */
+  testBeforeCatalogueOrderLock?: () => Promise<void>;
+  /**
+   * Invoked after a specialized catalogue order advisory lock is held.
+   * Production must omit.
+   */
+  testAfterCatalogueOrderLock?: () => Promise<void>;
+  /**
    * Invoked after the configuration write (and audit) inside the transaction
    * but before the optional onboarding progress transition. Production must omit.
    */

@@ -361,7 +361,13 @@ export async function reorderBusinessProducts(
         hooks,
       );
 
+      if (hooks.testBeforeCatalogueOrderLock) {
+        await hooks.testBeforeCatalogueOrderLock();
+      }
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`products-order:${input.organizationId}`}))`;
+      if (hooks.testAfterCatalogueOrderLock) {
+        await hooks.testAfterCatalogueOrderLock();
+      }
 
       const existing = await tx.businessProduct.findMany({
         where: { organizationId: input.organizationId },

@@ -55,6 +55,7 @@ import type { SafeUser } from "@/lib/auth/users";
 import { setMailerForTests, type EmailSender } from "@/lib/email/mailer";
 import { resetServerEnvCache } from "@/lib/env/server";
 import { computeConfigurationReadiness } from "@/lib/orgs/business-access";
+import { runMarkCatalogueStepAction } from "@/lib/orgs/mark-catalogue-step-action";
 import { changeMemberRole, deactivateMember } from "@/lib/orgs/memberships";
 import {
   advanceOnboardingStep,
@@ -63,6 +64,10 @@ import {
 } from "@/lib/orgs/onboarding";
 import { createOrganization } from "@/lib/orgs/organizations";
 import { resetApplicationData } from "@/tests/integration/reset";
+import {
+  captureBusinessDbSnapshot,
+  normalizeBusinessSnapshot,
+} from "@/tests/integration/helpers/business-snapshot";
 
 /**
  * Server-action boundary tests for Phase 3A.
@@ -3102,7 +3107,11 @@ describe("Phase 3A business server actions", () => {
       );
     });
 
-    it("concurrent markCatalogueStepAction with same version yields one success", async () => {
+    /**
+     * Stress-only: uncontrolled Promise.all does not prove lock ordering.
+     * See deterministic runMarkCatalogueStepAction race below for gated evidence.
+     */
+    it("stress: concurrent markCatalogueStepAction with same version yields one success", async () => {
       const { organizationId, slug, onboarding } =
         await seedCatalogueStepContext("act-catstep-pall");
 
@@ -3139,7 +3148,135 @@ describe("Phase 3A business server actions", () => {
       expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
     });
 
-    it("deterministic advanceOnboardingStep CATALOGUE race serializes version", async () => {
+    it("deterministic markCatalogueStepAction same-version race: one success, one conflict", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-det");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-det-admin",
+        "ADMIN",
+      );
+
+      const before = await captureBusinessDbSnapshot(prisma, organizationId);
+      const auditsBefore = before.audits.length;
+
+      const aHeld = createGate();
+      const bStarted = createGate();
+      const bGotLock = createGate();
+
+      setActor(owner);
+      const aPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testAfterMembershipLock: async () => {
+              aHeld.markReached();
+              await aHeld.waitForRelease();
+            },
+          },
+        },
+      );
+      await aHeld.waitUntilReached();
+
+      setActor(admin);
+      const bPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testBeforeReadinessLock: async () => {
+              bStarted.markReached();
+            },
+            testAfterReadinessLock: async () => {
+              bGotLock.markReached();
+            },
+          },
+        },
+      );
+      await bStarted.waitUntilReached();
+      let bGotEarly = false;
+      await Promise.race([
+        bGotLock.waitUntilReached().then(() => {
+          bGotEarly = true;
+        }),
+        Promise.resolve(),
+      ]);
+      expect(bGotEarly).toBe(false);
+
+      aHeld.release();
+      const aResult = await aPromise;
+      await bGotLock.waitUntilReached();
+      const bResult = await bPromise;
+
+      expect(aResult.status).toBe("success");
+      expect(aResult.message).toBe("Catalogue step saved.");
+      expect(bResult.status).toBe("error");
+      expect(bResult.message).toMatch(/elsewhere|Reload/i);
+
+      const after = await captureBusinessDbSnapshot(prisma, organizationId);
+      expect(after.onboarding?.version).toBe(onboarding.version + 1);
+      expect(after.onboarding?.currentStep).toBe("EMPLOYEE_DEFAULTS");
+      const steps = after.onboarding?.completedSteps as string[];
+      expect(steps.filter((s) => s === "CATALOGUE")).toHaveLength(1);
+      expect(after.onboarding?.status).toBe("IN_PROGRESS");
+      expect(after.onboarding?.completedAt).toBe(
+        before.onboarding?.completedAt,
+      );
+      expect(after.onboarding?.reopenedAt).toBe(before.onboarding?.reopenedAt);
+      expect(after.onboarding?.completedByUserId).toBe(
+        before.onboarding?.completedByUserId,
+      );
+      expect(after.onboarding?.reopenedByUserId).toBe(
+        before.onboarding?.reopenedByUserId,
+      );
+
+      const freshReadiness = await computeConfigurationReadiness(
+        prisma,
+        organizationId,
+      );
+      expect(after.onboarding?.isConfigurationReady).toBe(freshReadiness.ready);
+
+      expect(after.services).toEqual(before.services);
+      expect(after.products).toEqual(before.products);
+      expect(after.profile).toEqual(before.profile);
+      expect(after.primaryLocation).toEqual(before.primaryLocation);
+      expect(after.hours).toEqual(before.hours);
+      expect(after.settings).toEqual(before.settings);
+      // Advancement intentionally creates no progress audit event.
+      expect(after.audits).toHaveLength(auditsBefore);
+
+      setActor(owner);
+      const third = await runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+      );
+      expect(third.status).toBe("error");
+      expect(third.message).toMatch(/elsewhere|Reload/i);
+      const afterThird = await captureBusinessDbSnapshot(
+        prisma,
+        organizationId,
+      );
+      expect(normalizeBusinessSnapshot(afterThird)).toEqual(
+        normalizeBusinessSnapshot(after),
+      );
+    });
+
+    /**
+     * Service-level evidence (advanceOnboardingStep), not the direct action boundary.
+     * Retained for lock-order coverage of the orchestration service.
+     */
+    it("deterministic advanceOnboardingStep CATALOGUE race serializes version (service-level)", async () => {
       const { owner, organizationId, onboarding } =
         await seedCatalogueStepContext("act-catstep-gate");
       const admin = await addMember(
@@ -3205,7 +3342,11 @@ describe("Phase 3A business server actions", () => {
       expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
     });
 
-    it("demotion-first prevents CATALOGUE advance with zero writes", async () => {
+    /**
+     * Service-level demotion-first race (advanceOnboardingStep).
+     * Direct action-boundary coverage is in the markCatalogueStepAction tests below.
+     */
+    it("demotion-first prevents CATALOGUE advance with zero writes (service-level)", async () => {
       const { owner, organizationId, onboarding } =
         await seedCatalogueStepContext("act-catstep-demote-1st");
       const admin = await addMember(
@@ -3271,7 +3412,11 @@ describe("Phase 3A business server actions", () => {
       expect(after.currentStep).toBe(onboarding.currentStep);
     });
 
-    it("CATALOGUE advance-first then demotion commits; later privileged ops fail", async () => {
+    /**
+     * Service-level advance-first then demotion.
+     * Direct action-boundary coverage is in the markCatalogueStepAction tests below.
+     */
+    it("CATALOGUE advance-first then demotion commits; later privileged ops fail (service-level)", async () => {
       const { owner, organizationId, onboarding } =
         await seedCatalogueStepContext("act-catstep-adv-1st");
       const admin = await addMember(
@@ -3341,7 +3486,10 @@ describe("Phase 3A business server actions", () => {
       expect(later.ok).toBe(false);
     });
 
-    it("deactivation-first prevents CATALOGUE advance with zero writes", async () => {
+    /**
+     * Service-level deactivation-first race (advanceOnboardingStep).
+     */
+    it("deactivation-first prevents CATALOGUE advance with zero writes (service-level)", async () => {
       const { owner, organizationId, onboarding } =
         await seedCatalogueStepContext("act-catstep-deact-1st");
       const admin = await addMember(
@@ -3405,7 +3553,11 @@ describe("Phase 3A business server actions", () => {
       expect(after.version).toBe(onboarding.version);
     });
 
-    it("CATALOGUE advance-first then deactivation commits; later privileged ops fail", async () => {
+    /**
+     * Service-level advance-first then deactivation; later uses action boundary for the
+     * post-deactivation privileged attempt only.
+     */
+    it("CATALOGUE advance-first then deactivation commits; later privileged ops fail (service-level)", async () => {
       const { owner, organizationId, slug, onboarding } =
         await seedCatalogueStepContext("act-catstep-adv-deact");
       const admin = await addMember(
@@ -3473,6 +3625,280 @@ describe("Phase 3A business server actions", () => {
       );
       expect(laterAsAdmin.status).toBe("error");
       expect(laterAsAdmin.message).toMatch(/no longer active|access/i);
+    });
+
+    it("action-boundary demotion-first: markCatalogueStepAction fails with zero writes", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-act-demote-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-act-demote-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+      const before = await captureBusinessDbSnapshot(prisma, organizationId);
+
+      const demotionHeld = createGate();
+      const actionStarted = createGate();
+
+      const demotePromise = changeMemberRole(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+          nextRole: "MEMBER",
+        },
+        {
+          testAfterTargetMembershipLock: async () => {
+            demotionHeld.markReached();
+            await demotionHeld.waitForRelease();
+          },
+        },
+      );
+      await demotionHeld.waitUntilReached();
+
+      setActor(admin);
+      const actionPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testBeforeMembershipLock: async () => {
+              actionStarted.markReached();
+            },
+          },
+        },
+      );
+      await actionStarted.waitUntilReached();
+      demotionHeld.release();
+
+      const demote = await demotePromise;
+      const actionResult = await actionPromise;
+      expect(demote.ok).toBe(true);
+      expect(actionResult.status).toBe("error");
+      expect(actionResult.message).toMatch(/access|permission|member|active/i);
+
+      const after = await captureBusinessDbSnapshot(prisma, organizationId);
+      expect(after.onboarding).toEqual(before.onboarding);
+      expect(after.audits).toEqual(expect.arrayContaining(before.audits));
+      // Only demotion-related audits may be added; onboarding must be unchanged.
+      expect(after.onboarding?.version).toBe(onboarding.version);
+      expect(after.onboarding?.currentStep).toBe(onboarding.currentStep);
+      expect(after.products).toEqual(before.products);
+      expect(after.services).toEqual(before.services);
+    });
+
+    it("action-boundary catalogue-first then demotion: action succeeds", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-act-adv-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-act-adv-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const actionHeld = createGate();
+      const demotionStarted = createGate();
+
+      setActor(admin);
+      const actionPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testAfterMembershipLock: async () => {
+              actionHeld.markReached();
+              await actionHeld.waitForRelease();
+            },
+          },
+        },
+      );
+      await actionHeld.waitUntilReached();
+
+      const demotePromise = changeMemberRole(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+          nextRole: "MEMBER",
+        },
+        {
+          testBeforeTargetMembershipLock: async () => {
+            demotionStarted.markReached();
+          },
+        },
+      );
+      await demotionStarted.waitUntilReached();
+      actionHeld.release();
+
+      const actionResult = await actionPromise;
+      const demote = await demotePromise;
+      expect(actionResult.status).toBe("success");
+      expect(demote.ok).toBe(true);
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+      expect(after.currentStep).toBe("EMPLOYEE_DEFAULTS");
+
+      setActor(admin);
+      const later = await runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(after.version),
+        }),
+      );
+      expect(later.status).toBe("error");
+    });
+
+    it("action-boundary deactivation-first: markCatalogueStepAction fails with zero writes", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-act-deact-1st");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-act-deact-1st-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+      const before = await captureBusinessDbSnapshot(prisma, organizationId);
+
+      const deactivationHeld = createGate();
+      const actionStarted = createGate();
+
+      const deactivatePromise = deactivateMember(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+        },
+        {
+          testAfterTargetMembershipLock: async () => {
+            deactivationHeld.markReached();
+            await deactivationHeld.waitForRelease();
+          },
+        },
+      );
+      await deactivationHeld.waitUntilReached();
+
+      setActor(admin);
+      const actionPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testBeforeMembershipLock: async () => {
+              actionStarted.markReached();
+            },
+          },
+        },
+      );
+      await actionStarted.waitUntilReached();
+      deactivationHeld.release();
+
+      const deactivated = await deactivatePromise;
+      const actionResult = await actionPromise;
+      expect(deactivated.ok).toBe(true);
+      expect(actionResult.status).toBe("error");
+
+      const after = await captureBusinessDbSnapshot(prisma, organizationId);
+      expect(after.onboarding?.version).toBe(onboarding.version);
+      expect(after.onboarding?.currentStep).toBe(
+        before.onboarding?.currentStep,
+      );
+      expect(after.products).toEqual(before.products);
+      expect(after.services).toEqual(before.services);
+    });
+
+    it("action-boundary catalogue-first then deactivation: action succeeds", async () => {
+      const { owner, organizationId, slug, onboarding } =
+        await seedCatalogueStepContext("act-catstep-act-adv-deact");
+      const admin = await addMember(
+        prisma,
+        organizationId,
+        "act-catstep-act-adv-deact-admin",
+        "ADMIN",
+      );
+      const membership = await prisma.membership.findFirstOrThrow({
+        where: { organizationId, userId: admin.id },
+      });
+
+      const actionHeld = createGate();
+      const deactivationStarted = createGate();
+
+      setActor(admin);
+      const actionPromise = runMarkCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(onboarding.version),
+        }),
+        {
+          advanceHooks: {
+            testAfterMembershipLock: async () => {
+              actionHeld.markReached();
+              await actionHeld.waitForRelease();
+            },
+          },
+        },
+      );
+      await actionHeld.waitUntilReached();
+
+      const deactivatePromise = deactivateMember(
+        {
+          actor: owner,
+          organizationId,
+          membershipId: membership.id,
+        },
+        {
+          testBeforeTargetMembershipLock: async () => {
+            deactivationStarted.markReached();
+          },
+        },
+      );
+      await deactivationStarted.waitUntilReached();
+      actionHeld.release();
+
+      const actionResult = await actionPromise;
+      const deactivated = await deactivatePromise;
+      expect(actionResult.status).toBe("success");
+      expect(deactivated.ok).toBe(true);
+
+      const after = await prisma.organizationOnboarding.findUniqueOrThrow({
+        where: { organizationId },
+      });
+      expect(after.version).toBe(onboarding.version + 1);
+
+      setActor(admin);
+      const later = await markCatalogueStepAction(
+        initialActionState,
+        buildMarkCatalogueStepFormData({
+          organizationSlug: slug,
+          onboardingExpectedVersion: String(after.version),
+        }),
+      );
+      expect(later.status).toBe("error");
+      expect(later.message).toMatch(/no longer active|access/i);
     });
   });
 });

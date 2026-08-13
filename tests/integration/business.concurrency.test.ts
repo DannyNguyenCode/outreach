@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { hashPassword } from "@/lib/auth/password";
 import type { SafeUser } from "@/lib/auth/users";
 import { resetServerEnvCache } from "@/lib/env/server";
+import { computeConfigurationReadiness } from "@/lib/orgs/business-access";
 import {
   updateBusinessBasics,
   updateContactAndLocation,
@@ -31,6 +32,12 @@ import {
 import { replaceOperatingHours } from "@/lib/orgs/operating-hours";
 import { createOrganization } from "@/lib/orgs/organizations";
 import { setMailerForTests, type EmailSender } from "@/lib/email/mailer";
+import {
+  captureBusinessDbSnapshot,
+  countAudit,
+  createGate,
+  normalizeBusinessSnapshot,
+} from "@/tests/integration/helpers/business-snapshot";
 import { resetApplicationData } from "@/tests/integration/reset";
 
 const sent: Array<{ to: string; subject: string; text: string }> = [];
@@ -65,6 +72,23 @@ async function createVerifiedUser(
   };
 }
 
+async function addAdmin(
+  prisma: PrismaClient,
+  organizationId: string,
+  prefix: string,
+): Promise<SafeUser> {
+  const user = await createVerifiedUser(prisma, prefix);
+  await prisma.membership.create({
+    data: {
+      organizationId,
+      userId: user.id,
+      role: "ADMIN",
+      status: "ACTIVE",
+    },
+  });
+  return user;
+}
+
 function defaultWeek() {
   return [
     "MONDAY",
@@ -85,6 +109,32 @@ function defaultWeek() {
           sortOrder: 0,
         },
   );
+}
+
+function productIdentity(
+  products: Array<{
+    id: string;
+    name: string;
+    sku: string | null;
+    isActive: boolean;
+    organizationId: string;
+  }>,
+) {
+  return products
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: p.sku,
+      isActive: p.isActive,
+      organizationId: p.organizationId,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function isReorderAudit(event: { action: string; metadata: unknown }): boolean {
+  if (event.action !== "PRODUCT_UPDATED") return false;
+  const metadata = event.metadata as { reorder?: boolean } | null;
+  return metadata?.reorder === true;
 }
 
 describe("Phase 3A business concurrency", () => {
@@ -226,7 +276,11 @@ describe("Phase 3A business concurrency", () => {
     );
   });
 
-  it("concurrent product reordering remains consistent", async () => {
+  /**
+   * Stress-only: uncontrolled scheduling may interleave either submitted order.
+   * Not proof of lock acquisition order — see the gated product reorder test.
+   */
+  it("stress: concurrent product reordering remains consistent", async () => {
     const owner = await createVerifiedUser(prisma, "c-prod");
     const org = await createOrganization(owner, {
       name: "Concurrent Products",
@@ -273,7 +327,170 @@ describe("Phase 3A business concurrency", () => {
     );
   });
 
-  it("concurrent product creates succeed with unique display orders", async () => {
+  it("deterministic product reorder: A holds order lock, B commits second order", async () => {
+    const owner = await createVerifiedUser(prisma, "c-prod-det-a");
+    const orgA = await createOrganization(owner, {
+      name: "Deterministic Product Reorder A",
+      slug: `c-prod-det-a-${randomUUID().slice(0, 8)}`,
+    });
+    expect(orgA.ok).toBe(true);
+    if (!orgA.ok) return;
+    const organizationId = orgA.organization.id;
+    await startOrganizationOnboarding({ actor: owner, organizationId });
+
+    const admin = await addAdmin(prisma, organizationId, "c-prod-det-admin");
+
+    const ownerB = await createVerifiedUser(prisma, "c-prod-det-b");
+    const orgB = await createOrganization(ownerB, {
+      name: "Deterministic Product Reorder B",
+      slug: `c-prod-det-b-${randomUUID().slice(0, 8)}`,
+    });
+    expect(orgB.ok).toBe(true);
+    if (!orgB.ok) return;
+    const organizationBId = orgB.organization.id;
+    await startOrganizationOnboarding({
+      actor: ownerB,
+      organizationId: organizationBId,
+    });
+    const sentinelProduct = await createBusinessProduct({
+      actor: ownerB,
+      organizationId: organizationBId,
+      raw: { name: "Sentinel B", sku: `SEN-B-${randomUUID().slice(0, 4)}` },
+    });
+    expect(sentinelProduct.ok).toBe(true);
+
+    const created = [];
+    for (const name of ["P1", "P2", "P3"]) {
+      const result = await createBusinessProduct({
+        actor: owner,
+        organizationId,
+        raw: { name, sku: `${name}-${randomUUID().slice(0, 4)}` },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) created.push(result.product);
+    }
+
+    const orderA = [created[2].id, created[0].id, created[1].id];
+    const orderB = [created[1].id, created[2].id, created[0].id];
+    expect(orderA.join(",")).not.toBe(orderB.join(","));
+
+    const beforeA = await captureBusinessDbSnapshot(prisma, organizationId);
+    const beforeB = await captureBusinessDbSnapshot(prisma, organizationBId);
+    const reorderAuditsBefore = beforeA.audits.filter(isReorderAudit).length;
+
+    const aHeld = createGate();
+    const bStarted = createGate();
+    const bGotLock = createGate();
+
+    const aPromise = reorderBusinessProducts(
+      {
+        actor: admin,
+        organizationId,
+        raw: { orderedIds: orderA },
+      },
+      {
+        testAfterCatalogueOrderLock: async () => {
+          aHeld.markReached();
+          await aHeld.waitForRelease();
+        },
+      },
+    );
+    await aHeld.waitUntilReached();
+
+    const bPromise = reorderBusinessProducts(
+      {
+        actor: owner,
+        organizationId,
+        raw: { orderedIds: orderB },
+      },
+      {
+        testBeforeCatalogueOrderLock: async () => {
+          bStarted.markReached();
+        },
+        testAfterCatalogueOrderLock: async () => {
+          bGotLock.markReached();
+        },
+      },
+    );
+    await bStarted.waitUntilReached();
+    let bGotEarly = false;
+    await Promise.race([
+      bGotLock.waitUntilReached().then(() => {
+        bGotEarly = true;
+      }),
+      Promise.resolve(),
+    ]);
+    expect(bGotEarly).toBe(false);
+
+    aHeld.release();
+    const aResult = await aPromise;
+    await bGotLock.waitUntilReached();
+    const bResult = await bPromise;
+
+    expect(aResult.ok).toBe(true);
+    expect(bResult.ok).toBe(true);
+    if (!aResult.ok || !bResult.ok) return;
+    expect(JSON.stringify(aResult)).not.toMatch(/Prisma|PostgreSQL|P20\d{2}/i);
+    expect(JSON.stringify(bResult)).not.toMatch(/Prisma|PostgreSQL|P20\d{2}/i);
+
+    const afterA = await captureBusinessDbSnapshot(prisma, organizationId);
+    const afterB = await captureBusinessDbSnapshot(prisma, organizationBId);
+
+    expect(afterA.products.map((p) => p.id)).toEqual(orderB);
+    expect(afterA.products.map((p) => p.displayOrder)).toEqual([0, 1, 2]);
+    expect(new Set(afterA.products.map((p) => p.id)).size).toBe(3);
+    expect(productIdentity(afterA.products)).toEqual(
+      productIdentity(beforeA.products),
+    );
+
+    expect(afterA.profile).toEqual(beforeA.profile);
+    expect(afterA.primaryLocation).toEqual(beforeA.primaryLocation);
+    expect(afterA.hours).toEqual(beforeA.hours);
+    expect(afterA.settings).toEqual(beforeA.settings);
+    expect(afterA.onboarding).toEqual(beforeA.onboarding);
+    expect(afterA.services).toEqual(beforeA.services);
+
+    const reorderAudits = afterA.audits.filter(isReorderAudit);
+    expect(reorderAudits).toHaveLength(reorderAuditsBefore + 2);
+    expect(
+      reorderAudits
+        .slice(-2)
+        .map((event) => event.actorUserId)
+        .sort(),
+    ).toEqual([admin.id, owner.id].sort());
+    for (const event of reorderAudits.slice(-2)) {
+      const metadata = event.metadata as {
+        reorder?: boolean;
+        count?: number;
+      };
+      expect(metadata.reorder).toBe(true);
+      expect(metadata.count).toBe(3);
+    }
+
+    const freshReadiness = await computeConfigurationReadiness(
+      prisma,
+      organizationId,
+    );
+    expect(afterA.onboarding?.isConfigurationReady).toBe(freshReadiness.ready);
+
+    expect(normalizeBusinessSnapshot(afterB)).toEqual(
+      normalizeBusinessSnapshot(beforeB),
+    );
+    expect(
+      afterA.products.every((p) => p.organizationId === organizationId),
+    ).toBe(true);
+    if (sentinelProduct.ok) {
+      expect(
+        afterA.products.some((p) => p.id === sentinelProduct.product.id),
+      ).toBe(false);
+    }
+  });
+
+  /**
+   * Stress-only: uncontrolled concurrent creates. Not proof of readiness-lock
+   * ordering — see the gated product-create test.
+   */
+  it("stress: concurrent product creates succeed with unique display orders", async () => {
     const owner = await createVerifiedUser(prisma, "c-prod-create");
     const org = await createOrganization(owner, {
       name: "Concurrent Product Creates",
@@ -301,6 +518,175 @@ describe("Phase 3A business concurrency", () => {
     expect(products).toHaveLength(5);
     const orders = products.map((p) => p.displayOrder);
     expect(new Set(orders).size).toBe(5);
+  });
+
+  it("deterministic concurrent product create serializes on readiness lock", async () => {
+    const owner = await createVerifiedUser(prisma, "c-prod-cr-det");
+    const orgA = await createOrganization(owner, {
+      name: "Deterministic Product Create A",
+      slug: `c-prod-cr-a-${randomUUID().slice(0, 8)}`,
+    });
+    expect(orgA.ok).toBe(true);
+    if (!orgA.ok) return;
+    const organizationId = orgA.organization.id;
+    await startOrganizationOnboarding({ actor: owner, organizationId });
+    const admin = await addAdmin(prisma, organizationId, "c-prod-cr-admin");
+
+    const ownerB = await createVerifiedUser(prisma, "c-prod-cr-b");
+    const orgB = await createOrganization(ownerB, {
+      name: "Deterministic Product Create B",
+      slug: `c-prod-cr-b-${randomUUID().slice(0, 8)}`,
+    });
+    expect(orgB.ok).toBe(true);
+    if (!orgB.ok) return;
+    const organizationBId = orgB.organization.id;
+    await startOrganizationOnboarding({
+      actor: ownerB,
+      organizationId: organizationBId,
+    });
+    const existingB = await createBusinessProduct({
+      actor: ownerB,
+      organizationId: organizationBId,
+      raw: { name: "Org B Existing", sku: `OB-${randomUUID().slice(0, 4)}` },
+    });
+    expect(existingB.ok).toBe(true);
+
+    const seed = await createBusinessProduct({
+      actor: owner,
+      organizationId,
+      raw: { name: "Seed Product", sku: `SEED-${randomUUID().slice(0, 4)}` },
+    });
+    expect(seed.ok).toBe(true);
+    if (!seed.ok) return;
+
+    const beforeA = await captureBusinessDbSnapshot(prisma, organizationId);
+    const beforeB = await captureBusinessDbSnapshot(prisma, organizationBId);
+    const createdAuditsBefore = countAudit(beforeA, "PRODUCT_CREATED");
+
+    const aHeld = createGate();
+    const bStarted = createGate();
+    const bGotLock = createGate();
+
+    const aPromise = createBusinessProduct(
+      {
+        actor: admin,
+        organizationId,
+        raw: {
+          name: "Created A",
+          sku: `CA-${randomUUID().slice(0, 4)}`,
+        },
+      },
+      {
+        testAfterMembershipLock: async () => {
+          aHeld.markReached();
+          await aHeld.waitForRelease();
+        },
+      },
+    );
+    await aHeld.waitUntilReached();
+
+    const bPromise = createBusinessProduct(
+      {
+        actor: owner,
+        organizationId,
+        raw: {
+          name: "Created B",
+          sku: `CB-${randomUUID().slice(0, 4)}`,
+        },
+      },
+      {
+        testBeforeReadinessLock: async () => {
+          bStarted.markReached();
+        },
+        testAfterReadinessLock: async () => {
+          bGotLock.markReached();
+        },
+      },
+    );
+    await bStarted.waitUntilReached();
+    let bGotEarly = false;
+    await Promise.race([
+      bGotLock.waitUntilReached().then(() => {
+        bGotEarly = true;
+      }),
+      Promise.resolve(),
+    ]);
+    expect(bGotEarly).toBe(false);
+
+    aHeld.release();
+    const aResult = await aPromise;
+    await bGotLock.waitUntilReached();
+    const bResult = await bPromise;
+
+    expect(aResult.ok).toBe(true);
+    expect(bResult.ok).toBe(true);
+    if (!aResult.ok || !bResult.ok) return;
+
+    const afterA = await captureBusinessDbSnapshot(prisma, organizationId);
+    const afterB = await captureBusinessDbSnapshot(prisma, organizationBId);
+
+    expect(afterA.products).toHaveLength(3);
+    expect(new Set(afterA.products.map((p) => p.id)).size).toBe(3);
+    const orders = afterA.products
+      .map((p) => p.displayOrder)
+      .sort((a, b) => a - b);
+    expect(orders).toEqual([0, 1, 2]);
+
+    const committedIds = new Set(afterA.products.map((p) => p.id));
+    expect(committedIds.has(aResult.product.id)).toBe(true);
+    expect(committedIds.has(bResult.product.id)).toBe(true);
+    expect(aResult.product.id).not.toBe(bResult.product.id);
+
+    const dbA = afterA.products.find((p) => p.id === aResult.product.id);
+    const dbB = afterA.products.find((p) => p.id === bResult.product.id);
+    expect(dbA?.name).toBe("Created A");
+    expect(dbB?.name).toBe("Created B");
+    expect(dbA?.displayOrder).toBe(aResult.product.displayOrder);
+    expect(dbB?.displayOrder).toBe(bResult.product.displayOrder);
+    expect(aResult.product.displayOrder).toBe(1);
+    expect(bResult.product.displayOrder).toBe(2);
+
+    expect(afterA.products.find((p) => p.id === seed.product.id)).toMatchObject(
+      {
+        name: "Seed Product",
+        sku: seed.product.sku,
+        isActive: true,
+        displayOrder: 0,
+      },
+    );
+
+    expect(countAudit(afterA, "PRODUCT_CREATED")).toBe(createdAuditsBefore + 2);
+    const newCreated = afterA.audits
+      .filter((e) => e.action === "PRODUCT_CREATED")
+      .slice(-2);
+    expect(newCreated.map((e) => e.actorUserId).sort()).toEqual(
+      [admin.id, owner.id].sort(),
+    );
+
+    const freshReadiness = await computeConfigurationReadiness(
+      prisma,
+      organizationId,
+    );
+    expect(afterA.onboarding?.isConfigurationReady).toBe(freshReadiness.ready);
+    expect(afterA.profile).toEqual(beforeA.profile);
+    expect(afterA.primaryLocation).toEqual(beforeA.primaryLocation);
+    expect(afterA.hours).toEqual(beforeA.hours);
+    expect(afterA.settings).toEqual(beforeA.settings);
+    expect(afterA.services).toEqual(beforeA.services);
+    expect(afterA.onboarding?.version).toBe(beforeA.onboarding?.version);
+    expect(afterA.onboarding?.currentStep).toBe(
+      beforeA.onboarding?.currentStep,
+    );
+    expect(afterA.onboarding?.completedSteps).toEqual(
+      beforeA.onboarding?.completedSteps,
+    );
+
+    expect(normalizeBusinessSnapshot(afterB)).toEqual(
+      normalizeBusinessSnapshot(beforeB),
+    );
+    expect(
+      afterA.products.every((p) => p.organizationId === organizationId),
+    ).toBe(true);
   });
 
   it("completion racing with last service deactivation cannot leave false ready", async () => {

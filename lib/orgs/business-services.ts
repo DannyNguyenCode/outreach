@@ -324,7 +324,13 @@ export async function reorderBusinessServices(
         hooks,
       );
 
+      if (hooks.testBeforeCatalogueOrderLock) {
+        await hooks.testBeforeCatalogueOrderLock();
+      }
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`services-order:${input.organizationId}`}))`;
+      if (hooks.testAfterCatalogueOrderLock) {
+        await hooks.testAfterCatalogueOrderLock();
+      }
 
       const existing = await tx.businessService.findMany({
         where: { organizationId: input.organizationId },

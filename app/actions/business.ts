@@ -35,13 +35,13 @@ import {
 } from "@/lib/orgs/business-services";
 import { replaceOperatingHours } from "@/lib/orgs/operating-hours";
 import {
-  advanceOnboardingStep,
   completeOrganizationOnboarding,
   reopenOrganizationOnboarding,
   startOrganizationOnboarding,
 } from "@/lib/orgs/onboarding";
 import { updateOrganizationSettings } from "@/lib/orgs/organization-settings";
 import { requireExpectedVersion } from "@/lib/orgs/business-validation";
+import { runMarkCatalogueStepAction } from "@/lib/orgs/mark-catalogue-step-action";
 import { prisma } from "@/lib/prisma";
 
 function parseRequiredExpectedVersion(
@@ -586,26 +586,7 @@ export async function markCatalogueStepAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const resolved = await resolveOrgFromForm(formData);
-  if (resolved.error || !resolved.membership) return resolved.error!;
-
-  const onboardingVersion = parseRequiredExpectedVersion(
-    formData,
-    "onboardingExpectedVersion",
-  );
-  if (!("ok" in onboardingVersion)) return onboardingVersion;
-
-  const result = await advanceOnboardingStep({
-    actor: resolved.user,
-    organizationId: resolved.membership.organizationId,
-    step: "CATALOGUE",
-    nextStep: "EMPLOYEE_DEFAULTS",
-    expectedVersion: onboardingVersion.version,
-  });
-
-  if (!result.ok) return failureFromService(result);
-  revalidateOrgPaths(resolved.slug);
-  return { status: "success", message: "Catalogue step saved." };
+  return runMarkCatalogueStepAction(_prev, formData);
 }
 
 export async function startOnboardingAction(
