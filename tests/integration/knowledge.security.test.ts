@@ -291,7 +291,6 @@ describe("Phase 4A knowledge security", () => {
       fixtures.expired.sourceId,
       fixtures.archived.sourceId,
       fixtures.wrongCategory.sourceId,
-      fixtures.wrongKind.sourceId,
       otherVisible.source.id,
       unknownId,
     ];
@@ -316,7 +315,6 @@ describe("Phase 4A knowledge security", () => {
       fixtures.superseded,
       fixtures.replacementDraft,
       fixtures.wrongCategory,
-      fixtures.wrongKind,
       {
         sourceId: otherVisible.source.id,
         versionId: otherVisible.version.id,
@@ -386,7 +384,6 @@ describe("Phase 4A knowledge security", () => {
       "superseded-historical-body",
       "secret-replacement-draft-body",
       "wrong-category-body",
-      "wrong-kind-body",
     ]) {
       expect(bodies).not.toContain(hiddenBody);
     }

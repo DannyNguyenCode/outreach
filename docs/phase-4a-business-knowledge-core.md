@@ -159,7 +159,7 @@ Forward-only migrations:
 
 ## Test strategy
 
-- Unit: `lib/orgs/knowledge-validation.test.ts`, `lib/time/organization-datetime.test.ts`, permission coverage in `lib/orgs/permissions.test.ts`
+- Unit: `lib/orgs/knowledge-validation.test.ts`, `lib/orgs/knowledge-visibility.test.ts`, `lib/time/organization-datetime.test.ts`, permission coverage in `lib/orgs/permissions.test.ts`. Visibility unit tests prove `inputKind: MANUAL` without mutating the database enum; Phase 4B must add database coverage when a real non-MANUAL kind exists.
 - Integration: `tests/integration/knowledge.*.test.ts` including schema-integrity, concurrency gates, and action boundaries
 - Playwright: `e2e/knowledge.spec.ts` (create → retrieve → replacement → confirm → archive → restore draft → reconfirm)
 - Phase 0–3B regression must remain green

@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { PrismaClient } from "@prisma/client";
 
 import type { SafeUser } from "@/lib/auth/users";
@@ -136,18 +134,6 @@ export type KnowledgeIdPair = {
   versionId: string;
   title: string;
 };
-
-/**
- * Not a product input kind. Used only to prove member SQL filters reject
- * non-MANUAL rows without implementing Phase 4B writers.
- */
-export const TEST_NON_MANUAL_INPUT_KIND = "TEST_NON_MANUAL";
-
-export async function ensureTestNonManualInputKind(prisma: PrismaClient) {
-  await prisma.$executeRawUnsafe(
-    `ALTER TYPE "KnowledgeInputKind" ADD VALUE IF NOT EXISTS '${TEST_NON_MANUAL_INPUT_KIND}'`,
-  );
-}
 
 async function confirmCreatedDraft(
   actor: SafeUser,
@@ -421,29 +407,6 @@ export async function createMemberAccessFixtures(
     body: "wrong-category-body",
   });
 
-  await ensureTestNonManualInputKind(prisma);
-  const wrongKindSourceId = `ksrc_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO "KnowledgeSource" (
-      id, "organizationId", "inputKind", category, title, version, "createdAt", "updatedAt"
-    ) VALUES (
-      $1, $2, $3::"KnowledgeInputKind", $4::"KnowledgeSourceCategory",
-      $5, 0, NOW(), NOW()
-    )`,
-    wrongKindSourceId,
-    organizationId,
-    TEST_NON_MANUAL_INPUT_KIND,
-    "CUSTOMER_CONFIRMED_BUSINESS_FACTS",
-    "Wrong kind policy",
-  );
-  const wrongKind = await insertConfirmedVersion(prisma, {
-    organizationId,
-    sourceId: wrongKindSourceId,
-    confirmerUserId: actor.id,
-    title: "Wrong kind policy",
-    body: "wrong-kind-body",
-  });
-
   return {
     draft,
     future,
@@ -455,7 +418,6 @@ export async function createMemberAccessFixtures(
     replacementDraft,
     zebra,
     wrongCategory,
-    wrongKind,
     visibleTitles: [
       "Alpha member policy",
       "Currently effective member policy",
