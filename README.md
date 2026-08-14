@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: Phase 3B business templates and operational settings in progress on `feature/phase-03b-business-templates-settings`. See [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md). Phase 3A notes remain in [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md). Phase 2 notes remain in [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md). Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
+> Project status: Phase 4A manual business knowledge core in progress on `feature/phase-04a-business-knowledge-core`. See [`docs/phase-4a-business-knowledge-core.md`](./docs/phase-4a-business-knowledge-core.md). Phase 3B notes remain in [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md). Phase 3A notes remain in [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md). Phase 2 notes remain in [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md). Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Product vision
 
@@ -210,6 +210,9 @@ Developer docs:
 - [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — foundation setup
 - [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — authentication
 - [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) — organizations and memberships
+- [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md) — business onboarding
+- [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md) — templates and operational settings
+- [`docs/phase-4a-business-knowledge-core.md`](./docs/phase-4a-business-knowledge-core.md) — manual business knowledge
 
 ## Project documents
 
@@ -218,9 +221,12 @@ Developer docs:
 - [`docs/phase-0-setup.md`](./docs/phase-0-setup.md) — Phase 0 local setup and verification
 - [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md) — Phase 1 authentication
 - [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md) — Phase 2 organizations
+- [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md) — Phase 3A business onboarding
+- [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md) — Phase 3B templates and settings
+- [`docs/phase-4a-business-knowledge-core.md`](./docs/phase-4a-business-knowledge-core.md) — Phase 4A manual business knowledge
 
 If documents conflict, `requirements.md` defines product behavior. The implementation phases define build order and decomposition, and this README serves as the project entry point.
 
 ## Current next step
 
-Complete Phase 2 review, then begin Phase 3 (business onboarding and organization configuration).
+Complete Phase 4A review, then begin Phase 4B (private document upload and processing).

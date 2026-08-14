@@ -81,6 +81,14 @@ export default async function OrganizationHomePage({
           </li>
           <li>
             <Link
+              href={`/app/orgs/${slug}/knowledge`}
+              className="rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 hover:bg-[var(--background)]"
+            >
+              Business knowledge
+            </Link>
+          </li>
+          <li>
+            <Link
               href={`/app/orgs/${slug}/members`}
               className="rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 hover:bg-[var(--background)]"
             >
