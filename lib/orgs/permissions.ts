@@ -1,7 +1,7 @@
 import type { OrganizationRole } from "@prisma/client";
 
 /**
- * Centralized organization permission policy (Phase 2 + Phase 3A + Phase 3B).
+ * Centralized organization permission policy (Phase 2 + Phase 3A + Phase 3B + Phase 4A).
  * UI visibility is not authorization — every mutation must call these helpers.
  *
  * Phase 3A employee-default settings may further restrict MEMBER reads for
@@ -9,6 +9,9 @@ import type { OrganizationRole } from "@prisma/client";
  *
  * Phase 3B: OWNER/ADMIN get org.config.* and org.templates.*; MEMBER gets
  * org.config.read and org.templates.read only.
+ *
+ * Phase 4A: OWNER/ADMIN get org.knowledge.manage / confirm / archive.
+ * MEMBER gets org.knowledge.read (active confirmed knowledge only).
  */
 
 export type OrganizationPermission =
@@ -38,7 +41,11 @@ export type OrganizationPermission =
   | "org.config.read"
   | "org.config.manage"
   | "org.templates.read"
-  | "org.templates.manage";
+  | "org.templates.manage"
+  | "org.knowledge.read"
+  | "org.knowledge.manage"
+  | "org.knowledge.confirm"
+  | "org.knowledge.archive";
 
 const ROLE_PERMISSIONS: Record<
   OrganizationRole,
@@ -72,6 +79,10 @@ const ROLE_PERMISSIONS: Record<
     "org.config.manage",
     "org.templates.read",
     "org.templates.manage",
+    "org.knowledge.read",
+    "org.knowledge.manage",
+    "org.knowledge.confirm",
+    "org.knowledge.archive",
   ]),
   ADMIN: new Set([
     "org.view",
@@ -100,6 +111,10 @@ const ROLE_PERMISSIONS: Record<
     "org.config.manage",
     "org.templates.read",
     "org.templates.manage",
+    "org.knowledge.read",
+    "org.knowledge.manage",
+    "org.knowledge.confirm",
+    "org.knowledge.archive",
   ]),
   MEMBER: new Set([
     "org.view",
@@ -110,6 +125,7 @@ const ROLE_PERMISSIONS: Record<
     "org.products.read",
     "org.config.read",
     "org.templates.read",
+    "org.knowledge.read",
   ]),
 };
 

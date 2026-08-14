@@ -35,6 +35,10 @@ model User {
   customFieldsCreated  CustomFieldDefinition[]   @relation("CustomFieldCreator")
   customFieldsUpdated  CustomFieldDefinition[]   @relation("CustomFieldUpdater")
   configProgressUpdated OrganizationConfigProgress[] @relation("ConfigProgressUpdater")
+  knowledgeSourcesCreated  KnowledgeSource[]  @relation("KnowledgeSourceCreator")
+  knowledgeSourcesArchived KnowledgeSource[]  @relation("KnowledgeSourceArchiver")
+  knowledgeVersionsCreated KnowledgeVersion[] @relation("KnowledgeVersionCreator")
+  knowledgeVersionsConfirmed KnowledgeVersion[] @relation("KnowledgeVersionConfirmer")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -126,6 +130,12 @@ enum OrganizationAuditAction {
   CALL_DISPOSITIONS_UPDATED
   ORGANIZATION_LOCALE_UPDATED
   CONFIG_PROGRESS_UPDATED
+  KNOWLEDGE_SOURCE_CREATED
+  KNOWLEDGE_DRAFT_UPDATED
+  KNOWLEDGE_REPLACEMENT_DRAFT_CREATED
+  KNOWLEDGE_VERSION_CONFIRMED
+  KNOWLEDGE_SOURCE_ARCHIVED
+  KNOWLEDGE_VERSION_RESTORED
 }
 
 enum BusinessType {
@@ -272,6 +282,10 @@ model Organization {
   holidayClosures       HolidayClosure[]
   leadStageDefaults     LeadStageDefault[]
   callDispositionDefaults CallDispositionDefault[]
+  knowledgeSources      KnowledgeSource[]
+  knowledgeVersions     KnowledgeVersion[]
+  knowledgeSections     KnowledgeSection[]
+  knowledgePassages     KnowledgePassage[]
 
   @@index([createdAt])
 }
@@ -707,4 +721,139 @@ model OrganizationConfigProgress {
   updatedAt             DateTime             @updatedAt
 
   @@index([status])
+}
+
+/// How knowledge entered the workspace. Phase 4A persists MANUAL only.
+enum KnowledgeInputKind {
+  MANUAL
+}
+
+/// Source-class labels (KNOW-004). Phase 4A may activate only customer-confirmed facts.
+enum KnowledgeSourceCategory {
+  CUSTOMER_CONFIRMED_BUSINESS_FACTS
+  PLATFORM_MAINTAINED_GUIDANCE
+  PROSPECT_EVIDENCE
+  CRM_HISTORY
+  CALLER_STATEMENTS
+  REPRESENTATIVE_NOTES
+  LIVE_OPERATIONAL_DATA
+  AI_INFERENCES
+}
+
+/// Shared Phase 4 lifecycle. Manual 4A writers use DRAFT/ACTIVE/SUPERSEDED/ARCHIVED.
+enum KnowledgeLifecycleState {
+  DRAFT
+  PROCESSING
+  NEEDS_ATTENTION
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+  FAILED
+}
+
+/// Organization-owned logical knowledge identity. Versions are immutable once confirmed.
+model KnowledgeSource {
+  id               String                   @id @default(cuid())
+  organizationId   String
+  organization     Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inputKind        KnowledgeInputKind       @default(MANUAL)
+  category         KnowledgeSourceCategory
+  /// Display title denormalized from the current draft or active version.
+  title            String
+  archivedAt       DateTime?
+  archivedByUserId String?
+  archivedBy       User?                    @relation("KnowledgeSourceArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  createdByUserId  String?
+  createdBy        User?                    @relation("KnowledgeSourceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  /// OCC for source-level archive / restore / replacement-draft creation.
+  version          Int                      @default(0)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  versions         KnowledgeVersion[]
+  sections         KnowledgeSection[]
+  passages         KnowledgePassage[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, archivedAt])
+  @@index([organizationId, category])
+  @@index([organizationId, title])
+}
+
+/// Immutable confirmed content identity. Drafts may be updated until confirmation.
+model KnowledgeVersion {
+  id                          String                  @id @default(cuid())
+  organizationId              String
+  organization                Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceId                    String
+  source                      KnowledgeSource         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  state                       KnowledgeLifecycleState
+  title                       String
+  contentChecksum             String
+  effectiveFrom               DateTime?
+  effectiveUntil              DateTime?
+  /// OCC for draft updates and confirmation. Frozen after confirmation.
+  draftRevision               Int                     @default(0)
+  createdByUserId             String?
+  createdBy                   User?                   @relation("KnowledgeVersionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  confirmerUserId             String?
+  confirmer                   User?                   @relation("KnowledgeVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: SetNull)
+  confirmedAt                 DateTime?
+  confirmationLanguageVersion String?
+  /// Previous active version this confirmation replaced, if any.
+  supersedesVersionId         String?
+  /// Historical version this draft was restored from, if any.
+  restoredFromVersionId       String?
+  createdAt                   DateTime                @default(now())
+  updatedAt                   DateTime                @updatedAt
+  sections                    KnowledgeSection[]
+  passages                    KnowledgePassage[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId, state])
+  @@index([sourceId, state])
+  @@index([organizationId, state, effectiveFrom])
+  @@index([contentChecksum])
+}
+
+model KnowledgeSection {
+  id             String             @id @default(cuid())
+  organizationId String
+  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceId       String
+  source         KnowledgeSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  versionId      String
+  version        KnowledgeVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  citationKey    String
+  title          String
+  displayOrder   Int
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  passages       KnowledgePassage[]
+
+  @@unique([versionId, citationKey])
+  @@unique([versionId, displayOrder])
+  @@index([organizationId, versionId, displayOrder])
+  @@index([sourceId])
+}
+
+model KnowledgePassage {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceId       String
+  source         KnowledgeSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  versionId      String
+  version        KnowledgeVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  sectionId      String
+  section        KnowledgeSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  citationKey    String
+  body           String
+  displayOrder   Int
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([sectionId, citationKey])
+  @@unique([sectionId, displayOrder])
+  @@index([organizationId, versionId])
+  @@index([sourceId])
 }

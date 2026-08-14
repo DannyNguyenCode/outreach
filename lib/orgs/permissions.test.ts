@@ -122,4 +122,21 @@ describe("organization permissions", () => {
     expect(roleHasPermission("MEMBER", "org.config.manage")).toBe(false);
     expect(roleHasPermission("MEMBER", "org.templates.manage")).toBe(false);
   });
+
+  it("grants Phase 4A knowledge permissions by role", () => {
+    for (const permission of [
+      "org.knowledge.read",
+      "org.knowledge.manage",
+      "org.knowledge.confirm",
+      "org.knowledge.archive",
+    ] as const) {
+      expect(roleHasPermission("OWNER", permission)).toBe(true);
+      expect(roleHasPermission("ADMIN", permission)).toBe(true);
+    }
+
+    expect(roleHasPermission("MEMBER", "org.knowledge.read")).toBe(true);
+    expect(roleHasPermission("MEMBER", "org.knowledge.manage")).toBe(false);
+    expect(roleHasPermission("MEMBER", "org.knowledge.confirm")).toBe(false);
+    expect(roleHasPermission("MEMBER", "org.knowledge.archive")).toBe(false);
+  });
 });
