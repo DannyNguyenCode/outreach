@@ -110,6 +110,12 @@ export class OnboardingLifecycleError extends Error {
  * 4. Never acquire specialized locks before the readiness lock when both are used.
  * 5. Reorder-only operations that do not affect completion readiness may use
  *    their specialized locks alone (still recheck membership under `FOR UPDATE`).
+ *
+ * Phase 3B independence: Phase 3B writers use a separate advisory lock
+ * (`organization-config-3b:<organizationId>` via `acquireOrganizationConfig3bLock`
+ * in `config-3b-access.ts`). They must NEVER acquire this Phase 3A readiness lock.
+ * Deadlock-safe vs Phase 3A because the two families only share membership row
+ * locks (`FOR UPDATE`), not each other's advisory locks.
  */
 export function organizationReadinessLockKey(organizationId: string): string {
   return `organization-readiness:${organizationId}`;

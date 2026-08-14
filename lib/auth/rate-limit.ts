@@ -36,7 +36,10 @@ export type RateLimitRoute =
   | "create-organization"
   | "business-profile-update"
   | "onboarding-complete"
-  | "catalogue-create";
+  | "catalogue-create"
+  | "config-update"
+  | "template-update"
+  | "config-3b-update";
 
 export type RateLimitDecision =
   | { ok: true; remaining: number; resetAt: Date }
@@ -62,6 +65,9 @@ export const ROUTE_LIMITS: Record<RateLimitRoute, RateLimitConfig> = {
   "business-profile-update": { limit: 40, windowMs: 15 * 60 * 1000 },
   "onboarding-complete": { limit: 20, windowMs: 15 * 60 * 1000 },
   "catalogue-create": { limit: 60, windowMs: 15 * 60 * 1000 },
+  "config-update": { limit: 60, windowMs: 15 * 60 * 1000 },
+  "template-update": { limit: 40, windowMs: 15 * 60 * 1000 },
+  "config-3b-update": { limit: 60, windowMs: 15 * 60 * 1000 },
 };
 
 function hmacIdentifier(value: string): string {

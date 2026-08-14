@@ -105,4 +105,21 @@ describe("organization permissions", () => {
     expect(isInvitableRole("MEMBER")).toBe(true);
     expect(isInvitableRole("OWNER")).toBe(false);
   });
+
+  it("grants Phase 3B config and template permissions by role", () => {
+    for (const permission of [
+      "org.config.read",
+      "org.config.manage",
+      "org.templates.read",
+      "org.templates.manage",
+    ] as const) {
+      expect(roleHasPermission("OWNER", permission)).toBe(true);
+      expect(roleHasPermission("ADMIN", permission)).toBe(true);
+    }
+
+    expect(roleHasPermission("MEMBER", "org.config.read")).toBe(true);
+    expect(roleHasPermission("MEMBER", "org.templates.read")).toBe(true);
+    expect(roleHasPermission("MEMBER", "org.config.manage")).toBe(false);
+    expect(roleHasPermission("MEMBER", "org.templates.manage")).toBe(false);
+  });
 });

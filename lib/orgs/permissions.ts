@@ -1,11 +1,14 @@
 import type { OrganizationRole } from "@prisma/client";
 
 /**
- * Centralized organization permission policy (Phase 2 + Phase 3A).
+ * Centralized organization permission policy (Phase 2 + Phase 3A + Phase 3B).
  * UI visibility is not authorization — every mutation must call these helpers.
  *
  * Phase 3A employee-default settings may further restrict MEMBER reads for
  * business info / catalogues. Settings never grant manage permissions.
+ *
+ * Phase 3B: OWNER/ADMIN get org.config.* and org.templates.*; MEMBER gets
+ * org.config.read and org.templates.read only.
  */
 
 export type OrganizationPermission =
@@ -31,7 +34,11 @@ export type OrganizationPermission =
   | "org.onboarding.manage"
   | "org.onboarding.complete"
   | "org.onboarding.reopen"
-  | "org.settings.manage";
+  | "org.settings.manage"
+  | "org.config.read"
+  | "org.config.manage"
+  | "org.templates.read"
+  | "org.templates.manage";
 
 const ROLE_PERMISSIONS: Record<
   OrganizationRole,
@@ -61,6 +68,10 @@ const ROLE_PERMISSIONS: Record<
     "org.onboarding.complete",
     "org.onboarding.reopen",
     "org.settings.manage",
+    "org.config.read",
+    "org.config.manage",
+    "org.templates.read",
+    "org.templates.manage",
   ]),
   ADMIN: new Set([
     "org.view",
@@ -85,6 +96,10 @@ const ROLE_PERMISSIONS: Record<
     "org.onboarding.complete",
     "org.onboarding.reopen",
     "org.settings.manage",
+    "org.config.read",
+    "org.config.manage",
+    "org.templates.read",
+    "org.templates.manage",
   ]),
   MEMBER: new Set([
     "org.view",
@@ -93,6 +108,8 @@ const ROLE_PERMISSIONS: Record<
     "org.hours.read",
     "org.services.read",
     "org.products.read",
+    "org.config.read",
+    "org.templates.read",
   ]),
 };
 
