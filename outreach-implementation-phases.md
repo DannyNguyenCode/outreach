@@ -267,6 +267,12 @@ Every phase must include, where applicable:
 
 - A new owner can complete or resume onboarding, select and customize a template, and reach a configured dashboard without any business-specific example becoming active knowledge.
 
+### Delivery split
+
+- **Phase 3A** delivered business profile, contact/location, weekly hours, catalogues, employee defaults, and onboarding lifecycle. See `docs/phase-3a-business-onboarding.md`.
+- **Phase 3B** delivers business-template selection/switching, custom-field definitions, locale, service areas, holiday closures, and operational defaults (lead stages, dispositions, callback, recording/consent configuration, notifications). See `docs/phase-3b-business-templates-settings.md`.
+- Phase 3B does **not** connect Twilio, make calls, create Business Knowledge, or create prospects. Template examples never become customer facts. Recording/consent settings are configuration, not legal approval.
+
 ---
 
 ## Phase 4 — Business Knowledge and structured offerings

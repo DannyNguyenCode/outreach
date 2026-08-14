@@ -31,6 +31,10 @@ model User {
   auditEvents          OrganizationAuditEvent[]  @relation("AuditActor")
   onboardingsCompleted OrganizationOnboarding[]  @relation("OnboardingCompleter")
   onboardingsReopened  OrganizationOnboarding[]  @relation("OnboardingReopener")
+  templatesSelected    OrganizationTemplateAssignment[] @relation("TemplateSelector")
+  customFieldsCreated  CustomFieldDefinition[]   @relation("CustomFieldCreator")
+  customFieldsUpdated  CustomFieldDefinition[]   @relation("CustomFieldUpdater")
+  configProgressUpdated OrganizationConfigProgress[] @relation("ConfigProgressUpdater")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -105,6 +109,23 @@ enum OrganizationAuditAction {
   ONBOARDING_STARTED
   ONBOARDING_COMPLETED
   ONBOARDING_REOPENED
+  BUSINESS_TEMPLATE_SELECTED
+  BUSINESS_TEMPLATE_SWITCHED
+  CUSTOM_FIELD_CREATED
+  CUSTOM_FIELD_UPDATED
+  CUSTOM_FIELD_DEACTIVATED
+  CUSTOM_FIELDS_REORDERED
+  SERVICE_AREA_CREATED
+  SERVICE_AREA_UPDATED
+  SERVICE_AREA_DEACTIVATED
+  HOLIDAY_CLOSURE_CREATED
+  HOLIDAY_CLOSURE_UPDATED
+  HOLIDAY_CLOSURE_DEACTIVATED
+  OPERATIONAL_DEFAULTS_UPDATED
+  LEAD_STAGES_UPDATED
+  CALL_DISPOSITIONS_UPDATED
+  ORGANIZATION_LOCALE_UPDATED
+  CONFIG_PROGRESS_UPDATED
 }
 
 enum BusinessType {
@@ -150,6 +171,77 @@ enum FutureCallingAccessDefault {
   STANDARD
 }
 
+/// Platform business-template keys (Phase 3B). Definitions live in typed server code.
+enum BusinessTemplateKey {
+  PROFESSIONAL_SERVICES
+  HOME_TRADE_SERVICES
+  PRODUCT_BUSINESS
+  SUBSCRIPTIONS_PLANS
+  APPOINTMENT_BASED
+  CUSTOM_MIXED
+}
+
+enum CustomFieldDataType {
+  TEXT
+  LONG_TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  SINGLE_SELECT
+  MULTI_SELECT
+  URL
+  EMAIL
+  PHONE
+}
+
+/// Intended use of a custom-field definition. Values are never stored in Phase 3B.
+enum CustomFieldScope {
+  BUSINESS
+  OFFERING
+  PROSPECT
+  KNOWLEDGE
+}
+
+enum LeadStageClassification {
+  NONE
+  INITIAL
+  WON
+  LOST
+  TERMINAL
+}
+
+enum CallbackAssignmentBehavior {
+  UNASSIGNED
+  ROUND_ROBIN_PLACEHOLDER
+  CREATOR
+}
+
+enum RecordingAccessDefault {
+  ADMINS_ONLY
+  ADMINS_AND_OWNERS
+  ROLE_GATED_LATER
+}
+
+enum ConfigProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum ConfigSection {
+  BUSINESS_TEMPLATE
+  LOCALE
+  SERVICE_AREAS
+  AVAILABILITY
+  LEAD_STAGES
+  CALL_DISPOSITIONS
+  CALLBACK_POLICY
+  RECORDING_CONSENT
+  NOTIFICATIONS
+  CUSTOM_FIELDS
+  REVIEW
+}
+
 /// Tenant root for Phase 2 multi-organization support.
 model Organization {
   id                String                    @id @default(cuid())
@@ -162,13 +254,24 @@ model Organization {
   invitations       OrganizationInvitation[]
   auditEvents       OrganizationAuditEvent[]
   activeUsers       User[]                    @relation("UserActiveOrganization")
-  businessProfile   BusinessProfile?
-  businessLocations BusinessLocation[]
-  operatingHours    OperatingHourInterval[]
-  services          BusinessService[]
-  products          BusinessProduct[]
-  settings          OrganizationSettings?
-  onboarding        OrganizationOnboarding?
+  businessProfile       BusinessProfile?
+  businessLocations     BusinessLocation[]
+  operatingHours        OperatingHourInterval[]
+  services              BusinessService[]
+  products              BusinessProduct[]
+  settings              OrganizationSettings?
+  onboarding            OrganizationOnboarding?
+  templateAssignment    OrganizationTemplateAssignment?
+  localeSettings        OrganizationLocaleSettings?
+  callbackPolicy        OrganizationCallbackPolicy?
+  recordingConsentPolicy OrganizationRecordingConsentPolicy?
+  notificationDefaults  OrganizationNotificationDefaults?
+  configProgress        OrganizationConfigProgress?
+  customFieldDefinitions CustomFieldDefinition[]
+  serviceAreas          ServiceArea[]
+  holidayClosures       HolidayClosure[]
+  leadStageDefaults     LeadStageDefault[]
+  callDispositionDefaults CallDispositionDefault[]
 
   @@index([createdAt])
 }
@@ -376,6 +479,232 @@ model OrganizationOnboarding {
   version               Int             @default(0)
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
+
+  @@index([status])
+}
+
+/// Explicit organization selection of a platform business template.
+/// Template examples never become customer facts; only confirmed customization is stored.
+model OrganizationTemplateAssignment {
+  id                       String              @id @default(cuid())
+  organizationId           String              @unique
+  organization             Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  templateKey              BusinessTemplateKey
+  /// Version of the platform template definition at selection/switch time.
+  templateDefinitionVersion Int
+  /// Confirmed customization metadata only (labels, enabled suggested keys). Never auto-facts.
+  customization            Json                @default("{}")
+  selectedByUserId         String?
+  selectedBy               User?               @relation("TemplateSelector", fields: [selectedByUserId], references: [id], onDelete: SetNull)
+  selectedAt               DateTime            @default(now())
+  version                  Int                 @default(0)
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+}
+
+/// Locale / language / display preferences. Distinct from BusinessProfile.timeZone.
+model OrganizationLocaleSettings {
+  id                     String       @id @default(cuid())
+  organizationId         String       @unique
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// BCP 47 locale tag (e.g. en-CA).
+  locale                 String       @default("en-CA")
+  /// BCP 47 language tag (e.g. en).
+  defaultLanguage        String       @default("en")
+  dateDisplayPreference  String       @default("locale")
+  timeDisplayPreference  String       @default("locale")
+  numberDisplayPreference String      @default("locale")
+  version                Int          @default(0)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+}
+
+/// Organization-defined field definitions for later knowledge/CRM phases.
+/// Phase 3B stores definitions only — never prospect or knowledge values.
+model CustomFieldDefinition {
+  id               String             @id @default(cuid())
+  organizationId   String
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Stable key unique within organization + scope.
+  key              String
+  label            String
+  description      String?
+  dataType         CustomFieldDataType
+  required         Boolean            @default(false)
+  isActive         Boolean            @default(true)
+  displayOrder     Int                @default(0)
+  /// Select options as validated JSON string array when applicable.
+  options          Json?
+  /// Optional validation constraints (min/max/pattern) as schema-validated JSON.
+  validation       Json?
+  scope            CustomFieldScope   @default(BUSINESS)
+  version          Int                @default(0)
+  createdByUserId  String?
+  createdBy        User?              @relation("CustomFieldCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedByUserId  String?
+  updatedBy        User?              @relation("CustomFieldUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@unique([organizationId, scope, key])
+  @@index([organizationId, scope, displayOrder])
+  @@index([organizationId, isActive, displayOrder])
+}
+
+/// Geographic / remote service coverage labels. No geometry or geocoding in Phase 3B.
+model ServiceArea {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  label          String
+  /// ISO 3166-1 alpha-2 when applicable.
+  countryCode    String?
+  /// Normalized region/province/state code or label.
+  region         String?
+  city           String?
+  /// Bounded postal/ZIP prefix (digits/letters + optional hyphen), never unbounded wildcards.
+  postalPrefix   String?
+  isRemote       Boolean      @default(false)
+  isActive       Boolean      @default(true)
+  displayOrder   Int          @default(0)
+  version        Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, displayOrder])
+  @@index([organizationId, isActive, displayOrder])
+}
+
+/// Exceptional availability separate from weekly OperatingHourInterval rows.
+/// Dates are local calendar dates in the organization's IANA timezone.
+model HolidayClosure {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Local calendar start date YYYY-MM-DD (organization timezone).
+  localDateStart String
+  /// Optional inclusive local end date for a bounded range.
+  localDateEnd   String?
+  isClosedAllDay Boolean      @default(true)
+  /// Optional replacement opening intervals [{startMinute,endMinute}] half-open.
+  replacementIntervals Json?
+  customerNote   String?
+  internalLabel  String?
+  isActive       Boolean      @default(true)
+  version        Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, localDateStart])
+  @@index([organizationId, isActive, localDateStart])
+}
+
+/// Organization-configured lead stages for later CRM. No prospect records here.
+model LeadStageDefault {
+  id               String                  @id @default(cuid())
+  organizationId   String
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key              String
+  label            String
+  isActive         Boolean                 @default(true)
+  displayOrder     Int                     @default(0)
+  classification   LeadStageClassification @default(NONE)
+  isDefault        Boolean                 @default(false)
+  version          Int                     @default(0)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([organizationId, key])
+  @@index([organizationId, displayOrder])
+}
+
+/// Organization-configured call dispositions for later calling. No call records here.
+model CallDispositionDefault {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key              String
+  label            String
+  isActive         Boolean      @default(true)
+  displayOrder     Int          @default(0)
+  expectsFollowUp  Boolean      @default(false)
+  isTerminal       Boolean      @default(false)
+  version          Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@unique([organizationId, key])
+  @@index([organizationId, displayOrder])
+}
+
+/// Future workflow callback defaults. Not a scheduler.
+model OrganizationCallbackPolicy {
+  id                         String                      @id @default(cuid())
+  organizationId             String                      @unique
+  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Default suggested callback window length in minutes.
+  defaultWindowMinutes       Int                         @default(60)
+  maxSuggestedAttempts       Int                         @default(3)
+  minSpacingMinutes          Int                         @default(120)
+  businessHoursOnly          Boolean                     @default(true)
+  defaultAssignmentBehavior  CallbackAssignmentBehavior  @default(UNASSIGNED)
+  version                    Int                         @default(0)
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+}
+
+/// Recording / transcription / retention / consent policy defaults.
+/// Configuration only — not legal approval; recording/transcription default OFF.
+model OrganizationRecordingConsentPolicy {
+  id                      String                 @id @default(cuid())
+  organizationId          String                 @unique
+  organization            Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recordingEnabled        Boolean                @default(false)
+  transcriptionEnabled    Boolean                @default(false)
+  consentCaptureRequired  Boolean                @default(true)
+  /// Placeholder text for later disclosure workflows — not legal advice.
+  disclosureTextPlaceholder String?
+  /// Retention duration in days within reviewed bounds.
+  retentionDays           Int                    @default(30)
+  accessDefault           RecordingAccessDefault @default(ADMINS_ONLY)
+  reviewRequired          Boolean                @default(true)
+  version                 Int                    @default(0)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+}
+
+/// Notification and escalation configuration metadata only (no Slack/SMS/telephony).
+model OrganizationNotificationDefaults {
+  id                      String       @id @default(cuid())
+  organizationId          String       @unique
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  escalationContactLabel  String?
+  escalationContactEmail  String?
+  /// Enabled notification category keys (validated).
+  notificationCategories  Json         @default("[]")
+  /// Delivery channels already supported by the app (e.g. in_app, email).
+  enabledChannels         Json         @default("[\"in_app\"]")
+  /// Optional operational threshold placeholders.
+  thresholdPlaceholders   Json         @default("{}")
+  version                 Int          @default(0)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+}
+
+/// Bounded Phase 3B configuration progress. Independent of OrganizationOnboarding.
+model OrganizationConfigProgress {
+  id                    String               @id @default(cuid())
+  organizationId        String               @unique
+  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status                ConfigProgressStatus @default(NOT_STARTED)
+  currentSection        ConfigSection        @default(BUSINESS_TEMPLATE)
+  /// JSON string array of completed ConfigSection values.
+  completedSections     Json                 @default("[]")
+  updatedByUserId       String?
+  updatedBy             User?                @relation("ConfigProgressUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  version               Int                  @default(0)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 
   @@index([status])
 }

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { ConfigNav } from "@/components/orgs/config/config-nav";
+import { StartConfigForm } from "@/components/orgs/config/start-config-form";
 import { BusinessBasicsForm } from "@/components/orgs/onboarding/business-basics-form";
 import { CatalogueManager } from "@/components/orgs/onboarding/catalogue-manager";
 import { ContactLocationForm } from "@/components/orgs/onboarding/contact-location-form";
@@ -19,6 +21,7 @@ import { getBusinessConfiguration } from "@/lib/orgs/business-profile";
 import { listBusinessProducts } from "@/lib/orgs/business-products";
 import { listBusinessServices } from "@/lib/orgs/business-services";
 import type { DayOfWeekValue } from "@/lib/orgs/business-validation";
+import { getConfigProgress } from "@/lib/orgs/config-progress";
 import { getOrganizationOnboarding } from "@/lib/orgs/onboarding";
 import { getOperatingHours } from "@/lib/orgs/operating-hours";
 import { getOrganizationSettings } from "@/lib/orgs/organization-settings";
@@ -55,6 +58,11 @@ export default async function OrganizationSettingsPage({ params }: PageProps) {
     "org.settings.manage",
   );
   const canReopen = roleHasPermission(membership.role, "org.onboarding.reopen");
+  const canManageConfig = roleHasPermission(
+    membership.role,
+    "org.config.manage",
+  );
+  const canReadConfig = roleHasPermission(membership.role, "org.config.read");
 
   const business = await getBusinessConfiguration({
     actor: user,
@@ -84,6 +92,12 @@ export default async function OrganizationSettingsPage({ params }: PageProps) {
         organizationId: membership.organizationId,
       })
     : null;
+  const configProgress = canReadConfig
+    ? await getConfigProgress({
+        actor: user,
+        organizationId: membership.organizationId,
+      })
+    : null;
 
   return (
     <div className="space-y-8">
@@ -104,6 +118,69 @@ export default async function OrganizationSettingsPage({ params }: PageProps) {
           server-side and remain tenant-scoped.
         </p>
       </div>
+
+      {canReadConfig ? (
+        <section className="space-y-3">
+          <h2 className="text-lg font-semibold">Extended configuration</h2>
+          <ConfigNav
+            organizationSlug={slug}
+            currentPath={`/app/orgs/${slug}/settings`}
+            completedSections={
+              configProgress?.ok
+                ? configProgress.progress.completedSections
+                : []
+            }
+            currentSection={
+              configProgress?.ok ? configProgress.progress.currentSection : null
+            }
+          />
+          {configProgress &&
+          !configProgress.ok &&
+          configProgress.reason === "not_started" ? (
+            canManageConfig ? (
+              <StartConfigForm organizationSlug={slug} />
+            ) : (
+              <p className="text-sm text-[var(--muted)]">
+                Extended configuration has not been started yet.
+              </p>
+            )
+          ) : null}
+          <ul className="grid gap-2 text-sm sm:grid-cols-2">
+            <li>
+              <Link
+                href={`/app/orgs/${slug}/settings/business-template`}
+                className="underline-offset-2 hover:underline"
+              >
+                Business template
+              </Link>
+            </li>
+            <li>
+              <Link
+                href={`/app/orgs/${slug}/settings/service-areas`}
+                className="underline-offset-2 hover:underline"
+              >
+                Service areas
+              </Link>
+            </li>
+            <li>
+              <Link
+                href={`/app/orgs/${slug}/settings/availability`}
+                className="underline-offset-2 hover:underline"
+              >
+                Availability (holiday closures)
+              </Link>
+            </li>
+            <li>
+              <Link
+                href={`/app/orgs/${slug}/settings/operational-defaults`}
+                className="underline-offset-2 hover:underline"
+              >
+                Operational defaults
+              </Link>
+            </li>
+          </ul>
+        </section>
+      ) : null}
 
       {!business.ok ? (
         <p className="text-sm text-[var(--muted)]">

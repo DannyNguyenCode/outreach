@@ -347,6 +347,6 @@ Focused coverage includes schema uniqueness, hours atomicity, readiness rules, a
 - Confirm development database target before applying the Phase 3A migration
 - No Twilio / telephony setup in this phase
 
-## Deferred Phase 3B functionality
+## Deferred functionality (later phases)
 
-Telephony connection, browser calling, phone numbers, call records, queues, and related UI remain out of scope.
+Phase 3B covers business templates and remaining operational configuration (see [`docs/phase-3b-business-templates-settings.md`](./phase-3b-business-templates-settings.md)). Telephony connection, browser calling, phone numbers, call records, and queues remain Phase 6–7+.
