@@ -6,12 +6,15 @@ import {
   computeKnowledgeChecksum,
   confirmKnowledgeSchema,
   createManualKnowledgeSchema,
-  KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION,
-  KNOWLEDGE_CONFIRMATION_STATEMENT,
   sanitizeSearchQuery,
   toCanonicalContent,
   updateKnowledgeDraftSchema,
 } from "@/lib/orgs/knowledge-validation";
+import {
+  KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION,
+  KNOWLEDGE_CONFIRMATION_STATEMENT,
+} from "@/lib/orgs/knowledge-confirmation";
+import { resolveEffectiveRange } from "@/lib/time/organization-datetime";
 
 const sample = {
   title: "Return policy",
@@ -130,18 +133,19 @@ describe("knowledge draft validation", () => {
     ).toBe(true);
   });
 
-  it("rejects empty sections and inverted effective dates", () => {
+  it("rejects empty sections", () => {
     expect(createManualKnowledgeSchema.safeParse({ title: "X" }).success).toBe(
       false,
     );
-    expect(
-      createManualKnowledgeSchema.safeParse({
-        title: "Policy",
-        effectiveFrom: "2026-02-01T00:00:00.000Z",
-        effectiveUntil: "2026-01-01T00:00:00.000Z",
-        sections: sample.sections,
-      }).success,
-    ).toBe(false);
+  });
+
+  it("rejects inverted effective dates after UTC conversion", () => {
+    const inverted = resolveEffectiveRange({
+      effectiveFrom: "2026-02-01T00:00:00.000Z",
+      effectiveUntil: "2026-01-01T00:00:00.000Z",
+      timeZone: "America/Toronto",
+    });
+    expect(inverted.ok).toBe(false);
   });
 
   it("strips LIKE wildcards from search queries", () => {

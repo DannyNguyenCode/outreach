@@ -5,11 +5,10 @@ import { z } from "zod";
 import { requireExpectedVersion } from "@/lib/orgs/business-validation";
 
 export { requireExpectedVersion };
-
-export const KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION = "knowledge.confirm.v1";
-
-export const KNOWLEDGE_CONFIRMATION_STATEMENT =
-  "I am authorized to provide this information for this organization. I have reviewed this exact version and take responsibility for its accuracy. Outreach does not independently verify that this information is true or legally valid.";
+export {
+  KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION,
+  KNOWLEDGE_CONFIRMATION_STATEMENT,
+} from "@/lib/orgs/knowledge-confirmation";
 
 export const KNOWLEDGE_TITLE_MAX = 200;
 export const KNOWLEDGE_SECTION_TITLE_MAX = 200;
@@ -96,23 +95,19 @@ const sectionInputSchema = z.object({
     ),
 });
 
-const optionalInstantSchema = z
+const optionalWallOrInstantSchema = z
   .union([z.string(), z.date(), z.null(), z.undefined()])
-  .optional()
-  .transform((value, ctx) => {
-    if (value === undefined || value === null || value === "") {
-      return null;
-    }
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Enter a valid date and time.",
-      });
-      return z.NEVER;
-    }
-    return date;
-  });
+  .optional();
+
+const dstDisambiguationSchema = z
+  .union([
+    z.literal("earlier"),
+    z.literal("later"),
+    z.literal(""),
+    z.null(),
+    z.undefined(),
+  ])
+  .optional();
 
 const knowledgeContentFields = {
   title: z
@@ -120,8 +115,10 @@ const knowledgeContentFields = {
     .trim()
     .min(1, TITLE_MESSAGE)
     .max(KNOWLEDGE_TITLE_MAX, TITLE_MESSAGE),
-  effectiveFrom: optionalInstantSchema,
-  effectiveUntil: optionalInstantSchema,
+  effectiveFrom: optionalWallOrInstantSchema,
+  effectiveUntil: optionalWallOrInstantSchema,
+  effectiveFromDisambiguation: dstDisambiguationSchema,
+  effectiveUntilDisambiguation: dstDisambiguationSchema,
   sections: z
     .array(sectionInputSchema)
     .min(1, "Add at least one section.")
@@ -130,23 +127,6 @@ const knowledgeContentFields = {
       `A version may have at most ${KNOWLEDGE_MAX_SECTIONS} sections.`,
     ),
 };
-
-function refineEffectiveRange(
-  data: { effectiveFrom: Date | null; effectiveUntil: Date | null },
-  ctx: z.RefinementCtx,
-) {
-  if (
-    data.effectiveFrom &&
-    data.effectiveUntil &&
-    data.effectiveUntil.getTime() <= data.effectiveFrom.getTime()
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["effectiveUntil"],
-      message: "Effective until must be after effective from.",
-    });
-  }
-}
 
 function refinePassageCount(
   data: { sections: KnowledgeDraftSectionInput[] },
@@ -167,7 +147,6 @@ function refinePassageCount(
 
 export const knowledgeDraftContentSchema = z
   .object(knowledgeContentFields)
-  .superRefine(refineEffectiveRange)
   .superRefine(refinePassageCount);
 
 export const createManualKnowledgeSchema = knowledgeDraftContentSchema;

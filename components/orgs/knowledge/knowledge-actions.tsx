@@ -13,7 +13,7 @@ import { FieldError } from "@/components/auth/field-error";
 import { FormStatus } from "@/components/auth/form-status";
 import { SubmitButton } from "@/components/auth/submit-button";
 import { ConflictHint } from "@/components/orgs/config/form-helpers";
-import { KNOWLEDGE_CONFIRMATION_STATEMENT } from "@/lib/orgs/knowledge-validation";
+import { KNOWLEDGE_CONFIRMATION_STATEMENT } from "@/lib/orgs/knowledge-confirmation";
 
 export function KnowledgeConfirmForm({
   organizationSlug,

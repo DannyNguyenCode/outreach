@@ -14,7 +14,7 @@ Depends on: Phase 3B final commit on `develop` (`d7579ad15d1c7c9d49ef8b3ff20098f
 7. Search, filtering, deterministic ordering, pagination, effective dates, and freshness metadata
 8. Reusable server-side retrieval of currently effective, customer-confirmed, ACTIVE knowledge
 9. Permission-controlled list, editor, preview, confirmation, history, archive, and restore UI
-10. Deterministic concurrency coverage for same-version activation and membership demotion/deactivation races
+10. Deterministic concurrency coverage for same-version activation, membership demotion/deactivation, and archive races
 
 ## Explicit exclusions
 
@@ -65,9 +65,16 @@ The activation transaction:
 
 ## Retrieval
 
-`retrieveActiveKnowledge` is the reusable server-only contract.
+`retrieveActiveKnowledge`, member `listKnowledgeSources`, `getKnowledgeSource`, and `getKnowledgeVersion` share one SQL predicate (`memberVisibleSourceWhere` + `memberVisibleVersionWhere`):
 
-Included: tenant-scoped, `MANUAL`, `CUSTOMER_CONFIRMED_BUSINESS_FACTS`, `ACTIVE`, confirmed, currently effective, non-archived sources.
+- Source: `archivedAt` null, `inputKind: MANUAL`, `category: CUSTOMER_CONFIRMED_BUSINESS_FACTS`
+- Version: `ACTIVE`, `confirmedAt` and `confirmationLanguageVersion` not null, `effectiveFrom` null or `<= now`, `effectiveUntil` null or `> now`
+
+Members never receive draft, future, expired, archived, superseded, unconfirmed, or other-category rows. Direct access to those IDs returns the same `not_found` as an unknown ID. Member list search/order/count/pagination uses the ACTIVE version title (not denormalized `KnowledgeSource.title`) and omits `draftRevision`, checksums, confirmer fields, and historical IDs.
+
+`sourceTitle` in retrieval is the ACTIVE version title. `KnowledgeSource.title` is promoted from a version only on confirmation. Draft updates and restores do not overwrite it while an ACTIVE version exists.
+
+Owners/admins keep full history.
 
 Excluded before pagination: draft, processing, needs-attention, failed, superseded, archived, unconfirmed, future-dated, expired, other source classes, and cross-tenant rows.
 
@@ -77,12 +84,22 @@ Ordering is deterministic: version title, version id, section display order, pas
 
 ## Authorization
 
-- `org.knowledge.read` — OWNER, ADMIN, MEMBER (active confirmed knowledge)
+- `org.knowledge.read` — OWNER, ADMIN, MEMBER (currently effective confirmed knowledge)
 - `org.knowledge.manage` — OWNER, ADMIN (create/edit drafts, replacement drafts, preview)
 - `org.knowledge.confirm` — OWNER, ADMIN (activation)
 - `org.knowledge.archive` — OWNER, ADMIN (archive and restore)
 
 UI visibility is not authorization. Mutations recheck membership and permission after the membership lock.
+
+## Effective times
+
+Authoritative zone is server-loaded `BusinessProfile.timeZone` (IANA). The browser timezone is never trusted.
+
+`datetime-local` values are wall clocks in that zone, converted to UTC before range checks, checksum, and persist (`TIMESTAMPTZ(3)`). Rendering converts UTC back to the org zone and shows the IANA name beside inputs.
+
+- DST gap: rejected with a field error
+- Repeated local time: requires an explicit `earlier` or `later` choice
+- Missing timezone: undated drafts are allowed; dated drafts are rejected with a field error and a settings link
 
 ## Transactions and lock ordering
 
@@ -93,7 +110,7 @@ Order:
 1. Phase 4A knowledge advisory lock
 2. Actor membership row `FOR UPDATE` + permission recheck
 3. Logical source row `FOR UPDATE`
-4. Version row `FOR UPDATE`
+4. Version row(s) `FOR UPDATE` in stable id order (confirm: the target version; archive: ACTIVE and DRAFT versions)
 5. Section/passage rows in stable order
 
 Deadlock safety vs Phase 3A/3B: the families share only membership row locks. If a future writer must take multiple advisory families, acquire Phase 3A readiness, then Phase 3B config, then Phase 4A knowledge.
@@ -108,13 +125,20 @@ Metadata is limited to identifiers, checksum, language version, and restored/sup
 
 ## Migration
 
-Forward-only migration:
+Forward-only migrations:
 
 `prisma/migrations/20260814000000_phase_04a_business_knowledge_core`
 
 - Additive audit enum values
 - Knowledge enums and tenant-scoped tables, composite tenant FKs, partial unique indexes (at most one ACTIVE and one DRAFT version per source)
 - Does not edit Phase 1–3B migrations
+
+`prisma/migrations/20260814120000_phase_04a_knowledge_ancestry`
+
+- Immediate-parent composite FKs: Version `(sourceId, organizationId)`; Section `(versionId, organizationId, sourceId)`; Passage `(sectionId, organizationId, sourceId, versionId)`
+- `supersedesVersionId` / `restoredFromVersionId` `(id, organizationId, sourceId)` with `ON DELETE NO ACTION` (SQL-only; Prisma cannot share those scalar columns with the source relation)
+- Checks: effective range; confirmation fields all-null or all-present; ACTIVE/SUPERSEDED require confirmation; DRAFT forbids confirmation metadata
+- `effectiveFrom` / `effectiveUntil` migrated to `TIMESTAMPTZ(3)`
 - Apply only to disposable local and CI PostgreSQL — not Supabase/production from this branch workflow
 
 ## UI routes
@@ -127,9 +151,9 @@ Forward-only migration:
 
 ## Test strategy
 
-- Unit: `lib/orgs/knowledge-validation.test.ts`, permission coverage in `lib/orgs/permissions.test.ts`
-- Integration: `tests/integration/knowledge.*.test.ts`
-- Playwright: `e2e/knowledge.spec.ts`
+- Unit: `lib/orgs/knowledge-validation.test.ts`, `lib/time/organization-datetime.test.ts`, permission coverage in `lib/orgs/permissions.test.ts`
+- Integration: `tests/integration/knowledge.*.test.ts` including schema-integrity, concurrency gates, and action boundaries
+- Playwright: `e2e/knowledge.spec.ts` (create → retrieve → replacement → confirm → archive → restore draft → reconfirm)
 - Phase 0–3B regression must remain green
 - Concurrency evidence uses deterministic gates/held locks — not sleeps
 

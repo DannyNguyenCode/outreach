@@ -2,7 +2,11 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { MembershipMutationTestHooks } from "@/lib/orgs/business-access";
-import { confirmKnowledgeVersion } from "@/lib/orgs/knowledge";
+import {
+  archiveKnowledgeSource,
+  confirmKnowledgeVersion,
+} from "@/lib/orgs/knowledge";
+import { retrieveActiveKnowledge } from "@/lib/orgs/knowledge-retrieval";
 import { changeMemberRole, deactivateMember } from "@/lib/orgs/memberships";
 import {
   addMember,
@@ -98,6 +102,10 @@ describe("Phase 4A knowledge concurrency", () => {
     expect(
       versions.filter((version) => version.state === "ACTIVE"),
     ).toHaveLength(1);
+    const active = versions.find((version) => version.state === "ACTIVE");
+    expect(active?.confirmedAt).toBeTruthy();
+    expect(active?.confirmationLanguageVersion).toBe("knowledge.confirm.v1");
+    expect(active?.confirmerUserId).toBe(ctx.owner.id);
     expect(
       await countKnowledgeAudits(
         prisma,
@@ -106,20 +114,30 @@ describe("Phase 4A knowledge concurrency", () => {
       ),
     ).toBe(1);
 
+    const retrieved = await retrieveActiveKnowledge({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+    });
+    expect(retrieved.ok).toBe(true);
+    if (retrieved.ok) {
+      expect(retrieved.items).toHaveLength(1);
+      expect(retrieved.items[0]?.citation.versionId).toBe(created.version.id);
+    }
+
     const sentinelVersion = await prisma.knowledgeVersion.findUniqueOrThrow({
       where: { id: sentinelDraft.version.id },
     });
     expect(sentinelVersion.state).toBe("DRAFT");
   });
 
-  async function raceConfirmAgainstMembership(
+  async function raceConfirmFirstAgainstMembership(
     operation: "demotion" | "deactivation",
   ) {
-    const ctx = await createOrgWithOwner(prisma, `know-${operation}`);
+    const ctx = await createOrgWithOwner(prisma, `know-${operation}-first`);
     const admin = await addMember(
       prisma,
       ctx.organizationId,
-      `know-${operation}-admin`,
+      `know-${operation}-first-admin`,
       "ADMIN",
     );
     const membership = await prisma.membership.findFirstOrThrow({
@@ -128,6 +146,7 @@ describe("Phase 4A knowledge concurrency", () => {
     const created = await createSampleDraft(admin, ctx.organizationId);
     const confirmHeld = createGate();
     const membershipBefore = createGate();
+    let membershipAcquiredTargetLock = false;
 
     const confirm = confirmKnowledgeVersion(
       {
@@ -154,6 +173,9 @@ describe("Phase 4A knowledge concurrency", () => {
       testBeforeTargetMembershipLock: async () => {
         membershipBefore.markReached();
       },
+      testAfterTargetMembershipLock: async () => {
+        membershipAcquiredTargetLock = true;
+      },
     };
     const membershipOp =
       operation === "demotion"
@@ -176,6 +198,7 @@ describe("Phase 4A knowledge concurrency", () => {
           );
 
     await membershipBefore.waitUntilReached();
+    expect(membershipAcquiredTargetLock).toBe(false);
     confirmHeld.release();
     const [confirmResult, membershipResult] = await Promise.all([
       confirm,
@@ -193,22 +216,42 @@ describe("Phase 4A knowledge concurrency", () => {
         "KNOWLEDGE_VERSION_CONFIRMED",
       ),
     ).toBe(1);
+
+    const later = await confirmKnowledgeVersion({
+      actor: admin,
+      organizationId: ctx.organizationId,
+      raw: {
+        sourceId: created.source.id,
+        versionId: created.version.id,
+        expectedDraftRevision: String(created.version.draftRevision + 1),
+        expectedChecksum: created.version.contentChecksum,
+        confirmAccuracy: "on",
+      },
+    });
+    expect(later.ok).toBe(false);
+    if (!later.ok) {
+      expect(["forbidden", "inactive_membership", "conflict"]).toContain(
+        later.reason,
+      );
+    }
   }
 
   it("linearizes confirmation that already rechecked membership before demotion", async () => {
-    await raceConfirmAgainstMembership("demotion");
+    await raceConfirmFirstAgainstMembership("demotion");
   });
 
   it("linearizes confirmation that already rechecked membership before deactivation", async () => {
-    await raceConfirmAgainstMembership("deactivation");
+    await raceConfirmFirstAgainstMembership("deactivation");
   });
 
-  it("fails confirmation that waits on the membership lock after demotion", async () => {
-    const ctx = await createOrgWithOwner(prisma, "know-demote-wait");
+  async function raceMembershipFirstAgainstConfirm(
+    operation: "demotion" | "deactivation",
+  ) {
+    const ctx = await createOrgWithOwner(prisma, `know-${operation}-wait`);
     const admin = await addMember(
       prisma,
       ctx.organizationId,
-      "know-demote-wait-admin",
+      `know-${operation}-wait-admin`,
       "ADMIN",
     );
     const membership = await prisma.membership.findFirstOrThrow({
@@ -216,23 +259,39 @@ describe("Phase 4A knowledge concurrency", () => {
     });
     const created = await createSampleDraft(admin, ctx.organizationId);
     const confirmBeforeMembership = createGate();
-    const demoteHeld = createGate();
+    const membershipHeld = createGate();
+    let confirmAcquiredMembershipLock = false;
 
-    const demote = changeMemberRole(
-      {
-        actor: ctx.owner,
-        organizationId: ctx.organizationId,
-        membershipId: membership.id,
-        nextRole: "MEMBER",
-      },
-      {
-        testAfterTargetMembershipLock: async () => {
-          demoteHeld.markReached();
-          await demoteHeld.waitForRelease();
-        },
-      },
-    );
-    await demoteHeld.waitUntilReached();
+    const membershipOp =
+      operation === "demotion"
+        ? changeMemberRole(
+            {
+              actor: ctx.owner,
+              organizationId: ctx.organizationId,
+              membershipId: membership.id,
+              nextRole: "MEMBER",
+            },
+            {
+              testAfterTargetMembershipLock: async () => {
+                membershipHeld.markReached();
+                await membershipHeld.waitForRelease();
+              },
+            },
+          )
+        : deactivateMember(
+            {
+              actor: ctx.owner,
+              organizationId: ctx.organizationId,
+              membershipId: membership.id,
+            },
+            {
+              testAfterTargetMembershipLock: async () => {
+                membershipHeld.markReached();
+                await membershipHeld.waitForRelease();
+              },
+            },
+          );
+    await membershipHeld.waitUntilReached();
 
     const confirm = confirmKnowledgeVersion(
       {
@@ -250,16 +309,25 @@ describe("Phase 4A knowledge concurrency", () => {
         testBeforeMembershipLock: async () => {
           confirmBeforeMembership.markReached();
         },
+        testAfterMembershipLock: async () => {
+          confirmAcquiredMembershipLock = true;
+        },
       },
     );
     await confirmBeforeMembership.waitUntilReached();
-    demoteHeld.release();
+    expect(confirmAcquiredMembershipLock).toBe(false);
+    membershipHeld.release();
 
-    const [demoteResult, confirmResult] = await Promise.all([demote, confirm]);
-    expect(demoteResult.ok).toBe(true);
+    const [membershipResult, confirmResult] = await Promise.all([
+      membershipOp,
+      confirm,
+    ]);
+    expect(membershipResult.ok).toBe(true);
     expect(confirmResult.ok).toBe(false);
     if (!confirmResult.ok) {
-      expect(confirmResult.reason).toBe("forbidden");
+      expect(
+        operation === "demotion" ? "forbidden" : "inactive_membership",
+      ).toBe(confirmResult.reason);
     }
     expect(
       await countKnowledgeAudits(
@@ -272,5 +340,181 @@ describe("Phase 4A knowledge concurrency", () => {
       where: { id: created.version.id },
     });
     expect(version.state).toBe("DRAFT");
+  }
+
+  it("fails confirmation that waits on the membership lock after demotion", async () => {
+    await raceMembershipFirstAgainstConfirm("demotion");
+  });
+
+  it("fails confirmation that waits on the membership lock after deactivation", async () => {
+    await raceMembershipFirstAgainstConfirm("deactivation");
+  });
+
+  it("archives after a winning confirmation and excludes the source from retrieval", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-confirm-archive");
+    const sentinel = await createOrgWithOwner(
+      prisma,
+      "know-confirm-archive-sentinel",
+    );
+    const created = await createSampleDraft(ctx.owner, ctx.organizationId);
+    const sentinelDraft = await createSampleDraft(
+      sentinel.owner,
+      sentinel.organizationId,
+    );
+    const confirmHeld = createGate();
+    const archiveBefore = createGate();
+    let archiveAcquiredLock = false;
+
+    const confirm = confirmKnowledgeVersion(
+      {
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        raw: {
+          sourceId: created.source.id,
+          versionId: created.version.id,
+          expectedDraftRevision: String(created.version.draftRevision),
+          expectedChecksum: created.version.contentChecksum,
+          confirmAccuracy: "on",
+        },
+      },
+      {
+        testAfterKnowledgeLock: async () => {
+          confirmHeld.markReached();
+          await confirmHeld.waitForRelease();
+        },
+      },
+    );
+    await confirmHeld.waitUntilReached();
+
+    const archive = archiveKnowledgeSource(
+      {
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        raw: {
+          sourceId: created.source.id,
+          expectedVersion: String(created.source.version + 1),
+        },
+      },
+      {
+        testBeforeKnowledgeLock: async () => {
+          archiveBefore.markReached();
+        },
+        testAfterKnowledgeLock: async () => {
+          archiveAcquiredLock = true;
+        },
+      },
+    );
+    await archiveBefore.waitUntilReached();
+    expect(archiveAcquiredLock).toBe(false);
+    confirmHeld.release();
+
+    const [confirmResult, archiveResult] = await Promise.all([
+      confirm,
+      archive,
+    ]);
+    expect(confirmResult.ok).toBe(true);
+    expect(archiveResult.ok).toBe(true);
+    expect(
+      await countKnowledgeAudits(
+        prisma,
+        ctx.organizationId,
+        "KNOWLEDGE_VERSION_CONFIRMED",
+      ),
+    ).toBe(1);
+    expect(
+      await countKnowledgeAudits(
+        prisma,
+        ctx.organizationId,
+        "KNOWLEDGE_SOURCE_ARCHIVED",
+      ),
+    ).toBe(1);
+
+    const retrieved = await retrieveActiveKnowledge({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+    });
+    expect(retrieved.ok).toBe(true);
+    if (retrieved.ok) {
+      expect(retrieved.items).toEqual([]);
+    }
+    const sentinelVersion = await prisma.knowledgeVersion.findUniqueOrThrow({
+      where: { id: sentinelDraft.version.id },
+    });
+    expect(sentinelVersion.state).toBe("DRAFT");
+  });
+
+  it("rejects confirmation that waits behind an archive", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-archive-confirm");
+    const created = await createSampleDraft(ctx.owner, ctx.organizationId);
+    const archiveHeld = createGate();
+    const confirmBefore = createGate();
+    let confirmAcquiredLock = false;
+
+    const archive = archiveKnowledgeSource(
+      {
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        raw: {
+          sourceId: created.source.id,
+          expectedVersion: String(created.source.version),
+        },
+      },
+      {
+        testAfterKnowledgeLock: async () => {
+          archiveHeld.markReached();
+          await archiveHeld.waitForRelease();
+        },
+      },
+    );
+    await archiveHeld.waitUntilReached();
+
+    const confirm = confirmKnowledgeVersion(
+      {
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        raw: {
+          sourceId: created.source.id,
+          versionId: created.version.id,
+          expectedDraftRevision: String(created.version.draftRevision),
+          expectedChecksum: created.version.contentChecksum,
+          confirmAccuracy: "on",
+        },
+      },
+      {
+        testBeforeKnowledgeLock: async () => {
+          confirmBefore.markReached();
+        },
+        testAfterKnowledgeLock: async () => {
+          confirmAcquiredLock = true;
+        },
+      },
+    );
+    await confirmBefore.waitUntilReached();
+    expect(confirmAcquiredLock).toBe(false);
+    archiveHeld.release();
+
+    const [archiveResult, confirmResult] = await Promise.all([
+      archive,
+      confirm,
+    ]);
+    expect(archiveResult.ok).toBe(true);
+    expect(confirmResult.ok).toBe(false);
+    if (!confirmResult.ok) {
+      expect(confirmResult.reason).toBe("already_archived");
+    }
+    expect(
+      await countKnowledgeAudits(
+        prisma,
+        ctx.organizationId,
+        "KNOWLEDGE_VERSION_CONFIRMED",
+      ),
+    ).toBe(0);
+    expect(
+      await countKnowledgeAudits(
+        prisma,
+        ctx.organizationId,
+        "KNOWLEDGE_SOURCE_ARCHIVED",
+      ),
+    ).toBe(1);
   });
 });

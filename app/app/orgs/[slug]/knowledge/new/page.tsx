@@ -12,6 +12,7 @@ import {
   requireOrganizationMemberBySlug,
 } from "@/lib/orgs/authorization";
 import { roleHasPermission } from "@/lib/orgs/permissions";
+import { prisma } from "@/lib/prisma";
 
 type PageProps = {
   params: Promise<{ slug: string }>;
@@ -46,6 +47,13 @@ export default async function NewKnowledgePage({ params }: PageProps) {
     notFound();
   }
 
+  const profile = await prisma.businessProfile.findUnique({
+    where: { organizationId: membership.organizationId },
+    select: { timeZone: true },
+  });
+  const organizationTimeZone = profile?.timeZone?.trim() || null;
+  const settingsHref = `/app/orgs/${slug}/settings`;
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-[var(--muted)]">
@@ -71,10 +79,12 @@ export default async function NewKnowledgePage({ params }: PageProps) {
         action={createManualKnowledgeAction}
         submitLabel="Save draft"
         pendingLabel="Saving…"
+        organizationTimeZone={organizationTimeZone}
+        settingsHref={settingsHref}
         defaults={{
           title: "",
-          effectiveFrom: null,
-          effectiveUntil: null,
+          effectiveFrom: "",
+          effectiveUntil: "",
           sections: [{ title: "", passages: [{ body: "" }] }],
         }}
       />

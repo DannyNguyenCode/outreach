@@ -6,6 +6,7 @@ import {
   confirmKnowledgeVersion,
   createManualKnowledgeSource,
   getKnowledgeSource,
+  listKnowledgeSources,
   updateKnowledgeDraft,
 } from "@/lib/orgs/knowledge";
 import { changeMemberRole, deactivateMember } from "@/lib/orgs/memberships";
@@ -231,6 +232,92 @@ describe("Phase 4A knowledge security", () => {
     expect(confirm.ok).toBe(false);
     if (!confirm.ok) {
       expect(confirm.reason).toBe("forbidden");
+    }
+  });
+
+  it("hides drafts, future, expired, and other-class versions from members", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-member-hide");
+    const member = await addMember(
+      prisma,
+      ctx.organizationId,
+      "know-member-hide-user",
+      "MEMBER",
+    );
+    const draft = await createSampleDraft(ctx.owner, ctx.organizationId, {
+      title: "Hidden draft",
+    });
+    const future = await createSampleDraft(ctx.owner, ctx.organizationId, {
+      title: "Future only",
+      effectiveFrom: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    await confirmSample(
+      ctx.owner,
+      ctx.organizationId,
+      future.source.id,
+      future.version.id,
+      future.version.draftRevision,
+      future.version.contentChecksum,
+    );
+    const visible = await createSampleDraft(ctx.owner, ctx.organizationId, {
+      title: "Visible policy",
+    });
+    await confirmSample(
+      ctx.owner,
+      ctx.organizationId,
+      visible.source.id,
+      visible.version.id,
+      visible.version.draftRevision,
+      visible.version.contentChecksum,
+    );
+
+    const listed = await listKnowledgeSources({
+      actor: member,
+      organizationId: ctx.organizationId,
+      query: "Hidden",
+    });
+    expect(listed.ok).toBe(true);
+    if (listed.ok) {
+      expect(listed.items).toEqual([]);
+      expect(listed.total).toBe(0);
+    }
+
+    const draftGet = await getKnowledgeSource({
+      actor: member,
+      organizationId: ctx.organizationId,
+      sourceId: draft.source.id,
+    });
+    const unknownGet = await getKnowledgeSource({
+      actor: member,
+      organizationId: ctx.organizationId,
+      sourceId: "clkbogus00000000000000000",
+    });
+    const futureGet = await getKnowledgeSource({
+      actor: member,
+      organizationId: ctx.organizationId,
+      sourceId: future.source.id,
+    });
+    expect(draftGet.ok).toBe(false);
+    expect(unknownGet.ok).toBe(false);
+    expect(futureGet.ok).toBe(false);
+    if (!draftGet.ok && !unknownGet.ok && !futureGet.ok) {
+      expect(draftGet.reason).toBe("not_found");
+      expect(draftGet.message).toBe(unknownGet.message);
+      expect(futureGet.message).toBe(unknownGet.message);
+    }
+
+    const visibleList = await listKnowledgeSources({
+      actor: member,
+      organizationId: ctx.organizationId,
+    });
+    expect(visibleList.ok).toBe(true);
+    if (visibleList.ok) {
+      expect(visibleList.items.map((item) => item.title)).toEqual([
+        "Visible policy",
+      ]);
+      expect(visibleList.items[0]?.versions[0]?.draftRevision).toBeUndefined();
+      expect(
+        visibleList.items[0]?.versions[0]?.contentChecksum,
+      ).toBeUndefined();
     }
   });
 });

@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   archiveKnowledgeSource,
   confirmKnowledgeVersion,
+  createManualKnowledgeSource,
   createReplacementDraft,
   restoreKnowledgeVersion,
   updateKnowledgeDraft,
@@ -283,5 +284,85 @@ describe("Phase 4A knowledge lifecycle", () => {
     });
     expect(original.state).toBe("ARCHIVED");
     expect(original.contentChecksum).toBe(historical.contentChecksum);
+  });
+
+  it("does not overwrite the source title while an ACTIVE version exists", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-title");
+    const created = await createSampleDraft(ctx.owner, ctx.organizationId, {
+      title: "Original title",
+    });
+    await confirmSample(
+      ctx.owner,
+      ctx.organizationId,
+      created.source.id,
+      created.version.id,
+      created.version.draftRevision,
+      created.version.contentChecksum,
+    );
+    const sourceAfterConfirm = await prisma.knowledgeSource.findUniqueOrThrow({
+      where: { id: created.source.id },
+    });
+    const replacement = await createReplacementDraft({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      raw: {
+        sourceId: created.source.id,
+        expectedVersion: String(sourceAfterConfirm.version),
+      },
+    });
+    expect(replacement.ok).toBe(true);
+    if (!replacement.ok) throw new Error(replacement.message);
+
+    const updated = await updateKnowledgeDraft({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      raw: {
+        sourceId: created.source.id,
+        versionId: replacement.version.id,
+        expectedDraftRevision: String(replacement.version.draftRevision),
+        title: "Replacement title",
+        sections: [
+          { title: "Overview", passages: [{ body: "Replacement body." }] },
+        ],
+      },
+    });
+    expect(updated.ok).toBe(true);
+
+    const sourceDuringDraft = await prisma.knowledgeSource.findUniqueOrThrow({
+      where: { id: created.source.id },
+    });
+    expect(sourceDuringDraft.title).toBe("Original title");
+
+    const retrieved = await retrieveActiveKnowledge({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+    });
+    expect(retrieved.ok).toBe(true);
+    if (retrieved.ok) {
+      expect(retrieved.items[0]?.sourceTitle).toBe("Original title");
+      expect(retrieved.items[0]?.versionTitle).toBe("Original title");
+    }
+  });
+
+  it("rejects dated drafts when the organization timezone is missing", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-notz", undefined, {
+      timeZone: null,
+    });
+    const created = await createManualKnowledgeSource({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      raw: {
+        title: "Dated without zone",
+        effectiveFrom: "2026-01-15T09:00",
+        sections: [
+          { title: "Overview", passages: [{ body: "Needs a time zone." }] },
+        ],
+      },
+    });
+    expect(created.ok).toBe(false);
+    if (!created.ok) {
+      expect(created.reason).toBe("validation");
+      expect(created.fieldErrors?.effectiveFrom?.[0]).toMatch(/settings/i);
+    }
   });
 });

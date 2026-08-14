@@ -1,10 +1,28 @@
 import type { KnowledgeVersionDetail } from "@/lib/orgs/knowledge";
+import { formatOrganizationWallTime } from "@/lib/time/organization-datetime";
+
+function formatInstant(
+  value: Date | null,
+  timeZone: string | null,
+): string | null {
+  if (!value) return null;
+  if (!timeZone) {
+    return value.toISOString();
+  }
+  const formatted = formatOrganizationWallTime(value, timeZone);
+  return formatted.wall
+    ? `${formatted.wall.replace("T", " ")} ${timeZone}`
+    : value.toISOString();
+}
 
 export function KnowledgePreview({
   version,
+  organizationTimeZone,
 }: {
   version: KnowledgeVersionDetail;
+  organizationTimeZone?: string | null;
 }) {
+  const timeZone = organizationTimeZone ?? null;
   return (
     <article className="space-y-4" aria-label="Knowledge preview">
       <header className="space-y-1">
@@ -18,10 +36,10 @@ export function KnowledgePreview({
             ? ` Confirmed ${version.confirmedAt.toISOString()}.`
             : " Not confirmed."}
           {version.effectiveFrom
-            ? ` Effective from ${version.effectiveFrom.toISOString()}.`
+            ? ` Effective from ${formatInstant(version.effectiveFrom, timeZone)}.`
             : ""}
           {version.effectiveUntil
-            ? ` Effective until ${version.effectiveUntil.toISOString()}.`
+            ? ` Effective until ${formatInstant(version.effectiveUntil, timeZone)}.`
             : ""}
         </p>
       </header>

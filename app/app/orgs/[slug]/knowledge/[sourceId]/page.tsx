@@ -86,7 +86,12 @@ export default async function KnowledgeSourcePage({ params }: PageProps) {
         canCreate={canManage}
       />
 
-      {current ? <KnowledgePreview version={current} /> : null}
+      {current ? (
+        <KnowledgePreview
+          version={current}
+          organizationTimeZone={result.organizationTimeZone}
+        />
+      ) : null}
 
       {canManage && source.draft ? (
         <p>

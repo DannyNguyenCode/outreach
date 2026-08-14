@@ -14,6 +14,10 @@ import {
   parsePageSize,
   sanitizeSearchQuery,
 } from "@/lib/orgs/knowledge-validation";
+import {
+  memberVisibleSourceWhere,
+  memberVisibleVersionWhere,
+} from "@/lib/orgs/knowledge-visibility";
 import { prisma } from "@/lib/prisma";
 
 export type KnowledgeCitation = {
@@ -86,19 +90,6 @@ export async function retrieveActiveKnowledge(input: {
     const rows = await prisma.knowledgePassage.findMany({
       where,
       include: {
-        source: { select: { id: true, title: true, organizationId: true } },
-        version: {
-          select: {
-            id: true,
-            title: true,
-            confirmedAt: true,
-            confirmationLanguageVersion: true,
-            contentChecksum: true,
-            effectiveFrom: true,
-            effectiveUntil: true,
-            organizationId: true,
-          },
-        },
         section: {
           select: {
             id: true,
@@ -106,11 +97,30 @@ export async function retrieveActiveKnowledge(input: {
             citationKey: true,
             displayOrder: true,
             organizationId: true,
+            version: {
+              select: {
+                id: true,
+                title: true,
+                confirmedAt: true,
+                confirmationLanguageVersion: true,
+                contentChecksum: true,
+                effectiveFrom: true,
+                effectiveUntil: true,
+                organizationId: true,
+                source: {
+                  select: {
+                    id: true,
+                    title: true,
+                    organizationId: true,
+                  },
+                },
+              },
+            },
           },
         },
       },
       orderBy: [
-        { version: { title: "asc" } },
+        { section: { version: { title: "asc" } } },
         { versionId: "asc" },
         { section: { displayOrder: "asc" } },
         { displayOrder: "asc" },
@@ -122,21 +132,32 @@ export async function retrieveActiveKnowledge(input: {
 
     const items: RetrievedKnowledgePassage[] = [];
     for (const row of rows) {
+      const version = row.section.version;
+      const source = version.source;
       if (
         row.organizationId !== input.organizationId ||
-        row.source.organizationId !== input.organizationId ||
-        row.version.organizationId !== input.organizationId ||
+        source.organizationId !== input.organizationId ||
+        version.organizationId !== input.organizationId ||
         row.section.organizationId !== input.organizationId
       ) {
         continue;
       }
-      if (
-        !row.version.confirmedAt ||
-        !row.version.confirmationLanguageVersion
-      ) {
+      if (!version.confirmedAt || !version.confirmationLanguageVersion) {
         continue;
       }
-      items.push(mapRetrievedPassage(row));
+      items.push(
+        mapRetrievedPassage({
+          id: row.id,
+          sourceId: row.sourceId,
+          versionId: row.versionId,
+          sectionId: row.sectionId,
+          citationKey: row.citationKey,
+          body: row.body,
+          source,
+          version,
+          section: row.section,
+        }),
+      );
     }
 
     return { ok: true, items, page, pageSize, total };
@@ -158,20 +179,15 @@ export function activePassageWhere(
 ) {
   return {
     organizationId,
-    version: {
+    section: {
       organizationId,
-      state: "ACTIVE" as const,
-      confirmedAt: { not: null },
-      confirmationLanguageVersion: { not: null },
-      AND: [
-        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
-        { OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] },
-      ],
-      source: {
+      version: {
         organizationId,
-        archivedAt: null,
-        category: "CUSTOMER_CONFIRMED_BUSINESS_FACTS" as const,
-        inputKind: "MANUAL" as const,
+        ...memberVisibleVersionWhere(now),
+        source: {
+          organizationId,
+          ...memberVisibleSourceWhere(),
+        },
       },
     },
     ...(query
@@ -184,8 +200,10 @@ export function activePassageWhere(
               },
             },
             {
-              version: {
-                title: { contains: query, mode: "insensitive" as const },
+              section: {
+                version: {
+                  title: { contains: query, mode: "insensitive" as const },
+                },
               },
             },
           ],
@@ -218,7 +236,7 @@ function mapRetrievedPassage(row: {
   }
   return {
     sourceId: row.sourceId,
-    sourceTitle: row.source.title,
+    sourceTitle: row.version.title,
     versionId: row.versionId,
     versionTitle: row.version.title,
     sectionId: row.sectionId,

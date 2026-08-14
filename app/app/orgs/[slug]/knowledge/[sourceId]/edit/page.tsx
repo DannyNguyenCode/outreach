@@ -12,6 +12,7 @@ import {
   requireOrganizationMemberBySlug,
 } from "@/lib/orgs/authorization";
 import { getKnowledgeSource } from "@/lib/orgs/knowledge";
+import { formatOrganizationWallTime } from "@/lib/time/organization-datetime";
 
 type PageProps = {
   params: Promise<{ slug: string; sourceId: string }>;
@@ -52,6 +53,15 @@ export default async function EditKnowledgePage({ params }: PageProps) {
   }
 
   const draft = result.source.draft;
+  const from = formatOrganizationWallTime(
+    draft.effectiveFrom,
+    result.organizationTimeZone,
+  );
+  const until = formatOrganizationWallTime(
+    draft.effectiveUntil,
+    result.organizationTimeZone,
+  );
+  const settingsHref = `/app/orgs/${slug}/settings`;
 
   return (
     <div className="space-y-6">
@@ -78,10 +88,14 @@ export default async function EditKnowledgePage({ params }: PageProps) {
         sourceId={sourceId}
         versionId={draft.id}
         expectedDraftRevision={draft.draftRevision}
+        organizationTimeZone={result.organizationTimeZone}
+        settingsHref={settingsHref}
         defaults={{
           title: draft.title,
-          effectiveFrom: draft.effectiveFrom,
-          effectiveUntil: draft.effectiveUntil,
+          effectiveFrom: from.wall,
+          effectiveUntil: until.wall,
+          effectiveFromDisambiguation: from.disambiguation,
+          effectiveUntilDisambiguation: until.disambiguation,
           sections: draft.sections.map((section) => ({
             citationKey: section.citationKey,
             title: section.title,

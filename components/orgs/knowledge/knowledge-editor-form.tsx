@@ -20,12 +20,35 @@ type DraftSection = {
   passages: DraftPassage[];
 };
 
-function toDatetimeLocal(value: Date | string | null | undefined): string {
-  if (!value) return "";
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+function DstOccurrenceSelect({
+  id,
+  name,
+  value,
+  onChange,
+}: {
+  id: string;
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <label htmlFor={id} className="block text-xs font-medium">
+        If this local time occurs twice
+      </label>
+      <select
+        id={id}
+        name={name}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
+      >
+        <option value="">Not a repeated time</option>
+        <option value="earlier">Earlier occurrence</option>
+        <option value="later">Later occurrence</option>
+      </select>
+    </div>
+  );
 }
 
 export function KnowledgeEditorForm({
@@ -36,6 +59,8 @@ export function KnowledgeEditorForm({
   sourceId,
   versionId,
   expectedDraftRevision,
+  organizationTimeZone,
+  settingsHref,
   defaults,
 }: {
   organizationSlug: string;
@@ -45,22 +70,26 @@ export function KnowledgeEditorForm({
   sourceId?: string;
   versionId?: string;
   expectedDraftRevision?: number;
+  organizationTimeZone: string | null;
+  settingsHref: string;
   defaults: {
     title: string;
-    effectiveFrom: Date | string | null;
-    effectiveUntil: Date | string | null;
+    effectiveFrom: string;
+    effectiveUntil: string;
+    effectiveFromDisambiguation?: string;
+    effectiveUntilDisambiguation?: string;
     sections: DraftSection[];
   };
 }) {
   const [state, formAction] = useActionState(action, initialActionState);
   const router = useRouter();
   const [title, setTitle] = useState(defaults.title);
-  const [effectiveFrom, setEffectiveFrom] = useState(
-    toDatetimeLocal(defaults.effectiveFrom),
-  );
-  const [effectiveUntil, setEffectiveUntil] = useState(
-    toDatetimeLocal(defaults.effectiveUntil),
-  );
+  const [effectiveFrom, setEffectiveFrom] = useState(defaults.effectiveFrom);
+  const [effectiveUntil, setEffectiveUntil] = useState(defaults.effectiveUntil);
+  const [effectiveFromDisambiguation, setEffectiveFromDisambiguation] =
+    useState(defaults.effectiveFromDisambiguation ?? "");
+  const [effectiveUntilDisambiguation, setEffectiveUntilDisambiguation] =
+    useState(defaults.effectiveUntilDisambiguation ?? "");
   const [sections, setSections] = useState<DraftSection[]>(
     defaults.sections.length > 0
       ? defaults.sections
@@ -165,6 +194,12 @@ export function KnowledgeEditorForm({
             onChange={(event) => setEffectiveFrom(event.target.value)}
             className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
           />
+          <DstOccurrenceSelect
+            id="effectiveFromDisambiguation"
+            name="effectiveFromDisambiguation"
+            value={effectiveFromDisambiguation}
+            onChange={setEffectiveFromDisambiguation}
+          />
           <FieldError
             id="effectiveFrom-error"
             errors={state.fieldErrors?.effectiveFrom}
@@ -182,12 +217,34 @@ export function KnowledgeEditorForm({
             onChange={(event) => setEffectiveUntil(event.target.value)}
             className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm"
           />
+          <DstOccurrenceSelect
+            id="effectiveUntilDisambiguation"
+            name="effectiveUntilDisambiguation"
+            value={effectiveUntilDisambiguation}
+            onChange={setEffectiveUntilDisambiguation}
+          />
           <FieldError
             id="effectiveUntil-error"
             errors={state.fieldErrors?.effectiveUntil}
           />
         </div>
       </div>
+      <p className="text-sm text-[var(--muted)]">
+        {organizationTimeZone ? (
+          <>Times are in {organizationTimeZone}.</>
+        ) : (
+          <>
+            Set this organization&apos;s time zone in{" "}
+            <a
+              href={settingsHref}
+              className="underline-offset-2 hover:underline"
+            >
+              settings
+            </a>{" "}
+            before using effective dates. Undated drafts can still be saved.
+          </>
+        )}
+      </p>
 
       <fieldset className="space-y-4">
         <legend className="text-sm font-medium">Sections and passages</legend>

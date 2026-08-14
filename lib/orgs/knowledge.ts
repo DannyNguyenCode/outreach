@@ -16,6 +16,7 @@ import {
   ConflictError,
   KnowledgeLifecycleError,
   KnowledgeNotFoundError,
+  lockActiveAndDraftKnowledgeVersionsForUpdate,
   lockKnowledgeSourceForUpdate,
   lockKnowledgeVersionForUpdate,
   mapKnowledgeError,
@@ -23,6 +24,7 @@ import {
   type AuthFailure,
   type KnowledgeMutationTestHooks,
 } from "@/lib/orgs/knowledge-access";
+import { KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION } from "@/lib/orgs/knowledge-confirmation";
 import {
   archiveKnowledgeSchema,
   assignCitationKeys,
@@ -31,7 +33,6 @@ import {
   confirmKnowledgeSchema,
   createManualKnowledgeSchema,
   KNOWLEDGE_ACTIVATABLE_CATEGORY,
-  KNOWLEDGE_CONFIRMATION_LANGUAGE_VERSION,
   parsePage,
   parsePageSize,
   replacementDraftSchema,
@@ -43,8 +44,15 @@ import {
   zodFieldErrors,
   type CanonicalKnowledgeSection,
 } from "@/lib/orgs/knowledge-validation";
+import {
+  memberVisibleSourceWhere,
+  memberVisibleSourceWithVersionWhere,
+  memberVisibleVersionWhere,
+  memberVisibleVersionWithSourceWhere,
+} from "@/lib/orgs/knowledge-visibility";
 import { roleHasPermission } from "@/lib/orgs/permissions";
 import { prisma } from "@/lib/prisma";
+import { resolveEffectiveRange } from "@/lib/time/organization-datetime";
 
 export type KnowledgeFailure = AuthFailure;
 
@@ -62,20 +70,24 @@ export type KnowledgeSourceDetail = KnowledgeSource & {
   active: KnowledgeVersionDetail | null;
 };
 
-export type KnowledgeSourceListItem = KnowledgeSource & {
-  versions: Array<
-    Pick<
-      KnowledgeVersion,
-      | "id"
-      | "state"
-      | "title"
-      | "draftRevision"
-      | "confirmedAt"
-      | "contentChecksum"
-      | "effectiveFrom"
-      | "effectiveUntil"
-    >
-  >;
+export type KnowledgeSourceListItem = {
+  id: string;
+  organizationId: string;
+  title: string;
+  archivedAt: Date | null;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+  versions: Array<{
+    id: string;
+    state: KnowledgeVersion["state"];
+    title: string;
+    confirmedAt: Date | null;
+    effectiveFrom: Date | null;
+    effectiveUntil: Date | null;
+    draftRevision?: number;
+    contentChecksum?: string;
+  }>;
 };
 
 type VersionGraph = KnowledgeVersionDetail;
@@ -101,7 +113,25 @@ export async function createManualKnowledgeSource(
     };
   }
 
-  const prepared = checksumFromDraft(parsed.data);
+  const times = await resolveDraftEffectiveTimes(
+    input.organizationId,
+    parsed.data,
+  );
+  if (!times.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: times.message,
+      fieldErrors: times.fieldErrors,
+    };
+  }
+
+  const prepared = checksumFromDraft({
+    title: parsed.data.title,
+    effectiveFrom: times.effectiveFrom,
+    effectiveUntil: times.effectiveUntil,
+    sections: parsed.data.sections,
+  });
 
   try {
     await requireOrganizationPermission({
@@ -138,8 +168,8 @@ export async function createManualKnowledgeSource(
         actorUserId: input.actor.id,
         title: prepared.canonical.title,
         checksum: prepared.checksum,
-        effectiveFrom: parsed.data.effectiveFrom,
-        effectiveUntil: parsed.data.effectiveUntil,
+        effectiveFrom: times.effectiveFrom,
+        effectiveUntil: times.effectiveUntil,
         sections: prepared.sections,
       });
 
@@ -201,7 +231,25 @@ export async function updateKnowledgeDraft(
     };
   }
 
-  const prepared = checksumFromDraft(parsed.data);
+  const times = await resolveDraftEffectiveTimes(
+    input.organizationId,
+    parsed.data,
+  );
+  if (!times.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: times.message,
+      fieldErrors: times.fieldErrors,
+    };
+  }
+
+  const prepared = checksumFromDraft({
+    title: parsed.data.title,
+    effectiveFrom: times.effectiveFrom,
+    effectiveUntil: times.effectiveUntil,
+    sections: parsed.data.sections,
+  });
 
   try {
     await requireOrganizationPermission({
@@ -266,8 +314,8 @@ export async function updateKnowledgeDraft(
         data: {
           title: prepared.canonical.title,
           contentChecksum: prepared.checksum,
-          effectiveFrom: parsed.data.effectiveFrom,
-          effectiveUntil: parsed.data.effectiveUntil,
+          effectiveFrom: times.effectiveFrom,
+          effectiveUntil: times.effectiveUntil,
           draftRevision: { increment: 1 },
         },
       });
@@ -282,13 +330,19 @@ export async function updateKnowledgeDraft(
         sections: prepared.sections,
       });
 
-      await tx.knowledgeSource.updateMany({
-        where: {
-          id: parsed.data.sourceId,
-          organizationId: input.organizationId,
-        },
-        data: { title: prepared.canonical.title },
+      const hasActive = await sourceHasActiveVersion(tx, {
+        organizationId: input.organizationId,
+        sourceId: parsed.data.sourceId,
       });
+      if (!hasActive) {
+        await tx.knowledgeSource.updateMany({
+          where: {
+            id: parsed.data.sourceId,
+            organizationId: input.organizationId,
+          },
+          data: { title: prepared.canonical.title },
+        });
+      }
 
       await recordOrganizationAuditEvent(tx, {
         organizationId: input.organizationId,
@@ -752,6 +806,11 @@ export async function archiveKnowledgeSource(
         throw new ConflictError();
       }
 
+      await lockActiveAndDraftKnowledgeVersionsForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: parsed.data.sourceId,
+      });
+
       const archivedAt = new Date();
       await tx.knowledgeVersion.updateMany({
         where: {
@@ -924,6 +983,11 @@ export async function restoreKnowledgeVersion(
         restoredFromVersionId: historical.id,
       });
 
+      const hasActiveVersion = await sourceHasActiveVersion(tx, {
+        organizationId: input.organizationId,
+        sourceId: parsed.data.sourceId,
+      });
+
       const unarchived = await tx.knowledgeSource.updateMany({
         where: {
           id: parsed.data.sourceId,
@@ -931,10 +995,10 @@ export async function restoreKnowledgeVersion(
           version: expected.version,
         },
         data: {
-          title: historical.title,
           archivedAt: null,
           archivedByUserId: null,
           version: { increment: 1 },
+          ...(hasActiveVersion ? {} : { title: historical.title }),
         },
       });
       if (unarchived.count !== 1) {
@@ -1007,16 +1071,44 @@ export async function listKnowledgeSources(input: {
     );
     const status = parseListStatus(input.status, canManage);
 
+    if (!canManage) {
+      return listMemberVisibleSources({
+        organizationId: input.organizationId,
+        query,
+        page,
+        pageSize,
+        now,
+      });
+    }
+
     const where: Prisma.KnowledgeSourceWhereInput = {
       organizationId: input.organizationId,
-      ...(query ? { title: { contains: query, mode: "insensitive" } } : {}),
       ...listStatusWhere(status, now),
+      ...(query
+        ? {
+            OR: [
+              { title: { contains: query, mode: "insensitive" } },
+              {
+                versions: {
+                  some: { title: { contains: query, mode: "insensitive" } },
+                },
+              },
+            ],
+          }
+        : {}),
     };
 
     const total = await prisma.knowledgeSource.count({ where });
-    const items = await prisma.knowledgeSource.findMany({
+    const rows = await prisma.knowledgeSource.findMany({
       where,
-      include: {
+      select: {
+        id: true,
+        organizationId: true,
+        title: true,
+        archivedAt: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
         versions: {
           select: {
             id: true,
@@ -1036,7 +1128,7 @@ export async function listKnowledgeSources(input: {
       take: pageSize,
     });
 
-    return { ok: true, items, page, pageSize, total, canManage };
+    return { ok: true, items: rows, page, pageSize, total, canManage };
   } catch (error) {
     return (
       mapKnowledgeError(error) ?? {
@@ -1046,6 +1138,83 @@ export async function listKnowledgeSources(input: {
       }
     );
   }
+}
+
+async function listMemberVisibleSources(input: {
+  organizationId: string;
+  query: string;
+  page: number;
+  pageSize: number;
+  now: Date;
+}): Promise<{
+  ok: true;
+  items: KnowledgeSourceListItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  canManage: boolean;
+}> {
+  const versionWhere: Prisma.KnowledgeVersionWhereInput = {
+    ...memberVisibleVersionWithSourceWhere(input.organizationId, input.now),
+    ...(input.query
+      ? { title: { contains: input.query, mode: "insensitive" } }
+      : {}),
+  };
+
+  const total = await prisma.knowledgeVersion.count({ where: versionWhere });
+  const versions = await prisma.knowledgeVersion.findMany({
+    where: versionWhere,
+    select: {
+      id: true,
+      state: true,
+      title: true,
+      confirmedAt: true,
+      effectiveFrom: true,
+      effectiveUntil: true,
+      source: {
+        select: {
+          id: true,
+          organizationId: true,
+          archivedAt: true,
+          version: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      },
+    },
+    orderBy: [{ title: "asc" }, { id: "asc" }],
+    skip: (input.page - 1) * input.pageSize,
+    take: input.pageSize,
+  });
+
+  const items: KnowledgeSourceListItem[] = versions.map((row) => ({
+    id: row.source.id,
+    organizationId: row.source.organizationId,
+    title: row.title,
+    archivedAt: row.source.archivedAt,
+    version: row.source.version,
+    createdAt: row.source.createdAt,
+    updatedAt: row.source.updatedAt,
+    versions: [
+      {
+        id: row.id,
+        state: row.state,
+        title: row.title,
+        confirmedAt: row.confirmedAt,
+        effectiveFrom: row.effectiveFrom,
+        effectiveUntil: row.effectiveUntil,
+      },
+    ],
+  }));
+
+  return {
+    ok: true,
+    items,
+    page: input.page,
+    pageSize: input.pageSize,
+    total,
+    canManage: false,
+  };
 }
 
 export async function getKnowledgeSource(input: {
@@ -1059,6 +1228,7 @@ export async function getKnowledgeSource(input: {
       canManage: boolean;
       canConfirm: boolean;
       canArchive: boolean;
+      organizationTimeZone: string | null;
     }
   | KnowledgeFailure
 > {
@@ -1080,27 +1250,30 @@ export async function getKnowledgeSource(input: {
       membership.role,
       "org.knowledge.archive",
     );
+    const now = new Date();
+    const organizationTimeZone = await loadOrganizationTimeZone(
+      input.organizationId,
+    );
 
     const source = await prisma.knowledgeSource.findFirst({
-      where: {
-        id: input.sourceId,
-        organizationId: input.organizationId,
-      },
+      where: canManage
+        ? {
+            id: input.sourceId,
+            organizationId: input.organizationId,
+          }
+        : {
+            id: input.sourceId,
+            ...memberVisibleSourceWithVersionWhere(input.organizationId, now),
+          },
       include: {
-        versions: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
+        versions: {
+          where: canManage ? undefined : memberVisibleVersionWhere(now),
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        },
       },
     });
     if (!source) {
       return notFound();
-    }
-
-    if (!canManage) {
-      const hasActive = source.versions.some(
-        (version) => version.state === "ACTIVE",
-      );
-      if (!hasActive || source.archivedAt) {
-        return notFound();
-      }
     }
 
     const draftSummary = canManage
@@ -1126,15 +1299,13 @@ export async function getKnowledgeSource(input: {
       ok: true,
       source: {
         ...source,
-        versions: canManage
-          ? source.versions
-          : source.versions.filter((version) => version.state === "ACTIVE"),
         draft,
         active,
       },
       canManage,
       canConfirm,
       canArchive,
+      organizationTimeZone,
     };
   } catch (error) {
     return (
@@ -1160,6 +1331,7 @@ export async function getKnowledgeVersion(input: {
       canManage: boolean;
       canConfirm: boolean;
       canArchive: boolean;
+      organizationTimeZone: string | null;
     }
   | KnowledgeFailure
 > {
@@ -1181,34 +1353,53 @@ export async function getKnowledgeVersion(input: {
       membership.role,
       "org.knowledge.archive",
     );
+    const now = new Date();
+    const organizationTimeZone = await loadOrganizationTimeZone(
+      input.organizationId,
+    );
 
     const source = await prisma.knowledgeSource.findFirst({
-      where: {
-        id: input.sourceId,
-        organizationId: input.organizationId,
-      },
+      where: canManage
+        ? {
+            id: input.sourceId,
+            organizationId: input.organizationId,
+          }
+        : {
+            id: input.sourceId,
+            ...memberVisibleSourceWithVersionWhere(input.organizationId, now),
+          },
     });
     if (!source) {
       return notFound();
     }
 
     const version = await prisma.knowledgeVersion.findFirst({
-      where: {
-        id: input.versionId,
-        sourceId: input.sourceId,
-        organizationId: input.organizationId,
-      },
+      where: canManage
+        ? {
+            id: input.versionId,
+            sourceId: input.sourceId,
+            organizationId: input.organizationId,
+          }
+        : {
+            id: input.versionId,
+            sourceId: input.sourceId,
+            ...memberVisibleVersionWithSourceWhere(input.organizationId, now),
+          },
       include: versionGraphInclude,
     });
     if (!version) {
       return notFound();
     }
 
-    if (!canManage && (version.state !== "ACTIVE" || source.archivedAt)) {
-      return notFound();
-    }
-
-    return { ok: true, source, version, canManage, canConfirm, canArchive };
+    return {
+      ok: true,
+      source,
+      version,
+      canManage,
+      canConfirm,
+      canArchive,
+      organizationTimeZone,
+    };
   } catch (error) {
     return (
       mapKnowledgeError(error) ?? {
@@ -1387,18 +1578,76 @@ function listStatusWhere(
   }
   if (status === "active") {
     return {
-      archivedAt: null,
-      versions: {
-        some: {
-          state: "ACTIVE",
-          confirmedAt: { not: null },
-          AND: [
-            { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
-            { OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] },
-          ],
-        },
-      },
+      ...memberVisibleSourceWhere(),
+      versions: { some: memberVisibleVersionWhere(now) },
     };
   }
   return {};
+}
+
+async function sourceHasActiveVersion(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; sourceId: string },
+): Promise<boolean> {
+  const row = await tx.knowledgeVersion.findFirst({
+    where: {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+      state: "ACTIVE",
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
+async function loadOrganizationTimeZone(
+  organizationId: string,
+): Promise<string | null> {
+  const profile = await prisma.businessProfile.findUnique({
+    where: { organizationId },
+    select: { timeZone: true },
+  });
+  return profile?.timeZone?.trim() || null;
+}
+
+async function resolveDraftEffectiveTimes(
+  organizationId: string,
+  parsed: {
+    effectiveFrom?: unknown;
+    effectiveUntil?: unknown;
+    effectiveFromDisambiguation?: unknown;
+    effectiveUntilDisambiguation?: unknown;
+  },
+): Promise<
+  | { ok: true; effectiveFrom: Date | null; effectiveUntil: Date | null }
+  | { ok: false; message: string; fieldErrors: Record<string, string[]> }
+> {
+  const [profile, organization] = await Promise.all([
+    prisma.businessProfile.findUnique({
+      where: { organizationId },
+      select: { timeZone: true },
+    }),
+    prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { slug: true },
+    }),
+  ]);
+  const resolved = resolveEffectiveRange({
+    effectiveFrom: parsed.effectiveFrom,
+    effectiveUntil: parsed.effectiveUntil,
+    effectiveFromDisambiguation: parsed.effectiveFromDisambiguation,
+    effectiveUntilDisambiguation: parsed.effectiveUntilDisambiguation,
+    timeZone: profile?.timeZone ?? null,
+    settingsHref: organization?.slug
+      ? `/app/orgs/${organization.slug}/settings`
+      : null,
+  });
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      message: resolved.message,
+      fieldErrors: resolved.fieldErrors,
+    };
+  }
+  return resolved;
 }

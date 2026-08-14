@@ -5,13 +5,33 @@ import {
   confirmKnowledgeVersion,
   createManualKnowledgeSource,
 } from "@/lib/orgs/knowledge";
-import { createOrgWithOwner } from "@/tests/integration/helpers/config-3b";
-
-export {
+import {
   addMember,
   createGate,
-  createOrgWithOwner,
+  createOrgWithOwner as createOrgWithOwnerBase,
 } from "@/tests/integration/helpers/config-3b";
+
+export { addMember, createGate };
+
+export async function createOrgWithOwner(
+  prisma: PrismaClient,
+  prefix: string,
+  name?: string,
+  options: { timeZone?: string | null } = {},
+) {
+  const ctx = await createOrgWithOwnerBase(prisma, prefix, name);
+  if (options.timeZone !== null) {
+    await prisma.businessProfile.upsert({
+      where: { organizationId: ctx.organizationId },
+      create: {
+        organizationId: ctx.organizationId,
+        timeZone: options.timeZone ?? "America/Toronto",
+      },
+      update: { timeZone: options.timeZone ?? "America/Toronto" },
+    });
+  }
+  return ctx;
+}
 
 export const SAMPLE_DRAFT = {
   title: "Return policy",

@@ -283,9 +283,6 @@ model Organization {
   leadStageDefaults     LeadStageDefault[]
   callDispositionDefaults CallDispositionDefault[]
   knowledgeSources      KnowledgeSource[]
-  knowledgeVersions     KnowledgeVersion[]
-  knowledgeSections     KnowledgeSection[]
-  knowledgePassages     KnowledgePassage[]
 
   @@index([createdAt])
 }
@@ -758,7 +755,8 @@ model KnowledgeSource {
   organization     Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   inputKind        KnowledgeInputKind       @default(MANUAL)
   category         KnowledgeSourceCategory
-  /// Display title denormalized from the current draft or active version.
+  /// Denormalized title promoted from a version only on confirmation.
+  /// Draft updates do not overwrite this while an ACTIVE version exists.
   title            String
   archivedAt       DateTime?
   archivedByUserId String?
@@ -770,8 +768,6 @@ model KnowledgeSource {
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   versions         KnowledgeVersion[]
-  sections         KnowledgeSection[]
-  passages         KnowledgePassage[]
 
   @@unique([id, organizationId])
   @@index([organizationId, archivedAt])
@@ -780,17 +776,21 @@ model KnowledgeSource {
 }
 
 /// Immutable confirmed content identity. Drafts may be updated until confirmation.
+/// PostgreSQL (not Prisma) also enforces:
+/// - composite FKs `supersedesVersionId`/`restoredFromVersionId` → (id, organizationId, sourceId) ON DELETE NO ACTION
+/// - effectiveUntil > effectiveFrom when both are set
+/// - confirmation fields are all-null or all-present
+/// - ACTIVE/SUPERSEDED require confirmation metadata; DRAFT forbids it
 model KnowledgeVersion {
   id                          String                  @id @default(cuid())
   organizationId              String
-  organization                Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sourceId                    String
-  source                      KnowledgeSource         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  source                      KnowledgeSource         @relation(fields: [sourceId, organizationId], references: [id, organizationId], onDelete: Cascade)
   state                       KnowledgeLifecycleState
   title                       String
   contentChecksum             String
-  effectiveFrom               DateTime?
-  effectiveUntil              DateTime?
+  effectiveFrom               DateTime?               @db.Timestamptz(3)
+  effectiveUntil              DateTime?               @db.Timestamptz(3)
   /// OCC for draft updates and confirmation. Frozen after confirmation.
   draftRevision               Int                     @default(0)
   createdByUserId             String?
@@ -806,9 +806,9 @@ model KnowledgeVersion {
   createdAt                   DateTime                @default(now())
   updatedAt                   DateTime                @updatedAt
   sections                    KnowledgeSection[]
-  passages                    KnowledgePassage[]
 
   @@unique([id, organizationId])
+  @@unique([id, organizationId, sourceId])
   @@index([organizationId, state])
   @@index([sourceId, state])
   @@index([organizationId, state, effectiveFrom])
@@ -818,11 +818,9 @@ model KnowledgeVersion {
 model KnowledgeSection {
   id             String             @id @default(cuid())
   organizationId String
-  organization   Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sourceId       String
-  source         KnowledgeSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   versionId      String
-  version        KnowledgeVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  version        KnowledgeVersion   @relation(fields: [versionId, organizationId, sourceId], references: [id, organizationId, sourceId], onDelete: Cascade)
   citationKey    String
   title          String
   displayOrder   Int
@@ -832,6 +830,7 @@ model KnowledgeSection {
 
   @@unique([versionId, citationKey])
   @@unique([versionId, displayOrder])
+  @@unique([id, organizationId, sourceId, versionId])
   @@index([organizationId, versionId, displayOrder])
   @@index([sourceId])
 }
@@ -839,13 +838,10 @@ model KnowledgeSection {
 model KnowledgePassage {
   id             String           @id @default(cuid())
   organizationId String
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sourceId       String
-  source         KnowledgeSource  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   versionId      String
-  version        KnowledgeVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
   sectionId      String
-  section        KnowledgeSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  section        KnowledgeSection @relation(fields: [sectionId, organizationId, sourceId, versionId], references: [id, organizationId, sourceId, versionId], onDelete: Cascade)
   citationKey    String
   body           String
   displayOrder   Int

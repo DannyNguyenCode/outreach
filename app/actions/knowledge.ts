@@ -150,6 +150,10 @@ function draftPayloadFromForm(formData: FormData) {
       title: String(formData.get("title") ?? content.title ?? ""),
       effectiveFrom: String(formData.get("effectiveFrom") ?? "") || null,
       effectiveUntil: String(formData.get("effectiveUntil") ?? "") || null,
+      effectiveFromDisambiguation:
+        String(formData.get("effectiveFromDisambiguation") ?? "") || null,
+      effectiveUntilDisambiguation:
+        String(formData.get("effectiveUntilDisambiguation") ?? "") || null,
       sections: content.sections,
       sourceId: String(formData.get("sourceId") ?? ""),
       versionId: String(formData.get("versionId") ?? ""),

@@ -21,7 +21,8 @@ export type { AuthFailure, DbClient };
  * 1. `organization-knowledge:<organizationId>` advisory lock
  * 2. Actor membership `FOR UPDATE` + permission recheck
  * 3. Logical source row `FOR UPDATE` (when mutating an existing source)
- * 4. Version row `FOR UPDATE` (when mutating or confirming a version)
+ * 4. Version row(s) `FOR UPDATE` in stable id order (confirm: the target
+ *    version; archive: ACTIVE and DRAFT versions for that source)
  * 5. Tenant-scoped section/passage rows in stable order
  *
  * NEVER acquire the Phase 3A readiness lock (`organization-readiness:`) or the
@@ -124,6 +125,25 @@ export async function lockKnowledgeVersionForUpdate(
     FOR UPDATE
   `;
   return rows[0] ?? null;
+}
+
+/**
+ * Lock ACTIVE and DRAFT versions for a source in stable id order. Used by
+ * archive so the documented version `FOR UPDATE` step is literal.
+ */
+export async function lockActiveAndDraftKnowledgeVersionsForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; sourceId: string },
+): Promise<Array<{ id: string; state: string }>> {
+  return tx.$queryRaw<Array<{ id: string; state: string }>>`
+    SELECT id, state
+    FROM "KnowledgeVersion"
+    WHERE "sourceId" = ${input.sourceId}
+      AND "organizationId" = ${input.organizationId}
+      AND state IN ('ACTIVE', 'DRAFT')
+    ORDER BY id ASC
+    FOR UPDATE
+  `;
 }
 
 export class KnowledgeLifecycleError extends Error {

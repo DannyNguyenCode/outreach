@@ -82,7 +82,10 @@ export default async function KnowledgeVersionPage({ params }: PageProps) {
         current="detail"
         canCreate={canManage}
       />
-      <KnowledgePreview version={version} />
+      <KnowledgePreview
+        version={version}
+        organizationTimeZone={result.organizationTimeZone}
+      />
 
       {canManage && version.state === "DRAFT" ? (
         <p>

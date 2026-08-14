@@ -113,6 +113,44 @@ test.describe("Phase 4A business knowledge", () => {
       .getByRole("link", { name: /Return policy/ })
       .first()
       .click();
+    await page
+      .getByRole("button", { name: "Create replacement draft" })
+      .click();
+    await page.getByRole("link", { name: "Edit draft" }).click();
+    await page.getByLabel("Title", { exact: true }).fill("Return policy v2");
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page).toHaveURL(
+      new RegExp(`/app/orgs/${slug}/knowledge/.+/versions/`),
+    );
+
+    await page.goto(`/app/orgs/${slug}/knowledge`);
+    await expect(
+      page.getByText("Unused items may be returned in 30 days."),
+    ).toBeVisible();
+
+    await page
+      .getByRole("link", { name: /Return policy/ })
+      .first()
+      .click();
+    await page.getByRole("link", { name: "Preview and confirm" }).click();
+    await page
+      .getByLabel("I confirm the statement above for this exact version.")
+      .check();
+    await page.getByRole("button", { name: "Confirm and activate" }).click();
+    await expect(page.getByText(/State: active/i)).toBeVisible();
+
+    await page.goto(`/app/orgs/${slug}/knowledge`);
+    await expect(
+      page.getByRole("heading", { name: "Active retrieval" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: /Return policy v2/ }),
+    ).toBeVisible();
+
+    await page
+      .getByRole("link", { name: /Return policy v2/ })
+      .first()
+      .click();
     await page.getByRole("button", { name: "Archive knowledge" }).click();
     await expect(
       page.getByText("This source is archived and excluded from retrieval."),
@@ -125,5 +163,38 @@ test.describe("Phase 4A business knowledge", () => {
     await expect(
       page.getByText("Unused items may be returned in 30 days."),
     ).toHaveCount(0);
+
+    await page
+      .getByRole("link", { name: /Return policy/ })
+      .first()
+      .click();
+    await page.getByRole("link", { name: /superseded/i }).click();
+    await page.getByRole("button", { name: "Restore as new draft" }).click();
+    await expect(page.getByText(/Restored as a new draft/i)).toBeVisible();
+
+    await page.goto(`/app/orgs/${slug}/knowledge`);
+    await expect(
+      page.getByRole("heading", { name: "Active retrieval" }),
+    ).toHaveCount(0);
+
+    await page
+      .getByRole("link", { name: /Return policy/ })
+      .first()
+      .click();
+    await page.getByRole("link", { name: "Preview and confirm" }).click();
+    await expect(page.getByText(/State: draft/i)).toBeVisible();
+    await page
+      .getByLabel("I confirm the statement above for this exact version.")
+      .check();
+    await page.getByRole("button", { name: "Confirm and activate" }).click();
+    await expect(page.getByText(/State: active/i)).toBeVisible();
+
+    await page.goto(`/app/orgs/${slug}/knowledge`);
+    await expect(
+      page.getByRole("heading", { name: "Active retrieval" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Unused items may be returned in 30 days."),
+    ).toBeVisible();
   });
 });
