@@ -18,6 +18,9 @@ import {
   KnowledgeNotFoundError,
   lockActiveAndDraftKnowledgeVersionsForUpdate,
   lockKnowledgeSourceForUpdate,
+  lockKnowledgeDocumentForUpdate,
+  lockKnowledgeDocumentJobForUpdate,
+  lockKnowledgeDocumentsAndJobsForSourceForUpdate,
   lockKnowledgeVersionForUpdate,
   mapKnowledgeError,
   requireActiveActorInTx,
@@ -55,6 +58,13 @@ import { prisma } from "@/lib/prisma";
 import { resolveEffectiveRange } from "@/lib/time/organization-datetime";
 
 export type KnowledgeFailure = AuthFailure;
+
+export type DocumentProcessingIssueInput = {
+  code: string;
+  severity: "WARNING" | "BLOCKING";
+  sectionLocator?: string | null;
+  safeMessage: string;
+};
 
 export type KnowledgeVersionDetail = KnowledgeVersion & {
   sections: Array<
@@ -296,7 +306,19 @@ export async function updateKnowledgeDraft(
       if (!locked) {
         throw new KnowledgeNotFoundError();
       }
-      if (locked.state !== "DRAFT") {
+      const isDocumentCorrection =
+        source.inputKind === "DOCUMENT" && locked.state === "NEEDS_ATTENTION";
+      if (isDocumentCorrection) {
+        const document = await lockKnowledgeDocumentForUpdate(tx, {
+          organizationId: input.organizationId,
+          sourceId: parsed.data.sourceId,
+          versionId: parsed.data.versionId,
+        });
+        if (!document || document.processingState !== "NEEDS_ATTENTION") {
+          throw new ConflictError();
+        }
+      }
+      if (locked.state !== "DRAFT" && !isDocumentCorrection) {
         throw new KnowledgeLifecycleError(
           "not_draft",
           "Only a draft version can be edited.",
@@ -308,7 +330,7 @@ export async function updateKnowledgeDraft(
           id: parsed.data.versionId,
           organizationId: input.organizationId,
           sourceId: parsed.data.sourceId,
-          state: "DRAFT",
+          state: isDocumentCorrection ? { in: ["NEEDS_ATTENTION"] } : "DRAFT",
           draftRevision: expected.version,
         },
         data: {
@@ -316,6 +338,7 @@ export async function updateKnowledgeDraft(
           contentChecksum: prepared.checksum,
           effectiveFrom: times.effectiveFrom,
           effectiveUntil: times.effectiveUntil,
+          state: "DRAFT",
           draftRevision: { increment: 1 },
         },
       });
@@ -329,6 +352,32 @@ export async function updateKnowledgeDraft(
         versionId: parsed.data.versionId,
         sections: prepared.sections,
       });
+
+      if (isDocumentCorrection) {
+        await tx.knowledgeDocumentIssue.updateMany({
+          where: {
+            organizationId: input.organizationId,
+            sourceId: parsed.data.sourceId,
+            versionId: parsed.data.versionId,
+            resolvedAt: null,
+          },
+          data: { resolvedAt: new Date() },
+        });
+        await tx.knowledgeDocument.updateMany({
+          where: {
+            organizationId: input.organizationId,
+            sourceId: parsed.data.sourceId,
+            versionId: parsed.data.versionId,
+            processingState: "NEEDS_ATTENTION",
+            scanState: "CLEAN",
+          },
+          data: {
+            processingState: "COMPLETE",
+            normalizedContentChecksum: prepared.checksum,
+            lastSafeErrorCode: null,
+          },
+        });
+      }
 
       const hasActive = await sourceHasActiveVersion(tx, {
         organizationId: input.organizationId,
@@ -354,6 +403,18 @@ export async function updateKnowledgeDraft(
           checksum: prepared.checksum,
         },
       });
+      if (isDocumentCorrection) {
+        await recordOrganizationAuditEvent(tx, {
+          organizationId: input.organizationId,
+          actorUserId: input.actor.id,
+          action: "KNOWLEDGE_DOCUMENT_CORRECTIONS_SAVED",
+          metadata: {
+            sourceId: parsed.data.sourceId,
+            versionId: parsed.data.versionId,
+            checksum: prepared.checksum,
+          },
+        });
+      }
 
       return loadVersionGraph(tx, {
         organizationId: input.organizationId,
@@ -438,6 +499,12 @@ export async function createReplacementDraft(
         throw new KnowledgeLifecycleError(
           "already_archived",
           "Archived knowledge cannot be replaced. Restore it first.",
+        );
+      }
+      if (source.inputKind === "DOCUMENT") {
+        throw new KnowledgeLifecycleError(
+          "not_confirmable",
+          "Document replacements require a new uploaded file.",
         );
       }
       if (source.version !== expected.version) {
@@ -618,12 +685,43 @@ export async function confirmKnowledgeVersion(
       if (
         !sourceRow ||
         sourceRow.category !== KNOWLEDGE_ACTIVATABLE_CATEGORY ||
-        sourceRow.inputKind !== "MANUAL"
+        (sourceRow.inputKind !== "MANUAL" && sourceRow.inputKind !== "DOCUMENT")
       ) {
         throw new KnowledgeLifecycleError(
           "not_confirmable",
           "Only customer-confirmed business knowledge can be activated.",
         );
+      }
+
+      if (sourceRow.inputKind === "DOCUMENT") {
+        const document = await lockKnowledgeDocumentForUpdate(tx, {
+          organizationId: input.organizationId,
+          sourceId: parsed.data.sourceId,
+          versionId: parsed.data.versionId,
+        });
+        const blockingIssues = await tx.knowledgeDocumentIssue.count({
+          where: {
+            organizationId: input.organizationId,
+            sourceId: parsed.data.sourceId,
+            versionId: parsed.data.versionId,
+            severity: "BLOCKING",
+            resolvedAt: null,
+          },
+        });
+        if (
+          !document ||
+          document.processingState !== "COMPLETE" ||
+          document.scanState !== "CLEAN" ||
+          !document.binaryChecksum ||
+          document.binaryChecksum !== document.scannedChecksum ||
+          !document.normalizedContentChecksum ||
+          blockingIssues > 0
+        ) {
+          throw new KnowledgeLifecycleError(
+            "not_confirmable",
+            "This document must be clean, completely processed, and free of blocking issues before confirmation.",
+          );
+        }
       }
 
       const canonical = toCanonicalContent({
@@ -716,6 +814,18 @@ export async function confirmKnowledgeVersion(
           supersedesVersionId: previousActive?.id ?? null,
         },
       });
+      if (sourceRow.inputKind === "DOCUMENT") {
+        await recordOrganizationAuditEvent(tx, {
+          organizationId: input.organizationId,
+          actorUserId: input.actor.id,
+          action: "KNOWLEDGE_DOCUMENT_CONFIRMED",
+          metadata: {
+            sourceId: parsed.data.sourceId,
+            versionId: parsed.data.versionId,
+            checksum: serverChecksum,
+          },
+        });
+      }
 
       return loadVersionGraph(tx, {
         organizationId: input.organizationId,
@@ -810,13 +920,21 @@ export async function archiveKnowledgeSource(
         organizationId: input.organizationId,
         sourceId: parsed.data.sourceId,
       });
+      if (locked.inputKind === "DOCUMENT") {
+        await lockKnowledgeDocumentsAndJobsForSourceForUpdate(tx, {
+          organizationId: input.organizationId,
+          sourceId: parsed.data.sourceId,
+        });
+      }
 
       const archivedAt = new Date();
       await tx.knowledgeVersion.updateMany({
         where: {
           organizationId: input.organizationId,
           sourceId: parsed.data.sourceId,
-          state: { in: ["ACTIVE", "DRAFT"] },
+          state: {
+            in: ["ACTIVE", "DRAFT", "PROCESSING", "NEEDS_ATTENTION", "FAILED"],
+          },
         },
         data: { state: "ARCHIVED" },
       });
@@ -931,6 +1049,12 @@ export async function restoreKnowledgeVersion(
       if (source.version !== expected.version) {
         throw new ConflictError();
       }
+      if (source.inputKind === "DOCUMENT") {
+        throw new KnowledgeLifecycleError(
+          "not_restorable",
+          "Document history must be restored through the private document workflow.",
+        );
+      }
 
       const historical = await tx.knowledgeVersion.findFirst({
         where: {
@@ -1031,6 +1155,211 @@ export async function restoreKnowledgeVersion(
         ok: false,
         reason: "failed",
         message: "Could not restore knowledge.",
+      }
+    );
+  }
+}
+
+/**
+ * Publish one claimed document extraction. Background workers do not have an
+ * actor membership row, so they acquire the organization knowledge lock
+ * first, then source, version, document, job, section, and passage rows.
+ */
+export async function publishDocumentExtraction(input: {
+  organizationId: string;
+  sourceId: string;
+  versionId: string;
+  documentId: string;
+  jobId: string;
+  workerId: string;
+  extractorName: string;
+  extractorVersion: string;
+  normalizedContentChecksum: string;
+  sections: CanonicalKnowledgeSection[];
+  issues?: DocumentProcessingIssueInput[];
+  exactDuplicate?: { sourceId: string; versionId: string } | null;
+  nearDuplicate?: { sourceId: string; versionId: string } | null;
+}): Promise<
+  | { ok: true; state: "DRAFT" | "NEEDS_ATTENTION"; checksum: string }
+  | KnowledgeFailure
+> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await acquireOrganizationKnowledgeLock(tx, input.organizationId);
+
+      const source = await lockKnowledgeSourceForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+      });
+      if (!source || source.inputKind !== "DOCUMENT" || source.archivedAt) {
+        throw new KnowledgeLifecycleError(
+          "not_confirmable",
+          "The document source is no longer processable.",
+        );
+      }
+
+      const version = await lockKnowledgeVersionForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: input.versionId,
+      });
+      if (!version) throw new KnowledgeNotFoundError();
+
+      const document = await lockKnowledgeDocumentForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: input.versionId,
+        documentId: input.documentId,
+      });
+      const job = await lockKnowledgeDocumentJobForUpdate(tx, {
+        organizationId: input.organizationId,
+        jobId: input.jobId,
+      });
+      if (
+        !document ||
+        !job ||
+        job.state !== "RUNNING" ||
+        job.leaseOwner !== input.workerId
+      ) {
+        throw new ConflictError();
+      }
+
+      if (
+        version.state !== "PROCESSING" ||
+        document.processingState !== "EXTRACTING" ||
+        document.scanState !== "CLEAN"
+      ) {
+        throw new ConflictError();
+      }
+
+      const storedVersion = await tx.knowledgeVersion.findFirstOrThrow({
+        where: {
+          id: input.versionId,
+          sourceId: input.sourceId,
+          organizationId: input.organizationId,
+        },
+        select: {
+          title: true,
+          effectiveFrom: true,
+          effectiveUntil: true,
+        },
+      });
+      const canonical = toCanonicalContent({
+        title: storedVersion.title,
+        effectiveFrom: storedVersion.effectiveFrom,
+        effectiveUntil: storedVersion.effectiveUntil,
+        sections: input.sections,
+      });
+      const checksum = computeKnowledgeChecksum(canonical);
+      const issues = input.issues ?? [];
+      const hasBlocking = issues.some((issue) => issue.severity === "BLOCKING");
+      const nextState = hasBlocking ? "NEEDS_ATTENTION" : "DRAFT";
+
+      await replaceDraftContents(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: input.versionId,
+        sections: input.sections,
+      });
+      if (issues.length > 0) {
+        await tx.knowledgeDocumentIssue.createMany({
+          data: issues.map((issue) => ({
+            organizationId: input.organizationId,
+            sourceId: input.sourceId,
+            versionId: input.versionId,
+            documentId: input.documentId,
+            code: issue.code,
+            severity: issue.severity,
+            sectionLocator: issue.sectionLocator ?? null,
+            safeMessage: issue.safeMessage,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      const changedVersion = await tx.knowledgeVersion.updateMany({
+        where: {
+          id: input.versionId,
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+          state: "PROCESSING",
+        },
+        data: {
+          state: nextState,
+          contentChecksum: checksum,
+          draftRevision: { increment: 1 },
+        },
+      });
+      if (changedVersion.count !== 1) throw new ConflictError();
+
+      const changedDocument = await tx.knowledgeDocument.updateMany({
+        where: {
+          id: input.documentId,
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+          versionId: input.versionId,
+          processingState: "EXTRACTING",
+          scanState: "CLEAN",
+          leaseOwner: input.workerId,
+        },
+        data: {
+          processingState: hasBlocking ? "NEEDS_ATTENTION" : "COMPLETE",
+          normalizedContentChecksum: input.normalizedContentChecksum,
+          extractorName: input.extractorName,
+          extractorVersion: input.extractorVersion,
+          exactDuplicateSourceId: input.exactDuplicate?.sourceId ?? null,
+          exactDuplicateVersionId: input.exactDuplicate?.versionId ?? null,
+          nearDuplicateSourceId: input.nearDuplicate?.sourceId ?? null,
+          nearDuplicateVersionId: input.nearDuplicate?.versionId ?? null,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          retryAt: null,
+          lastSafeErrorCode: null,
+        },
+      });
+      if (changedDocument.count !== 1) throw new ConflictError();
+
+      const changedJob = await tx.knowledgeDocumentJob.updateMany({
+        where: {
+          id: input.jobId,
+          organizationId: input.organizationId,
+          state: "RUNNING",
+          leaseOwner: input.workerId,
+        },
+        data: {
+          state: "SUCCEEDED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          completedAt: new Date(),
+          lastSafeErrorCode: null,
+        },
+      });
+      if (changedJob.count !== 1) throw new ConflictError();
+
+      await recordOrganizationAuditEvent(tx, {
+        organizationId: input.organizationId,
+        actorUserId: null,
+        action: "KNOWLEDGE_DOCUMENT_PROCESSING_COMPLETED",
+        metadata: {
+          sourceId: input.sourceId,
+          versionId: input.versionId,
+          documentId: input.documentId,
+          jobId: input.jobId,
+          state: nextState,
+          checksum,
+          normalizedContentChecksum: input.normalizedContentChecksum,
+          issueCount: issues.length,
+        },
+      });
+
+      return { ok: true as const, state: nextState, checksum };
+    });
+  } catch (error) {
+    return (
+      mapKnowledgeError(error) ?? {
+        ok: false,
+        reason: "failed",
+        message: "Could not publish document processing.",
       }
     );
   }
@@ -1277,7 +1606,10 @@ export async function getKnowledgeSource(input: {
     }
 
     const draftSummary = canManage
-      ? source.versions.find((version) => version.state === "DRAFT")
+      ? source.versions.find(
+          (version) =>
+            version.state === "DRAFT" || version.state === "NEEDS_ATTENTION",
+        )
       : undefined;
     const activeSummary = source.versions.find(
       (version) => version.state === "ACTIVE",

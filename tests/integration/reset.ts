@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 
 /**
- * Wipe Phase 1–4A tables in FK-safe order for integration tests.
+ * Wipe Phase 1–4B tables in FK-safe order for integration tests.
  * Child tables are deleted before Organization.
  */
 export async function resetApplicationData(
@@ -9,6 +9,11 @@ export async function resetApplicationData(
 ): Promise<void> {
   await prisma.user.updateMany({ data: { activeOrganizationId: null } });
   await prisma.organizationAuditEvent.deleteMany();
+
+  // Phase 4B (before organization delete)
+  await prisma.knowledgeDocumentIssue.deleteMany();
+  await prisma.knowledgeDocumentJob.deleteMany();
+  await prisma.knowledgeDocument.deleteMany();
 
   // Phase 4A (before organization delete)
   await prisma.knowledgePassage.deleteMany();

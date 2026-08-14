@@ -52,6 +52,8 @@ export type KnowledgeMutationTestHooks = {
    * service returns its success payload.
    */
   testAfterTransactionCommit?: () => Promise<void>;
+  /** Invoked after upload storage verification and before DB finalization. */
+  testBeforeDocumentUploadFinalization?: () => Promise<void>;
 };
 
 export function organizationKnowledgeLockKey(organizationId: string): string {
@@ -81,14 +83,24 @@ export async function lockKnowledgeSourceForUpdate(
   tx: Prisma.TransactionClient,
   input: { organizationId: string; sourceId: string },
   hooks: KnowledgeMutationTestHooks = {},
-): Promise<{ id: string; version: number; archivedAt: Date | null } | null> {
+): Promise<{
+  id: string;
+  version: number;
+  archivedAt: Date | null;
+  inputKind: string;
+} | null> {
   if (hooks.testBeforeSourceLock) {
     await hooks.testBeforeSourceLock();
   }
   const rows = await tx.$queryRaw<
-    Array<{ id: string; version: number; archivedAt: Date | null }>
+    Array<{
+      id: string;
+      version: number;
+      archivedAt: Date | null;
+      inputKind: string;
+    }>
   >`
-    SELECT id, version, "archivedAt"
+    SELECT id, version, "archivedAt", "inputKind"::text AS "inputKind"
     FROM "KnowledgeSource"
     WHERE id = ${input.sourceId}
       AND "organizationId" = ${input.organizationId}
@@ -128,8 +140,8 @@ export async function lockKnowledgeVersionForUpdate(
 }
 
 /**
- * Lock ACTIVE and DRAFT versions for a source in stable id order. Used by
- * archive so the documented version `FOR UPDATE` step is literal.
+ * Lock every mutable/current version for a source in stable id order. Phase
+ * 4B adds processing states that archive must serialize with publication.
  */
 export async function lockActiveAndDraftKnowledgeVersionsForUpdate(
   tx: Prisma.TransactionClient,
@@ -140,7 +152,106 @@ export async function lockActiveAndDraftKnowledgeVersionsForUpdate(
     FROM "KnowledgeVersion"
     WHERE "sourceId" = ${input.sourceId}
       AND "organizationId" = ${input.organizationId}
-      AND state IN ('ACTIVE', 'DRAFT')
+      AND state IN ('ACTIVE', 'DRAFT', 'PROCESSING', 'NEEDS_ATTENTION', 'FAILED')
+    ORDER BY id ASC
+    FOR UPDATE
+  `;
+}
+
+export async function lockKnowledgeDocumentForUpdate(
+  tx: Prisma.TransactionClient,
+  input: {
+    organizationId: string;
+    sourceId: string;
+    versionId: string;
+    documentId?: string;
+  },
+): Promise<{
+  id: string;
+  processingState: string;
+  scanState: string;
+  binaryChecksum: string | null;
+  scannedChecksum: string | null;
+  normalizedContentChecksum: string | null;
+  storageObjectKey: string;
+} | null> {
+  const rows = await tx.$queryRaw<
+    Array<{
+      id: string;
+      processingState: string;
+      scanState: string;
+      binaryChecksum: string | null;
+      scannedChecksum: string | null;
+      normalizedContentChecksum: string | null;
+      storageObjectKey: string;
+    }>
+  >`
+    SELECT id,
+           "processingState"::text AS "processingState",
+           "scanState"::text AS "scanState",
+           "binaryChecksum",
+           "scannedChecksum",
+           "normalizedContentChecksum",
+           "storageObjectKey"
+    FROM "KnowledgeDocument"
+    WHERE "organizationId" = ${input.organizationId}
+      AND "sourceId" = ${input.sourceId}
+      AND "versionId" = ${input.versionId}
+      AND (${input.documentId ?? null}::text IS NULL OR id = ${input.documentId ?? null})
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+export async function lockKnowledgeDocumentJobForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; jobId: string },
+): Promise<{
+  id: string;
+  state: string;
+  leaseOwner: string | null;
+  attempts: number;
+  maxAttempts: number;
+} | null> {
+  const rows = await tx.$queryRaw<
+    Array<{
+      id: string;
+      state: string;
+      leaseOwner: string | null;
+      attempts: number;
+      maxAttempts: number;
+    }>
+  >`
+    SELECT id,
+           state::text AS state,
+           "leaseOwner",
+           attempts,
+           "maxAttempts"
+    FROM "KnowledgeDocumentJob"
+    WHERE id = ${input.jobId}
+      AND "organizationId" = ${input.organizationId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
+}
+
+export async function lockKnowledgeDocumentsAndJobsForSourceForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; sourceId: string },
+): Promise<void> {
+  await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM "KnowledgeDocument"
+    WHERE "organizationId" = ${input.organizationId}
+      AND "sourceId" = ${input.sourceId}
+    ORDER BY id ASC
+    FOR UPDATE
+  `;
+  await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM "KnowledgeDocumentJob"
+    WHERE "organizationId" = ${input.organizationId}
+      AND "sourceId" = ${input.sourceId}
     ORDER BY id ASC
     FOR UPDATE
   `;

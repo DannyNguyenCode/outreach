@@ -3,9 +3,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import {
+  DocumentRestoreForm,
   KnowledgeConfirmForm,
   KnowledgeRestoreForm,
 } from "@/components/orgs/knowledge/knowledge-actions";
+import { DocumentStatus } from "@/components/orgs/knowledge/document-status";
 import { KnowledgeNav } from "@/components/orgs/knowledge/knowledge-nav";
 import { KnowledgePreview } from "@/components/orgs/knowledge/knowledge-preview";
 import { requireVerifiedUser } from "@/lib/auth/session";
@@ -15,6 +17,7 @@ import {
   requireOrganizationMemberBySlug,
 } from "@/lib/orgs/authorization";
 import { getKnowledgeVersion } from "@/lib/orgs/knowledge";
+import { getKnowledgeDocument } from "@/lib/orgs/knowledge-documents";
 
 type PageProps = {
   params: Promise<{ slug: string; sourceId: string; versionId: string }>;
@@ -56,6 +59,15 @@ export default async function KnowledgeVersionPage({ params }: PageProps) {
   }
 
   const { source, version, canManage, canConfirm, canArchive } = result;
+  const document =
+    source.inputKind === "DOCUMENT" && canManage
+      ? await getKnowledgeDocument({
+          actor: user,
+          organizationId: membership.organizationId,
+          sourceId,
+          versionId,
+        })
+      : null;
 
   return (
     <div className="space-y-6">
@@ -86,6 +98,31 @@ export default async function KnowledgeVersionPage({ params }: PageProps) {
         version={version}
         organizationTimeZone={result.organizationTimeZone}
       />
+      {document?.ok ? (
+        <DocumentStatus
+          organizationSlug={slug}
+          sourceId={sourceId}
+          versionId={versionId}
+          displayFilename={document.document.displayFilename}
+          byteSize={document.document.byteSize?.toString() ?? null}
+          scanState={document.document.scanState}
+          processingState={document.document.processingState}
+          attempts={document.document.processingAttempts}
+          safeErrorCode={document.document.lastSafeErrorCode}
+          exactDuplicateVersionId={document.document.exactDuplicateVersionId}
+          nearDuplicateVersionId={document.document.nearDuplicateVersionId}
+          duplicateAcknowledged={Boolean(
+            document.document.duplicateAcknowledgedAt,
+          )}
+          issues={document.document.issues.map((issue) => ({
+            id: issue.id,
+            severity: issue.severity,
+            safeMessage: issue.safeMessage,
+            sectionLocator: issue.sectionLocator,
+            resolved: Boolean(issue.resolvedAt),
+          }))}
+        />
+      ) : null}
 
       {canManage && version.state === "DRAFT" ? (
         <p>
@@ -108,10 +145,22 @@ export default async function KnowledgeVersionPage({ params }: PageProps) {
         />
       ) : null}
 
-      {canArchive &&
+      {source.inputKind === "MANUAL" &&
+      canArchive &&
       (version.state === "SUPERSEDED" || version.state === "ARCHIVED") &&
       version.confirmedAt ? (
         <KnowledgeRestoreForm
+          organizationSlug={slug}
+          sourceId={source.id}
+          versionId={version.id}
+          expectedVersion={source.version}
+        />
+      ) : null}
+      {source.inputKind === "DOCUMENT" &&
+      canArchive &&
+      (version.state === "SUPERSEDED" || version.state === "ARCHIVED") &&
+      version.confirmedAt ? (
+        <DocumentRestoreForm
           organizationSlug={slug}
           sourceId={source.id}
           versionId={version.id}

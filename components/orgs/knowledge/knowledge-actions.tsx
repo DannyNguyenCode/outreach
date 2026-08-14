@@ -7,6 +7,7 @@ import {
   confirmKnowledgeVersionAction,
   createReplacementDraftAction,
   restoreKnowledgeVersionAction,
+  restoreKnowledgeDocumentAction,
 } from "@/app/actions/knowledge";
 import { initialActionState } from "@/app/actions/auth-state";
 import { FieldError } from "@/components/auth/field-error";
@@ -158,6 +159,36 @@ export function KnowledgeReplacementForm({
       <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <SubmitButton pendingLabel="Creating draft…">
         Create replacement draft
+      </SubmitButton>
+    </form>
+  );
+}
+
+export function DocumentRestoreForm({
+  organizationSlug,
+  sourceId,
+  versionId,
+  expectedVersion,
+}: {
+  organizationSlug: string;
+  sourceId: string;
+  versionId: string;
+  expectedVersion: number;
+}) {
+  const [state, formAction] = useActionState(
+    restoreKnowledgeDocumentAction,
+    initialActionState,
+  );
+  return (
+    <form action={formAction} className="space-y-3">
+      <FormStatus status={state.status} message={state.message} />
+      <ConflictHint message={state.message} />
+      <input type="hidden" name="organizationSlug" value={organizationSlug} />
+      <input type="hidden" name="sourceId" value={sourceId} />
+      <input type="hidden" name="versionId" value={versionId} />
+      <input type="hidden" name="expectedVersion" value={expectedVersion} />
+      <SubmitButton pendingLabel="Restoring private copy…">
+        Restore as new document draft
       </SubmitButton>
     </form>
   );

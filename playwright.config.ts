@@ -39,6 +39,16 @@ export default defineConfig({
       PLAYWRIGHT_WEB_SERVER: "true",
       NEXT_PUBLIC_APP_URL: baseURL,
       AUTH_TRUST_HOST: "true",
+      KNOWLEDGE_DOCUMENT_ADAPTER_MODE:
+        process.env.KNOWLEDGE_DOCUMENT_ADAPTER_MODE ?? "fake",
+      KNOWLEDGE_WORKER_TOKEN:
+        process.env.KNOWLEDGE_WORKER_TOKEN ??
+        "dev-only-knowledge-worker-token-32chars",
+      KNOWLEDGE_STORAGE_BUCKET:
+        process.env.KNOWLEDGE_STORAGE_BUCKET ?? "knowledge-documents-private",
+      MALWARE_SCANNER_NAME:
+        process.env.MALWARE_SCANNER_NAME ?? "deterministic-ci-scanner",
+      MALWARE_SCANNER_VERSION: process.env.MALWARE_SCANNER_VERSION ?? "ci-v1",
     },
   },
   projects: [
