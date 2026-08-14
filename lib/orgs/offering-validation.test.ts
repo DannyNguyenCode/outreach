@@ -120,4 +120,131 @@ describe("offering draft validation", () => {
     });
     expect(first.checksum).not.toBe(second.checksum);
   });
+
+  it("produces the same checksum for harmless graph ordering and client IDs", () => {
+    const common = {
+      name: "Configurable plan",
+      offeringType: "PLAN" as const,
+      pricingModel: "MULTI_OPTION" as const,
+      effectiveFrom: new Date("2026-08-14T12:00:00.000Z"),
+      effectiveUntil: null,
+      displayOrder: 4,
+    };
+    const first = toCanonicalOfferingContent({
+      ...common,
+      prices: [
+        {
+          label: "Annual",
+          amount: new Prisma.Decimal("100"),
+          currencyCode: "USD",
+          billingFrequency: "YEARLY" as const,
+          effectiveFrom: null,
+          effectiveUntil: null,
+          displayOrder: 2,
+          clientKey: "client-price-a",
+        },
+        {
+          label: "Monthly",
+          amount: new Prisma.Decimal("10.0000"),
+          currencyCode: "USD",
+          billingFrequency: "MONTHLY" as const,
+          effectiveFrom: null,
+          effectiveUntil: null,
+          displayOrder: 1,
+          clientKey: "client-price-b",
+        },
+      ],
+      features: [
+        { featureKey: "support", name: "Support", displayOrder: 2 },
+        { featureKey: "storage", name: "Storage", displayOrder: 1 },
+      ],
+      variants: [
+        {
+          name: "Blue",
+          displayOrder: 1,
+          attributes: { size: "large", color: "blue" },
+          priceClientKeys: ["client-price-b"],
+        },
+      ],
+      customValues: [
+        {
+          definitionKey: "configuration",
+          value: { zeta: true, nested: { second: 2, first: 1 } },
+        },
+      ],
+    });
+    const second = toCanonicalOfferingContent({
+      ...common,
+      prices: [
+        {
+          label: "Monthly",
+          amount: new Prisma.Decimal("10"),
+          currencyCode: "USD",
+          billingFrequency: "MONTHLY" as const,
+          effectiveFrom: null,
+          effectiveUntil: null,
+          displayOrder: 1,
+          clientKey: "database-price-99",
+        },
+        {
+          label: "Annual",
+          amount: new Prisma.Decimal("100.0000"),
+          currencyCode: "USD",
+          billingFrequency: "YEARLY" as const,
+          effectiveFrom: null,
+          effectiveUntil: null,
+          displayOrder: 2,
+          clientKey: "database-price-42",
+        },
+      ],
+      features: [
+        { featureKey: "storage", name: "Storage", displayOrder: 1 },
+        { featureKey: "support", name: "Support", displayOrder: 2 },
+      ],
+      variants: [
+        {
+          name: "Blue",
+          displayOrder: 1,
+          attributes: { color: "blue", size: "large" },
+          priceClientKeys: ["database-price-99"],
+        },
+      ],
+      customValues: [
+        {
+          definitionKey: "configuration",
+          value: { nested: { first: 1, second: 2 }, zeta: true },
+        },
+      ],
+    });
+    expect(second.checksum).toBe(first.checksum);
+  });
+
+  it("derives deterministic feature keys and multi-select values", () => {
+    const input = {
+      name: "Emoji feature plan",
+      offeringType: "PLAN" as const,
+      pricingModel: "NONE" as const,
+      effectiveFrom: null,
+      effectiveUntil: null,
+      prices: [],
+      features: [{ name: "✨" }],
+      variants: [],
+    };
+    const first = toCanonicalOfferingContent(input);
+    const second = toCanonicalOfferingContent(input);
+    expect(first.canonical.features[0]?.featureKey).toMatch(
+      /^feature_[a-f0-9]{12}$/,
+    );
+    expect(second.checksum).toBe(first.checksum);
+
+    const selected = validateCustomFieldValue({
+      dataType: "MULTI_SELECT",
+      options: ["A", "B"],
+      value: ["B", "A"],
+    });
+    expect(selected).toMatchObject({
+      ok: true,
+      normalized: { kind: "json", jsonValue: ["A", "B"] },
+    });
+  });
 });

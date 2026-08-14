@@ -38,6 +38,8 @@ Reconciliation rules:
 
 - Existing Phase 3 rows are backfilled into linked `Offering` + `DRAFT` `OfferingVersion` rows (never auto-ACTIVE).
 - Linked legacy IDs preserve provenance (`legacyServiceId` / `legacyProductId`).
+- Free-form Phase 3 `priceDescription` text is preserved as a review note in `OfferingEligibility`; it is never interpreted as a numeric price.
+- Backfilled versions use the same canonical structured checksum as application-created drafts and can be confirmed without an intermediate edit.
 - Runtime retrieval returns only confirmed ACTIVE offerings.
 - Phase 3 catalogue CRUD continues to serve onboarding; it does not silently overwrite ACTIVE offering facts.
 - Future import (4D) and onboarding consolidation must populate the same Offering schema.
@@ -209,7 +211,7 @@ Forward-only:
 
 - Additive audit enum values
 - Offering enums/tables/indexes/checks
-- Backfill DRAFT offerings from existing `BusinessService` / `BusinessProduct` rows with legacy links
+- Backfill canonically checksummed DRAFT offerings from existing `BusinessService` / `BusinessProduct` rows with legacy links and preserved free-form pricing notes
 - Does not destroy or rewrite Phase 0–4B knowledge records
 
 ## Future import integration (Phase 4D)

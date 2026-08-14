@@ -64,6 +64,45 @@ export function OfferingPreview({
           </ul>
         </div>
       ) : null}
+      {version.eligibility ? (
+        <div>
+          <h3 className="text-sm font-medium">Eligibility and review notes</h3>
+          <dl className="mt-1 space-y-1 text-sm">
+            {version.eligibility.description ? (
+              <div>
+                <dt className="font-medium">Description</dt>
+                <dd className="whitespace-pre-wrap">
+                  {version.eligibility.description}
+                </dd>
+              </div>
+            ) : null}
+            {version.eligibility.availabilityRestrictions ? (
+              <div>
+                <dt className="font-medium">Availability restrictions</dt>
+                <dd className="whitespace-pre-wrap">
+                  {version.eligibility.availabilityRestrictions}
+                </dd>
+              </div>
+            ) : null}
+            {version.eligibility.qualificationNotes ? (
+              <div>
+                <dt className="font-medium">Qualification notes</dt>
+                <dd className="whitespace-pre-wrap">
+                  {version.eligibility.qualificationNotes}
+                </dd>
+              </div>
+            ) : null}
+            {version.eligibility.geographicNotes ? (
+              <div>
+                <dt className="font-medium">Geographic notes</dt>
+                <dd className="whitespace-pre-wrap">
+                  {version.eligibility.geographicNotes}
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        </div>
+      ) : null}
       <p className="break-all text-xs text-[var(--muted)]">
         Checksum {version.contentChecksum}
       </p>

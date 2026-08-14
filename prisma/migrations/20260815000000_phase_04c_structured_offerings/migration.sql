@@ -439,6 +439,66 @@ ALTER TABLE "OfferingEligibility"
   );
 
 -- Backfill DRAFT offerings from Phase 3 operational catalogues (never ACTIVE).
+--
+-- TypeScript's toCanonicalOfferingContent()/computeOfferingChecksum() remains
+-- the authoritative checksum definition. Legacy rows have a deliberately
+-- small canonical graph (no prices/features/variants/custom values), so this
+-- migration-only encoder emits that exact JSON.stringify representation.
+-- Migration regression tests compare this result to the TypeScript function.
+CREATE FUNCTION phase4c_legacy_offering_checksum(
+  legacy_name TEXT,
+  legacy_description TEXT,
+  legacy_type TEXT,
+  legacy_price_description TEXT,
+  legacy_display_order INTEGER
+) RETURNS TEXT
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+AS $$
+DECLARE
+  normalized_price_description TEXT := NULLIF(btrim(legacy_price_description), '');
+  pricing_model TEXT := CASE
+    WHEN normalized_price_description IS NULL THEN 'NONE'
+    ELSE 'QUOTE_REQUIRED'
+  END;
+  canonical_json TEXT;
+BEGIN
+  canonical_json :=
+    '{"name":' || to_json(btrim(legacy_name))::text ||
+    ',"description":' || CASE
+      WHEN NULLIF(btrim(legacy_description), '') IS NULL THEN 'null'
+      ELSE to_json(btrim(legacy_description))::text
+    END ||
+    ',"offeringType":' || to_json(legacy_type)::text ||
+    ',"pricingModel":' || to_json(pricing_model)::text ||
+    ',"quoteRequired":' || CASE
+      WHEN normalized_price_description IS NULL THEN 'false'
+      ELSE 'true'
+    END ||
+    ',"effectiveFrom":null' ||
+    ',"effectiveUntil":null' ||
+    ',"displayOrder":' || legacy_display_order::text ||
+    ',"prices":[]' ||
+    ',"features":[]' ||
+    ',"variants":[]' ||
+    ',"eligibility":' || CASE
+      WHEN normalized_price_description IS NULL THEN 'null'
+      ELSE
+        '{"description":' ||
+        to_json('Phase 3 pricing information: ' || normalized_price_description)::text ||
+        ',"availabilityRestrictions":null' ||
+        ',"qualificationNotes":null' ||
+        ',"geographicNotes":null' ||
+        ',"minimumQuantity":null' ||
+        ',"maximumQuantity":null}'
+    END ||
+    ',"customValues":[]}';
+
+  RETURN encode(sha256(convert_to(canonical_json, 'UTF8')), 'hex');
+END;
+$$;
+
 INSERT INTO "Offering" (
   "id",
   "organizationId",
@@ -498,7 +558,13 @@ SELECT
     WHEN s."priceDescription" IS NULL OR btrim(s."priceDescription") = '' THEN false
     ELSE true
   END,
-  encode(sha256(convert_to(s."name" || E'\n' || coalesce(s."description", '') || E'\n' || coalesce(s."priceDescription", ''), 'UTF8')), 'hex'),
+  phase4c_legacy_offering_checksum(
+    s."name",
+    coalesce(s."description", ''),
+    'SERVICE',
+    coalesce(s."priceDescription", ''),
+    s."displayOrder"
+  ),
   s."displayOrder",
   0,
   s."createdAt",
@@ -564,9 +630,65 @@ SELECT
     WHEN p."priceDescription" IS NULL OR btrim(p."priceDescription") = '' THEN false
     ELSE true
   END,
-  encode(sha256(convert_to(p."name" || E'\n' || coalesce(p."description", '') || E'\n' || coalesce(p."priceDescription", ''), 'UTF8')), 'hex'),
+  phase4c_legacy_offering_checksum(
+    p."name",
+    coalesce(p."description", ''),
+    'PRODUCT',
+    coalesce(p."priceDescription", ''),
+    p."displayOrder"
+  ),
   p."displayOrder",
   0,
   p."createdAt",
   p."updatedAt"
 FROM "BusinessProduct" p;
+
+-- Preserve free-form Phase 3 pricing text for explicit customer review.
+-- It is not interpreted as a numeric price.
+INSERT INTO "OfferingEligibility" (
+  "id",
+  "organizationId",
+  "offeringId",
+  "versionId",
+  "description",
+  "availabilityRestrictions",
+  "qualificationNotes",
+  "geographicNotes",
+  "minimumQuantity",
+  "maximumQuantity",
+  "createdAt",
+  "updatedAt"
+)
+SELECT
+  'svce_' || s."id",
+  s."organizationId",
+  'svc_' || s."id",
+  'svcv_' || s."id",
+  'Phase 3 pricing information: ' || btrim(s."priceDescription"),
+  NULL,
+  NULL,
+  NULL,
+  NULL::INTEGER,
+  NULL::INTEGER,
+  s."createdAt",
+  s."updatedAt"
+FROM "BusinessService" s
+WHERE NULLIF(btrim(s."priceDescription"), '') IS NOT NULL
+UNION ALL
+SELECT
+  'prde_' || p."id",
+  p."organizationId",
+  'prd_' || p."id",
+  'prdv_' || p."id",
+  'Phase 3 pricing information: ' || btrim(p."priceDescription"),
+  NULL,
+  NULL,
+  NULL,
+  NULL::INTEGER,
+  NULL::INTEGER,
+  p."createdAt",
+  p."updatedAt"
+FROM "BusinessProduct" p
+WHERE NULLIF(btrim(p."priceDescription"), '') IS NOT NULL;
+
+DROP FUNCTION phase4c_legacy_offering_checksum(TEXT, TEXT, TEXT, TEXT, INTEGER);

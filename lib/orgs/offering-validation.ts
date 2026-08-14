@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
@@ -603,7 +603,10 @@ export function slugifyFeatureKey(name: string): string {
     .replace(/^_+|_+$/g, "")
     .slice(0, 64);
   if (/^[a-z][a-z0-9_]*$/.test(base)) return base;
-  return `feature_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  return `feature_${createHash("sha256")
+    .update(name.trim())
+    .digest("hex")
+    .slice(0, 12)}`;
 }
 
 export function sanitizeSearchQuery(raw: unknown): string {
@@ -695,59 +698,88 @@ export function toCanonicalOfferingContent(input: {
   customValues?: CanonicalOfferingCustomValue[];
 }): { canonical: CanonicalOfferingContent; checksum: string } {
   const usedFeatureKeys = new Set<string>();
-  const features = input.features.map((feature, index) => {
-    let key = feature.featureKey?.trim() || slugifyFeatureKey(feature.name);
-    if (usedFeatureKeys.has(key)) {
-      key = `${key}_${index + 1}`.slice(0, 64);
-    }
-    usedFeatureKeys.add(key);
-    return {
-      featureKey: key,
+  const features = input.features
+    .map((feature, index) => ({
+      featureKey: feature.featureKey?.trim() || slugifyFeatureKey(feature.name),
       name: feature.name.trim(),
       value: feature.value?.trim() || null,
       unit: feature.unit?.trim() || null,
       displayOrder: feature.displayOrder ?? index,
-    };
-  });
-
-  const prices = input.prices.map((price, index) => ({
-    label: price.label?.trim() || null,
-    amount: moneyToCanonicalString(price.amount),
-    currencyCode: price.currencyCode,
-    billingFrequency: price.billingFrequency,
-    intervalCount: price.intervalCount ?? null,
-    isActive: price.isActive ?? true,
-    effectiveFrom: price.effectiveFrom?.toISOString() ?? null,
-    effectiveUntil: price.effectiveUntil?.toISOString() ?? null,
-    displayOrder: price.displayOrder ?? index,
-    clientKey: price.clientKey?.trim() || `price_${index + 1}`,
-  }));
-
-  const variants = input.variants.map((variant, index) => {
-    const attributes: Record<string, string | number | boolean | null> = {};
-    for (const [key, value] of Object.entries(variant.attributes ?? {})) {
-      if (key === "__proto__" || key === "prototype" || key === "constructor") {
-        continue;
+    }))
+    .sort(
+      (a, b) =>
+        a.displayOrder - b.displayOrder ||
+        compareCanonicalText(a.featureKey, b.featureKey) ||
+        compareCanonicalText(a.name, b.name),
+    )
+    .map((feature, index) => {
+      let key = feature.featureKey;
+      if (usedFeatureKeys.has(key)) {
+        key = `${key}_${index + 1}`.slice(0, 64);
       }
-      if (
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean" ||
-        value === null
-      ) {
-        attributes[key] = value;
+      usedFeatureKeys.add(key);
+      return { ...feature, featureKey: key };
+    });
+
+  const prices = input.prices
+    .map((price, index) => ({
+      label: price.label?.trim() || null,
+      amount: moneyToCanonicalString(price.amount),
+      currencyCode: price.currencyCode,
+      billingFrequency: price.billingFrequency,
+      intervalCount: price.intervalCount ?? null,
+      isActive: price.isActive ?? true,
+      effectiveFrom: price.effectiveFrom?.toISOString() ?? null,
+      effectiveUntil: price.effectiveUntil?.toISOString() ?? null,
+      displayOrder: price.displayOrder ?? index,
+      clientKey: price.clientKey?.trim() || `price_${index + 1}`,
+    }))
+    .sort(
+      (a, b) =>
+        a.displayOrder - b.displayOrder ||
+        compareCanonicalText(priceFingerprint(a), priceFingerprint(b)),
+    );
+
+  const variants = input.variants
+    .map((variant, index) => {
+      const attributes: Record<string, string | number | boolean | null> = {};
+      for (const key of Object.keys(variant.attributes ?? {}).sort(
+        compareCanonicalText,
+      )) {
+        if (
+          key === "__proto__" ||
+          key === "prototype" ||
+          key === "constructor"
+        ) {
+          continue;
+        }
+        const value = variant.attributes?.[key];
+        if (
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean" ||
+          value === null
+        ) {
+          attributes[key] = value;
+        }
       }
-    }
-    return {
-      name: variant.name.trim(),
-      sku: variant.sku?.trim() || null,
-      referenceCode: variant.referenceCode?.trim() || null,
-      attributes,
-      isActive: variant.isActive ?? true,
-      displayOrder: variant.displayOrder ?? index,
-      priceClientKeys: [...(variant.priceClientKeys ?? [])].sort(),
-    };
-  });
+      return {
+        name: variant.name.trim(),
+        sku: variant.sku?.trim() || null,
+        referenceCode: variant.referenceCode?.trim() || null,
+        attributes,
+        isActive: variant.isActive ?? true,
+        displayOrder: variant.displayOrder ?? index,
+        priceClientKeys: [...(variant.priceClientKeys ?? [])].sort(
+          compareCanonicalText,
+        ),
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.displayOrder - b.displayOrder ||
+        compareCanonicalText(variantFingerprint(a), variantFingerprint(b)),
+    );
 
   const canonical: CanonicalOfferingContent = {
     name: input.name.trim(),
@@ -777,9 +809,9 @@ export function toCanonicalOfferingContent(input: {
     customValues: [...(input.customValues ?? [])]
       .map((item) => ({
         definitionKey: item.definitionKey,
-        value: item.value,
+        value: canonicalizeJsonValue(item.value),
       }))
-      .sort((a, b) => a.definitionKey.localeCompare(b.definitionKey)),
+      .sort((a, b) => compareCanonicalText(a.definitionKey, b.definitionKey)),
   };
 
   return {
@@ -959,7 +991,9 @@ export function validateCustomFieldValue(input: {
         return { ok: false, message: "Select one or more options." };
       }
       const options = new Set(asStringArray(input.options));
-      const selected = input.value.map((value) => String(value));
+      const selected = input.value
+        .map((value) => String(value))
+        .sort(compareCanonicalText);
       if (selected.some((value) => !options.has(value))) {
         return {
           ok: false,
@@ -987,6 +1021,50 @@ function emptyToNull(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function compareCanonicalText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function priceFingerprint(price: CanonicalOfferingPrice): string {
+  return JSON.stringify({
+    label: price.label,
+    amount: price.amount,
+    currencyCode: price.currencyCode,
+    billingFrequency: price.billingFrequency,
+    intervalCount: price.intervalCount,
+    isActive: price.isActive,
+    effectiveFrom: price.effectiveFrom,
+    effectiveUntil: price.effectiveUntil,
+  });
+}
+
+function variantFingerprint(variant: CanonicalOfferingVariant): string {
+  return JSON.stringify({
+    name: variant.name,
+    sku: variant.sku,
+    referenceCode: variant.referenceCode,
+    attributes: variant.attributes,
+    isActive: variant.isActive,
+    priceClientKeys: variant.priceClientKeys,
+  });
+}
+
+function canonicalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonValue);
+  }
+  if (value && typeof value === "object") {
+    const canonical: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort(compareCanonicalText)) {
+      canonical[key] = canonicalizeJsonValue(
+        (value as Record<string, unknown>)[key],
+      );
+    }
+    return canonical;
+  }
+  return value;
 }
 
 function asStringArray(value: unknown): string[] {
