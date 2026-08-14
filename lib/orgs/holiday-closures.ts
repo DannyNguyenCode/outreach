@@ -357,9 +357,20 @@ export async function deactivateHolidayClosure(
     actor: SafeUser;
     organizationId: string;
     closureId: string;
+    expectedVersion: number;
   },
   hooks: Config3bMutationTestHooks = {},
 ): Promise<HolidayClosureResult> {
+  const versionParsed = requireExpectedVersion(input.expectedVersion);
+  if (!versionParsed.ok) {
+    return {
+      ok: false,
+      reason: "validation",
+      message: versionParsed.message,
+      fieldErrors: { expectedVersion: [versionParsed.message] },
+    };
+  }
+
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -394,9 +405,25 @@ export async function deactivateHolidayClosure(
         throw new OrganizationAuthError("organization_not_found");
       }
 
-      const updated = await tx.holidayClosure.update({
-        where: { id: existing.id },
+      const updatedCount = await tx.holidayClosure.updateMany({
+        where: {
+          id: existing.id,
+          organizationId: input.organizationId,
+          isActive: true,
+          version: versionParsed.version,
+        },
         data: { isActive: false, version: { increment: 1 } },
+      });
+
+      if (updatedCount.count !== 1) {
+        throw new ConflictError();
+      }
+
+      const updated = await tx.holidayClosure.findFirstOrThrow({
+        where: {
+          id: existing.id,
+          organizationId: input.organizationId,
+        },
       });
 
       await recordOrganizationAuditEvent(tx, {
@@ -415,6 +442,14 @@ export async function deactivateHolidayClosure(
 
     return { ok: true, closure };
   } catch (error) {
+    if (error instanceof ConflictError) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message:
+          "Holiday closure was updated or deactivated elsewhere. Reload and try again.",
+      };
+    }
     return (
       mapAuthError(error) ?? {
         ok: false,

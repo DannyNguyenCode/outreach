@@ -24,13 +24,11 @@ export function MarkSectionCompleteForm({
   organizationSlug,
   expectedVersion,
   section,
-  nextSection,
   label = "Mark section complete",
 }: {
   organizationSlug: string;
   expectedVersion: number;
   section: ConfigSectionValue;
-  nextSection?: ConfigSectionValue;
   label?: string;
 }) {
   const [state, formAction] = useActionState(
@@ -43,11 +41,8 @@ export function MarkSectionCompleteForm({
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <input type="hidden" name="section" value={section} />
-      {nextSection ? (
-        <input type="hidden" name="nextSection" value={nextSection} />
-      ) : null}
-      <input type="hidden" name="markCompleted" value="true" />
       <FormStatus status={state.status} message={state.message} />
+      <ConflictHint message={state.message} />
       <SubmitButton pendingLabel="Saving…">{label}</SubmitButton>
     </form>
   );

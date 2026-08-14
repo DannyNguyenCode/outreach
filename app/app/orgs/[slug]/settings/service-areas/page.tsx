@@ -65,12 +65,13 @@ export default async function ServiceAreasSettingsPage({ params }: PageProps) {
         }
       />
 
-      {ctx.canManageConfig && ctx.progress ? (
+      {ctx.canManageConfig &&
+      ctx.progress?.status === "IN_PROGRESS" &&
+      ctx.progress.currentSection === "SERVICE_AREAS" ? (
         <MarkSectionCompleteForm
           organizationSlug={slug}
           expectedVersion={ctx.progress.version}
           section="SERVICE_AREAS"
-          nextSection="AVAILABILITY"
           label="Mark service areas complete"
         />
       ) : null}

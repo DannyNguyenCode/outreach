@@ -114,6 +114,16 @@ export function ConfigPageHeader({
         completedSections={ctx.progress?.completedSections ?? []}
         currentSection={ctx.progress?.currentSection ?? null}
       />
+      {ctx.progress?.status === "COMPLETED" ? (
+        <p className="text-sm font-medium" role="status">
+          Extended configuration is complete.
+        </p>
+      ) : ctx.progress ? (
+        <p className="text-sm text-[var(--muted)]">
+          Resume at{" "}
+          {ctx.progress.currentSection.toLowerCase().replaceAll("_", " ")}.
+        </p>
+      ) : null}
     </div>
   );
 }

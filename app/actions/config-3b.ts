@@ -426,10 +426,14 @@ export async function deactivateServiceAreaAction(
   const guard = await guardMutation(formData);
   if (!guard.ok) return guard.state;
 
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
+
   const result = await deactivateServiceArea({
     actor: guard.user,
     organizationId: guard.membership.organizationId,
     serviceAreaId: String(formData.get("serviceAreaId") ?? ""),
+    expectedVersion: version.version,
   });
 
   if (!result.ok) return failureFromService(result);
@@ -552,10 +556,14 @@ export async function deactivateHolidayClosureAction(
   const guard = await guardMutation(formData);
   if (!guard.ok) return guard.state;
 
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
+
   const result = await deactivateHolidayClosure({
     actor: guard.user,
     organizationId: guard.membership.organizationId,
     closureId: String(formData.get("closureId") ?? ""),
+    expectedVersion: version.version,
   });
 
   if (!result.ok) return failureFromService(result);
@@ -811,10 +819,14 @@ export async function deactivateCustomFieldAction(
   const guard = await guardMutation(formData);
   if (!guard.ok) return guard.state;
 
+  const version = parseRequiredExpectedVersion(formData);
+  if (!("ok" in version)) return version;
+
   const result = await deactivateCustomField({
     actor: guard.user,
     organizationId: guard.membership.organizationId,
     fieldId: String(formData.get("fieldId") ?? ""),
+    expectedVersion: version.version,
   });
 
   if (!result.ok) return failureFromService(result);
@@ -855,15 +867,12 @@ export async function advanceConfigSectionAction(
   const version = parseRequiredExpectedVersion(formData);
   if (!("ok" in version)) return version;
 
-  const nextSectionRaw = String(formData.get("nextSection") ?? "").trim();
   const result = await advanceConfigSection({
     actor: guard.user,
     organizationId: guard.membership.organizationId,
     raw: {
       section: String(formData.get("section") ?? ""),
-      nextSection: nextSectionRaw.length > 0 ? nextSectionRaw : undefined,
       expectedVersion: version.version,
-      markCompleted: formData.get("markCompleted") !== "false",
     },
   });
 

@@ -52,6 +52,11 @@ export type Config3bMutationTestHooks = {
    */
   testAfterSectionLock?: () => Promise<void>;
   /**
+   * Invoked after authoritative progress requirements are checked and before
+   * the progress row is written. Production must omit.
+   */
+  testAfterProgressRequirements?: () => Promise<void>;
+  /**
    * Invoked after the mutation transaction commits successfully and before the
    * service returns its success payload.
    */

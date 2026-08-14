@@ -620,9 +620,7 @@ export const confirmTemplateSwitchSchema = z.object({
 
 export const advanceConfigSectionSchema = z.object({
   section: configSectionSchema,
-  nextSection: configSectionSchema.optional(),
   expectedVersion: z.unknown(),
-  markCompleted: z.boolean().optional().default(true),
 });
 
 export function zodFieldErrors(error: z.ZodError): Record<string, string[]> {

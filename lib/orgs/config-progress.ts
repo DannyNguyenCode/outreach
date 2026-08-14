@@ -19,11 +19,18 @@ import {
 } from "@/lib/orgs/config-3b-access";
 import {
   advanceConfigSectionSchema,
+  callbackPolicyInputSchema,
+  callDispositionItemSchema,
   CONFIG_SECTIONS,
+  leadStageItemSchema,
+  localeSettingsInputSchema,
+  notificationDefaultsInputSchema,
+  recordingConsentPolicyInputSchema,
   requireExpectedVersion,
   zodFieldErrors,
   type ConfigSectionValue,
 } from "@/lib/orgs/config-3b-validation";
+import { getApplicableConfigSections } from "@/lib/orgs/business-templates-registry";
 import { prisma } from "@/lib/prisma";
 
 export type ConfigProgressView = {
@@ -45,13 +52,181 @@ function parseCompletedSections(raw: unknown): ConfigSectionValue[] {
     return [];
   }
   const allowed = new Set<string>(CONFIG_SECTIONS);
-  const result: ConfigSectionValue[] = [];
-  for (const value of raw) {
-    if (typeof value === "string" && allowed.has(value)) {
-      result.push(value as ConfigSectionValue);
-    }
+  const present = new Set(
+    raw.filter(
+      (value): value is ConfigSectionValue =>
+        typeof value === "string" && allowed.has(value),
+    ),
+  );
+  return CONFIG_SECTIONS.filter((section) => present.has(section));
+}
+
+class ProgressValidationError extends Error {
+  constructor(
+    message: string,
+    readonly fieldErrors?: Record<string, string[]>,
+  ) {
+    super(message);
+    this.name = "ProgressValidationError";
   }
-  return result;
+}
+
+const finishMessage = (section: ConfigSectionValue) =>
+  `Finish the required ${section.toLowerCase().replaceAll("_", " ")} section before continuing.`;
+
+function rawCompletedSections(raw: unknown): ConfigSectionValue[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (value): value is ConfigSectionValue =>
+      typeof value === "string" &&
+      CONFIG_SECTIONS.includes(value as ConfigSectionValue),
+  );
+}
+
+function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+async function validateSectionRequirements(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  section: ConfigSectionValue,
+  completedSections: ConfigSectionValue[],
+  applicableSections: ConfigSectionValue[],
+): Promise<void> {
+  let valid = true;
+
+  switch (section) {
+    case "BUSINESS_TEMPLATE":
+      valid = Boolean(
+        await tx.organizationTemplateAssignment.findUnique({
+          where: { organizationId },
+          select: { id: true },
+        }),
+      );
+      break;
+    case "LOCALE": {
+      const row = await tx.organizationLocaleSettings.findUnique({
+        where: { organizationId },
+      });
+      valid =
+        row !== null &&
+        localeSettingsInputSchema.safeParse({
+          locale: row.locale,
+          defaultLanguage: row.defaultLanguage,
+          dateDisplayPreference: row.dateDisplayPreference,
+          timeDisplayPreference: row.timeDisplayPreference,
+          numberDisplayPreference: row.numberDisplayPreference,
+        }).success;
+      break;
+    }
+    case "LEAD_STAGES": {
+      const rows = await tx.leadStageDefault.findMany({
+        where: { organizationId },
+        orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
+      });
+      valid =
+        rows.filter((row) => row.isActive).length > 0 &&
+        rows.filter((row) => row.isActive && row.isDefault).length === 1 &&
+        rows.every(
+          (row) =>
+            leadStageItemSchema.safeParse({
+              key: row.key,
+              label: row.label,
+              isActive: row.isActive,
+              displayOrder: row.displayOrder,
+              classification: row.classification,
+              isDefault: row.isDefault,
+            }).success,
+        );
+      break;
+    }
+    case "CALL_DISPOSITIONS": {
+      const rows = await tx.callDispositionDefault.findMany({
+        where: { organizationId },
+        orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
+      });
+      valid =
+        rows.some((row) => row.isActive) &&
+        rows.every(
+          (row) =>
+            callDispositionItemSchema.safeParse({
+              key: row.key,
+              label: row.label,
+              isActive: row.isActive,
+              displayOrder: row.displayOrder,
+              expectsFollowUp: row.expectsFollowUp,
+              isTerminal: row.isTerminal,
+            }).success,
+        );
+      break;
+    }
+    case "CALLBACK_POLICY": {
+      const row = await tx.organizationCallbackPolicy.findUnique({
+        where: { organizationId },
+      });
+      valid =
+        row !== null &&
+        callbackPolicyInputSchema.safeParse({
+          defaultWindowMinutes: row.defaultWindowMinutes,
+          maxSuggestedAttempts: row.maxSuggestedAttempts,
+          minSpacingMinutes: row.minSpacingMinutes,
+          businessHoursOnly: row.businessHoursOnly,
+          defaultAssignmentBehavior: row.defaultAssignmentBehavior,
+        }).success;
+      break;
+    }
+    case "RECORDING_CONSENT": {
+      const row = await tx.organizationRecordingConsentPolicy.findUnique({
+        where: { organizationId },
+      });
+      valid =
+        row !== null &&
+        recordingConsentPolicyInputSchema.safeParse({
+          recordingEnabled: row.recordingEnabled,
+          transcriptionEnabled: row.transcriptionEnabled,
+          consentCaptureRequired: row.consentCaptureRequired,
+          disclosureTextPlaceholder: row.disclosureTextPlaceholder,
+          retentionDays: row.retentionDays,
+          accessDefault: row.accessDefault,
+          reviewRequired: row.reviewRequired,
+        }).success;
+      break;
+    }
+    case "NOTIFICATIONS": {
+      const row = await tx.organizationNotificationDefaults.findUnique({
+        where: { organizationId },
+      });
+      valid =
+        row !== null &&
+        notificationDefaultsInputSchema.safeParse({
+          escalationContactLabel: row.escalationContactLabel,
+          escalationContactEmail: row.escalationContactEmail,
+          notificationCategories: row.notificationCategories,
+          enabledChannels: row.enabledChannels,
+          thresholdPlaceholders: row.thresholdPlaceholders,
+        }).success;
+      break;
+    }
+    case "REVIEW":
+      valid = arraysEqual(completedSections, applicableSections.slice(0, -1));
+      break;
+    case "SERVICE_AREAS":
+    case "AVAILABILITY":
+    case "CUSTOM_FIELDS":
+      // Submitting the current section is the explicit empty confirmation.
+      valid = true;
+      break;
+  }
+
+  if (!valid) {
+    throw new ProgressValidationError(finishMessage(section), {
+      section: [finishMessage(section)],
+    });
+  }
 }
 
 function toView(row: OrganizationConfigProgress): ConfigProgressView {
@@ -239,25 +414,85 @@ export async function advanceConfigSection(
         throw new OrganizationAuthError("organization_not_found");
       }
 
-      const completed = new Set(
-        parseCompletedSections(existing.completedSections),
-      );
-      if (parsed.data.markCompleted) {
-        completed.add(parsed.data.section);
+      // Check OCC before lifecycle validation so a repeated final submission
+      // with its stale form version is always a conflict and never a duplicate.
+      if (existing.version !== versionParsed.version) {
+        throw new ConflictError();
       }
 
-      const nextSection =
-        parsed.data.nextSection ??
-        (() => {
-          const index = CONFIG_SECTIONS.indexOf(parsed.data.section);
-          if (index >= 0 && index < CONFIG_SECTIONS.length - 1) {
-            return CONFIG_SECTIONS[index + 1]!;
-          }
-          return parsed.data.section;
-        })();
+      if (
+        existing.status !== "IN_PROGRESS" ||
+        parsed.data.section !== existing.currentSection
+      ) {
+        throw new ProgressValidationError(
+          existing.status === "COMPLETED"
+            ? "Configuration is already complete."
+            : "Only the current configuration section can be completed.",
+          {
+            section: [
+              existing.status === "COMPLETED"
+                ? "Configuration is already complete."
+                : `Current section is ${existing.currentSection}.`,
+            ],
+          },
+        );
+      }
 
-      const reviewDone = completed.has("REVIEW");
-      const nextStatus = reviewDone ? "COMPLETED" : "IN_PROGRESS";
+      const assignment = await tx.organizationTemplateAssignment.findUnique({
+        where: { organizationId: input.organizationId },
+        select: { templateKey: true },
+      });
+      const applicableSections = assignment
+        ? getApplicableConfigSections(assignment.templateKey)
+        : (["BUSINESS_TEMPLATE"] satisfies ConfigSectionValue[]);
+
+      if (!applicableSections.includes(existing.currentSection)) {
+        throw new ProgressValidationError(
+          "The persisted configuration section is not applicable to the selected template.",
+        );
+      }
+
+      const currentIndex = applicableSections.indexOf(existing.currentSection);
+      const persistedCompleted = rawCompletedSections(
+        existing.completedSections,
+      );
+      const expectedCompleted = applicableSections.slice(0, currentIndex);
+      if (!arraysEqual(persistedCompleted, expectedCompleted)) {
+        throw new ProgressValidationError(
+          "Configuration progress is inconsistent. Reload and finish sections in order.",
+        );
+      }
+
+      await validateSectionRequirements(
+        tx,
+        input.organizationId,
+        parsed.data.section,
+        persistedCompleted,
+        applicableSections,
+      );
+      if (hooks.testAfterProgressRequirements) {
+        await hooks.testAfterProgressRequirements();
+      }
+
+      const completed = [...expectedCompleted, parsed.data.section];
+      const isFinal = parsed.data.section === "REVIEW";
+      const nextSection = isFinal
+        ? "REVIEW"
+        : applicableSections[currentIndex + 1];
+      if (!nextSection) {
+        throw new ProgressValidationError(
+          "Configuration progress has no valid next section.",
+        );
+      }
+      const nextStatus = isFinal ? "COMPLETED" : "IN_PROGRESS";
+      const canonicalCurrentIndex = CONFIG_SECTIONS.indexOf(
+        parsed.data.section,
+      );
+      const canonicalNextIndex = CONFIG_SECTIONS.indexOf(nextSection);
+      const skippedSections = CONFIG_SECTIONS.slice(
+        canonicalCurrentIndex + 1,
+        canonicalNextIndex,
+      ).filter((section) => !applicableSections.includes(section));
 
       const updatedCount = await tx.organizationConfigProgress.updateMany({
         where: {
@@ -289,6 +524,9 @@ export async function advanceConfigSection(
           section: parsed.data.section,
           nextSection,
           status: updated.status,
+          ...(skippedSections.length > 0
+            ? { skippedSectionCount: skippedSections.length }
+            : {}),
         },
       });
 
@@ -307,6 +545,14 @@ export async function advanceConfigSection(
         reason: "conflict",
         message:
           "Configuration progress was updated elsewhere. Reload and try again.",
+      };
+    }
+    if (error instanceof ProgressValidationError) {
+      return {
+        ok: false,
+        reason: "validation",
+        message: error.message,
+        fieldErrors: error.fieldErrors,
       };
     }
     return (

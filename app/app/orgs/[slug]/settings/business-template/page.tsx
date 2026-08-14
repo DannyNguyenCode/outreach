@@ -168,12 +168,13 @@ export default async function BusinessTemplateSettingsPage({
         </>
       )}
 
-      {ctx.canManageConfig && ctx.progress ? (
+      {ctx.canManageConfig &&
+      ctx.progress?.status === "IN_PROGRESS" &&
+      ctx.progress.currentSection === "BUSINESS_TEMPLATE" ? (
         <MarkSectionCompleteForm
           organizationSlug={slug}
           expectedVersion={ctx.progress.version}
           section="BUSINESS_TEMPLATE"
-          nextSection="LOCALE"
           label="Mark business template complete"
         />
       ) : null}

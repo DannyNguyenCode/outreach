@@ -89,6 +89,23 @@ async function onboardingStatus(slug: string): Promise<string | undefined> {
   return row?.status;
 }
 
+async function markSectionComplete(
+  page: Page,
+  buttonName: string,
+  resumeAt: string | "completed",
+): Promise<void> {
+  await page.getByRole("button", { name: buttonName }).click();
+  if (resumeAt === "completed") {
+    await expect(
+      page.getByText("Extended configuration is complete."),
+    ).toBeVisible();
+    return;
+  }
+  await expect(
+    page.getByText(new RegExp(`Resume at ${resumeAt}`, "i")),
+  ).toBeVisible();
+}
+
 async function startConfigIfNeeded(page: Page, slug: string): Promise<void> {
   await page.goto(`/app/orgs/${slug}/settings/business-template`);
   await expect(
@@ -225,6 +242,24 @@ test.describe("Phase 3B business templates and settings", () => {
       CUSTOMIZATION_NOTES,
     );
 
+    // Progress is server ordered: REVIEW is unavailable and forged destinations
+    // are not represented in the UI.
+    await ownerPage.goto(`/app/orgs/${slug}/settings/operational-defaults`);
+    await expect(
+      ownerPage.getByRole("button", { name: "Complete configuration review" }),
+    ).toHaveCount(0);
+    await expect(
+      ownerPage.getByText(/Finish the preceding applicable sections/i),
+    ).toBeVisible();
+    await ownerPage.goto(`/app/orgs/${slug}/settings/business-template`);
+    await markSectionComplete(
+      ownerPage,
+      "Mark business template complete",
+      "locale",
+    );
+    await ownerPage.reload();
+    await expect(ownerPage.getByText(/Resume at locale/i)).toBeVisible();
+
     // 3. Owner configures a service area.
     await ownerPage.goto(`/app/orgs/${slug}/settings/service-areas`);
     await expect(
@@ -273,9 +308,46 @@ test.describe("Phase 3B business templates and settings", () => {
       .getByRole("button", { name: "Save locale settings" })
       .click();
     await expect(ownerPage.getByText("Locale settings saved.")).toBeVisible();
+    await markSectionComplete(
+      ownerPage,
+      "Mark locale complete",
+      "service areas",
+    );
+
+    await ownerPage.goto(`/app/orgs/${slug}/settings/service-areas`);
+    await markSectionComplete(
+      ownerPage,
+      "Mark service areas complete",
+      "availability",
+    );
+    await ownerPage.goto(`/app/orgs/${slug}/settings/availability`);
+    await markSectionComplete(
+      ownerPage,
+      "Mark availability complete",
+      "lead stages",
+    );
+    await ownerPage.goto(`/app/orgs/${slug}/settings/operational-defaults`);
 
     await ownerPage.getByRole("button", { name: "Save lead stages" }).click();
     await expect(ownerPage.getByText("Lead stages saved.")).toBeVisible();
+    await markSectionComplete(
+      ownerPage,
+      "Mark lead stages complete",
+      "call dispositions",
+    );
+
+    await ownerPage.getByRole("button", { name: "Save dispositions" }).click();
+    await expect(ownerPage.getByText("Call dispositions saved.")).toBeVisible();
+    await markSectionComplete(
+      ownerPage,
+      "Mark dispositions complete",
+      "callback policy",
+    );
+    await markSectionComplete(
+      ownerPage,
+      "Mark callback policy complete",
+      "recording consent",
+    );
 
     await expect(
       ownerPage.getByLabel("Enable call recording"),
@@ -286,6 +358,53 @@ test.describe("Phase 3B business templates and settings", () => {
     await expect(
       ownerPage.getByText("Recording consent policy saved."),
     ).toBeVisible();
+    await markSectionComplete(
+      ownerPage,
+      "Mark recording consent complete",
+      "notifications",
+    );
+    await markSectionComplete(
+      ownerPage,
+      "Mark notifications complete",
+      "custom fields",
+    );
+    await markSectionComplete(
+      ownerPage,
+      "Mark custom fields complete",
+      "review",
+    );
+    await markSectionComplete(
+      ownerPage,
+      "Complete configuration review",
+      "completed",
+    );
+    const completedProgress =
+      await prisma.organizationConfigProgress.findFirstOrThrow({
+        where: { organization: { slug } },
+      });
+    expect(completedProgress.status).toBe("COMPLETED");
+    expect(completedProgress.completedSections).toEqual([
+      "BUSINESS_TEMPLATE",
+      "LOCALE",
+      "SERVICE_AREAS",
+      "AVAILABILITY",
+      "LEAD_STAGES",
+      "CALL_DISPOSITIONS",
+      "CALLBACK_POLICY",
+      "RECORDING_CONSENT",
+      "NOTIFICATIONS",
+      "CUSTOM_FIELDS",
+      "REVIEW",
+    ]);
+
+    await ownerPage.reload();
+    await expect(
+      ownerPage.getByText("Extended configuration is complete."),
+    ).toBeVisible();
+    await expect(
+      ownerPage.getByRole("button", { name: "Complete configuration review" }),
+    ).toHaveCount(0);
+    expect(await onboardingStatus(slug)).toBe("COMPLETED");
 
     // 8. Stale conflict: inject expectedVersion and recover via reload copy.
     // Hidden expectedVersion is React-controlled; useFormStatus re-renders

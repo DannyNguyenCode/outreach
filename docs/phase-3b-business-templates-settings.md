@@ -129,6 +129,31 @@ UI and docs state that these settings require customer review and are **not lega
 
 `OrganizationConfigProgress` is a **separate** lifecycle from `OrganizationOnboarding`.
 
+- The canonical order is `BUSINESS_TEMPLATE`, `LOCALE`, `SERVICE_AREAS`,
+  `AVAILABILITY`, `LEAD_STAGES`, `CALL_DISPOSITIONS`, `CALLBACK_POLICY`,
+  `RECORDING_CONSENT`, `NOTIFICATIONS`, `CUSTOM_FIELDS`, `REVIEW`.
+- Template definitions declare applicability, but the server always filters the
+  canonical order; `BUSINESS_TEMPLATE` is first and `REVIEW` is final.
+- Before a template assignment exists, only `BUSINESS_TEMPLATE` may be current.
+  Clients claim only the persisted current section; they cannot choose the next
+  section, skip, repeat, or move backward.
+- Template assignment, locale, lead stages, call dispositions, callback policy,
+  recording/consent, and notification defaults must exist and pass their
+  authoritative schemas. Lead stages require at least one active stage and
+  exactly one active default; dispositions require at least one active row.
+- Service areas, availability, and custom fields may be explicitly confirmed
+  empty by completing those sections while they are current. They are not
+  skippable; empty confirmation is a current-section completion, not a jump.
+- The only skippable sections are those omitted by template applicability.
+  Those skips are computed by the server when advancing from the previous
+  applicable section and recorded as `skippedSectionCount` audit metadata.
+  Clients cannot jump, skip a required section, or choose the destination.
+- `REVIEW` succeeds only when every preceding applicable section occurs exactly
+  once in canonical `completedSections`. Final completion persists the complete,
+  unique applicable sequence.
+- Progress uses required `expectedVersion` optimistic concurrency. Validation,
+  the version-predicate update, status/current-section transition, and audit are
+  atomic; stale requests conflict with zero writes and zero audits.
 - Existing organizations that completed Phase 3A are **not** silently marked incomplete when Phase 3B deploys
 - Phase 3B reads never initialize rows or bump Phase 3A versions
 - `startConfigProgress` is an explicit authorized mutation
@@ -138,6 +163,8 @@ UI and docs state that these settings require customer review and are **not lega
 
 Singular editable records use optimistic concurrency (`expectedVersion`). Missing, malformed, unsafe, or stale versions produce controlled conflicts and zero writes. Collection reorders use Phase 3B section advisory locks as the documented conflict mechanism (same class of guarantee as Phase 3A catalogue reorders).
 
+Deactivation of custom fields, service areas, and holiday closures requires the same `expectedVersion`. The transactional `updateMany` predicate includes organization ID, resource ID, `isActive: true`, and version. Only the winning deactivation increments the version and writes a deactivation audit; stale, already-inactive, foreign, or malformed versions produce a controlled conflict/validation result with zero domain writes.
+
 ## Transactions and lock ordering
 
 Phase 3B writers use lock key `organization-config-3b:<organizationId>` and **do not** acquire the Phase 3A readiness lock.
@@ -146,8 +173,9 @@ Order:
 
 1. Phase 3B config advisory lock
 2. Actor membership row `FOR UPDATE` + permission recheck
-3. Specialized section lock when required (`service-areas-order:`, `custom-fields-order:`, `closures:`, `lead-stages:`, `dispositions:`)
-4. Tenant-scoped rows in stable deterministic order
+3. Authoritative progress requirement reads (for progress advancement)
+4. Specialized section lock when required (`service-areas-order:`, `custom-fields-order:`, `closures:`, `lead-stages:`, `dispositions:`)
+5. Tenant-scoped rows in stable deterministic order
 
 Deadlock safety vs Phase 3A: the two families share only membership row locks; they never take each other’s advisory locks. If a future writer must take both advisory locks, acquire Phase 3A readiness **before** Phase 3B config.
 

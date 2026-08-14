@@ -67,12 +67,13 @@ export default async function AvailabilitySettingsPage({ params }: PageProps) {
         }
       />
 
-      {ctx.canManageConfig && ctx.progress ? (
+      {ctx.canManageConfig &&
+      ctx.progress?.status === "IN_PROGRESS" &&
+      ctx.progress.currentSection === "AVAILABILITY" ? (
         <MarkSectionCompleteForm
           organizationSlug={slug}
           expectedVersion={ctx.progress.version}
           section="AVAILABILITY"
-          nextSection="LEAD_STAGES"
           label="Mark availability complete"
         />
       ) : null}

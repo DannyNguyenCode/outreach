@@ -285,6 +285,7 @@ describe("Phase 3B locale and service areas", () => {
       actor: owner,
       organizationId,
       serviceAreaId: created.area.id,
+      expectedVersion: created.area.version,
     });
     expect(deactivated.ok).toBe(true);
     if (!deactivated.ok) return;

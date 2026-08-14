@@ -76,6 +76,7 @@ export function HolidayClosuresManager({
                     <DeactivateHolidayClosureForm
                       organizationSlug={organizationSlug}
                       closureId={closure.id}
+                      expectedVersion={closure.version}
                     />
                   ) : null}
                 </>
@@ -189,9 +190,11 @@ function UpdateHolidayClosureForm({
 function DeactivateHolidayClosureForm({
   organizationSlug,
   closureId,
+  expectedVersion,
 }: {
   organizationSlug: string;
   closureId: string;
+  expectedVersion: number;
 }) {
   const [state, formAction] = useActionState(
     deactivateHolidayClosureAction,
@@ -201,7 +204,9 @@ function DeactivateHolidayClosureForm({
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="closureId" value={closureId} />
+      <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <FormStatus status={state.status} message={state.message} />
+      <ConflictHint message={state.message} />
       <SubmitButton pendingLabel="Deactivating…">Deactivate</SubmitButton>
     </form>
   );

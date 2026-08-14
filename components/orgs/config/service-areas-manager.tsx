@@ -145,6 +145,7 @@ export function ServiceAreasManager({
                 <DeactivateServiceAreaForm
                   organizationSlug={organizationSlug}
                   serviceAreaId={area.id}
+                  expectedVersion={area.version}
                 />
               ) : null}
             </li>
@@ -232,9 +233,11 @@ function UpdateServiceAreaForm({
 function DeactivateServiceAreaForm({
   organizationSlug,
   serviceAreaId,
+  expectedVersion,
 }: {
   organizationSlug: string;
   serviceAreaId: string;
+  expectedVersion: number;
 }) {
   const [state, formAction] = useActionState(
     deactivateServiceAreaAction,
@@ -244,7 +247,9 @@ function DeactivateServiceAreaForm({
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="serviceAreaId" value={serviceAreaId} />
+      <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <FormStatus status={state.status} message={state.message} />
+      <ConflictHint message={state.message} />
       <SubmitButton pendingLabel="Deactivating…">Deactivate</SubmitButton>
     </form>
   );

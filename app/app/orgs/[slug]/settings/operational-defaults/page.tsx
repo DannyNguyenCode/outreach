@@ -67,7 +67,12 @@ export default async function OperationalDefaultsSettingsPage({
     listCustomFields({ actor, organizationId: orgId }),
   ]);
 
-  const progressVersion = ctx.progress?.version;
+  const progressVersion =
+    ctx.progress?.status === "IN_PROGRESS" ? ctx.progress.version : undefined;
+  const currentSection =
+    ctx.progress?.status === "IN_PROGRESS"
+      ? ctx.progress.currentSection
+      : undefined;
 
   return (
     <div className="space-y-10">
@@ -96,12 +101,13 @@ export default async function OperationalDefaultsSettingsPage({
         ) : (
           <p className="text-sm text-[var(--muted)]">{locale.message}</p>
         )}
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "LOCALE" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="LOCALE"
-            nextSection="LEAD_STAGES"
             label="Mark locale complete"
           />
         ) : null}
@@ -125,12 +131,13 @@ export default async function OperationalDefaultsSettingsPage({
               : []
           }
         />
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "LEAD_STAGES" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="LEAD_STAGES"
-            nextSection="CALL_DISPOSITIONS"
             label="Mark lead stages complete"
           />
         ) : null}
@@ -154,12 +161,13 @@ export default async function OperationalDefaultsSettingsPage({
               : []
           }
         />
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "CALL_DISPOSITIONS" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="CALL_DISPOSITIONS"
-            nextSection="CALLBACK_POLICY"
             label="Mark dispositions complete"
           />
         ) : null}
@@ -184,12 +192,13 @@ export default async function OperationalDefaultsSettingsPage({
         ) : (
           <p className="text-sm text-[var(--muted)]">{callback.message}</p>
         )}
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "CALLBACK_POLICY" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="CALLBACK_POLICY"
-            nextSection="RECORDING_CONSENT"
             label="Mark callback policy complete"
           />
         ) : null}
@@ -216,12 +225,13 @@ export default async function OperationalDefaultsSettingsPage({
         ) : (
           <p className="text-sm text-[var(--muted)]">{recording.message}</p>
         )}
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "RECORDING_CONSENT" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="RECORDING_CONSENT"
-            nextSection="NOTIFICATIONS"
             label="Mark recording consent complete"
           />
         ) : null}
@@ -249,12 +259,13 @@ export default async function OperationalDefaultsSettingsPage({
         ) : (
           <p className="text-sm text-[var(--muted)]">{notifications.message}</p>
         )}
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "NOTIFICATIONS" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="NOTIFICATIONS"
-            nextSection="CUSTOM_FIELDS"
             label="Mark notifications complete"
           />
         ) : null}
@@ -283,30 +294,41 @@ export default async function OperationalDefaultsSettingsPage({
               : []
           }
         />
-        {ctx.canManageConfig && progressVersion !== undefined ? (
+        {ctx.canManageConfig &&
+        progressVersion !== undefined &&
+        currentSection === "CUSTOM_FIELDS" ? (
           <MarkSectionCompleteForm
             organizationSlug={slug}
             expectedVersion={progressVersion}
             section="CUSTOM_FIELDS"
-            nextSection="REVIEW"
             label="Mark custom fields complete"
           />
         ) : null}
       </section>
 
-      {ctx.canManageConfig && progressVersion !== undefined ? (
+      {ctx.canManageConfig ? (
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Review</h2>
           <p className="text-sm text-[var(--muted)]">
             Mark configuration review complete when the sections above look
             right. This does not change Phase 3A onboarding readiness.
           </p>
-          <MarkSectionCompleteForm
-            organizationSlug={slug}
-            expectedVersion={progressVersion}
-            section="REVIEW"
-            label="Complete configuration review"
-          />
+          {progressVersion !== undefined && currentSection === "REVIEW" ? (
+            <MarkSectionCompleteForm
+              organizationSlug={slug}
+              expectedVersion={progressVersion}
+              section="REVIEW"
+              label="Complete configuration review"
+            />
+          ) : ctx.progress?.status === "COMPLETED" ? (
+            <p className="text-sm font-medium">
+              Configuration review completed.
+            </p>
+          ) : (
+            <p className="text-sm text-[var(--muted)]">
+              Finish the preceding applicable sections before review.
+            </p>
+          )}
         </section>
       ) : null}
     </div>

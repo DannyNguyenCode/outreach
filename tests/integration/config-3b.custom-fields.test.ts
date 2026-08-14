@@ -271,6 +271,7 @@ describe("Phase 3B custom fields", () => {
       actor: owner,
       organizationId,
       fieldId: created.field.id,
+      expectedVersion: created.field.version,
     });
     expect(deactivated.ok).toBe(true);
     if (!deactivated.ok) return;
@@ -313,6 +314,7 @@ describe("Phase 3B custom fields", () => {
       actor: b.owner,
       organizationId: a.organizationId,
       fieldId: created.field.id,
+      expectedVersion: created.field.version,
     });
     expect(deactivateDenied.ok).toBe(false);
 

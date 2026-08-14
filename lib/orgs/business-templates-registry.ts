@@ -4,7 +4,10 @@ import type {
   CustomFieldScope,
 } from "@prisma/client";
 
-import type { ConfigSectionValue } from "@/lib/orgs/config-3b-validation";
+import {
+  CONFIG_SECTIONS,
+  type ConfigSectionValue,
+} from "@/lib/orgs/config-3b-validation";
 
 /**
  * Platform business-template definitions (NOT persisted).
@@ -50,47 +53,16 @@ export type BusinessTemplateDefinition = {
   exampleProducts: TemplateExampleOffering[];
 };
 
-const ALL_SECTIONS: ConfigSectionValue[] = [
-  "BUSINESS_TEMPLATE",
-  "LOCALE",
-  "SERVICE_AREAS",
-  "AVAILABILITY",
-  "LEAD_STAGES",
-  "CALL_DISPOSITIONS",
-  "CALLBACK_POLICY",
-  "RECORDING_CONSENT",
-  "NOTIFICATIONS",
-  "CUSTOM_FIELDS",
-  "REVIEW",
-];
+/** Build template applicability by filtering the one canonical section order. */
+function orderedSections(
+  applicable: ReadonlySet<ConfigSectionValue> = new Set(CONFIG_SECTIONS),
+): ConfigSectionValue[] {
+  return CONFIG_SECTIONS.filter((section) => applicable.has(section));
+}
 
-const SERVICE_HEAVY_SECTIONS: ConfigSectionValue[] = [
-  "BUSINESS_TEMPLATE",
-  "LOCALE",
-  "SERVICE_AREAS",
-  "AVAILABILITY",
-  "LEAD_STAGES",
-  "CALL_DISPOSITIONS",
-  "CALLBACK_POLICY",
-  "RECORDING_CONSENT",
-  "NOTIFICATIONS",
-  "CUSTOM_FIELDS",
-  "REVIEW",
-];
-
-const PRODUCT_HEAVY_SECTIONS: ConfigSectionValue[] = [
-  "BUSINESS_TEMPLATE",
-  "LOCALE",
-  "SERVICE_AREAS",
-  "AVAILABILITY",
-  "LEAD_STAGES",
-  "CALL_DISPOSITIONS",
-  "CALLBACK_POLICY",
-  "RECORDING_CONSENT",
-  "NOTIFICATIONS",
-  "CUSTOM_FIELDS",
-  "REVIEW",
-];
+const ALL_SECTIONS = orderedSections();
+const SERVICE_HEAVY_SECTIONS = orderedSections();
+const PRODUCT_HEAVY_SECTIONS = orderedSections();
 
 const TEMPLATE_DEFINITIONS: Record<
   BusinessTemplateKey,
@@ -453,6 +425,16 @@ export function getTemplateDefinition(
   key: BusinessTemplateKey,
 ): BusinessTemplateDefinition {
   return TEMPLATE_DEFINITIONS[key];
+}
+
+/** Applicable sections always follow the canonical server order. */
+export function getApplicableConfigSections(
+  key: BusinessTemplateKey,
+): ConfigSectionValue[] {
+  const applicable = new Set(TEMPLATE_DEFINITIONS[key].applicableSections);
+  applicable.add("BUSINESS_TEMPLATE");
+  applicable.add("REVIEW");
+  return orderedSections(applicable);
 }
 
 export function listTemplateDefinitions(): BusinessTemplateDefinition[] {

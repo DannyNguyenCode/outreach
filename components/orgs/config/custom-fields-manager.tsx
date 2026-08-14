@@ -163,6 +163,7 @@ export function CustomFieldsManager({
                 <DeactivateCustomFieldForm
                   organizationSlug={organizationSlug}
                   fieldId={field.id}
+                  expectedVersion={field.version}
                 />
               ) : null}
             </li>
@@ -421,9 +422,11 @@ function UpdateCustomFieldForm({
 function DeactivateCustomFieldForm({
   organizationSlug,
   fieldId,
+  expectedVersion,
 }: {
   organizationSlug: string;
   fieldId: string;
+  expectedVersion: number;
 }) {
   const [state, formAction] = useActionState(
     deactivateCustomFieldAction,
@@ -433,7 +436,9 @@ function DeactivateCustomFieldForm({
     <form action={formAction} className="space-y-2">
       <input type="hidden" name="organizationSlug" value={organizationSlug} />
       <input type="hidden" name="fieldId" value={fieldId} />
+      <input type="hidden" name="expectedVersion" value={expectedVersion} />
       <FormStatus status={state.status} message={state.message} />
+      <ConflictHint message={state.message} />
       <SubmitButton pendingLabel="Deactivating…">Deactivate</SubmitButton>
     </form>
   );
