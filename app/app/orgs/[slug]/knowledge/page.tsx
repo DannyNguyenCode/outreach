@@ -91,6 +91,15 @@ export default async function KnowledgeListPage({
         canCreate={canManage}
       />
 
+      <p className="text-sm">
+        <Link
+          href={`/app/orgs/${slug}/knowledge/offerings`}
+          className="underline-offset-2 hover:underline"
+        >
+          Manage structured offerings
+        </Link>
+      </p>
+
       <form
         method="get"
         className="flex flex-wrap items-end gap-3"
