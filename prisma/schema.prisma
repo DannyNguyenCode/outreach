@@ -11,36 +11,37 @@ datasource db {
 /// Application user for Phase 1 email/password authentication.
 /// passwordHash must never be selected by public-facing helpers.
 model User {
-  id                   String                    @id @default(cuid())
-  name                 String
+  id                         String                           @id @default(cuid())
+  name                       String
   /// Normalized lowercase email; uniqueness is case-insensitive by construction.
-  email                String                    @unique
-  passwordHash         String
-  emailVerifiedAt      DateTime?
+  email                      String                           @unique
+  passwordHash               String
+  emailVerifiedAt            DateTime?
   /// Incremented on password reset / explicit revocation to invalidate JWT sessions.
-  sessionVersion       Int                       @default(0)
+  sessionVersion             Int                              @default(0)
   /// Soft preference for the last selected organization. Always re-validated.
-  activeOrganizationId String?
-  activeOrganization   Organization?             @relation("UserActiveOrganization", fields: [activeOrganizationId], references: [id], onDelete: SetNull)
-  createdAt            DateTime                  @default(now())
-  updatedAt            DateTime                  @updatedAt
-  authTokens           AuthToken[]
-  memberships          Membership[]
-  invitationsSent      OrganizationInvitation[]  @relation("InvitationInviter")
-  membershipDeactivations Membership[]           @relation("MembershipDeactivator")
-  auditEvents          OrganizationAuditEvent[]  @relation("AuditActor")
-  onboardingsCompleted OrganizationOnboarding[]  @relation("OnboardingCompleter")
-  onboardingsReopened  OrganizationOnboarding[]  @relation("OnboardingReopener")
-  templatesSelected    OrganizationTemplateAssignment[] @relation("TemplateSelector")
-  customFieldsCreated  CustomFieldDefinition[]   @relation("CustomFieldCreator")
-  customFieldsUpdated  CustomFieldDefinition[]   @relation("CustomFieldUpdater")
-  configProgressUpdated OrganizationConfigProgress[] @relation("ConfigProgressUpdater")
-  knowledgeSourcesCreated  KnowledgeSource[]  @relation("KnowledgeSourceCreator")
-  knowledgeSourcesArchived KnowledgeSource[]  @relation("KnowledgeSourceArchiver")
-  knowledgeVersionsCreated KnowledgeVersion[] @relation("KnowledgeVersionCreator")
+  activeOrganizationId       String?
+  activeOrganization         Organization?                    @relation("UserActiveOrganization", fields: [activeOrganizationId], references: [id], onDelete: SetNull)
+  createdAt                  DateTime                         @default(now())
+  updatedAt                  DateTime                         @updatedAt
+  authTokens                 AuthToken[]
+  memberships                Membership[]
+  invitationsSent            OrganizationInvitation[]         @relation("InvitationInviter")
+  membershipDeactivations    Membership[]                     @relation("MembershipDeactivator")
+  auditEvents                OrganizationAuditEvent[]         @relation("AuditActor")
+  onboardingsCompleted       OrganizationOnboarding[]         @relation("OnboardingCompleter")
+  onboardingsReopened        OrganizationOnboarding[]         @relation("OnboardingReopener")
+  templatesSelected          OrganizationTemplateAssignment[] @relation("TemplateSelector")
+  customFieldsCreated        CustomFieldDefinition[]          @relation("CustomFieldCreator")
+  customFieldsUpdated        CustomFieldDefinition[]          @relation("CustomFieldUpdater")
+  configProgressUpdated      OrganizationConfigProgress[]     @relation("ConfigProgressUpdater")
+  knowledgeSourcesCreated    KnowledgeSource[]                @relation("KnowledgeSourceCreator")
+  knowledgeSourcesArchived   KnowledgeSource[]                @relation("KnowledgeSourceArchiver")
+  knowledgeVersionsCreated   KnowledgeVersion[]               @relation("KnowledgeVersionCreator")
   /// Users referenced by immutable confirmation evidence cannot be hard-deleted
   /// until a future retention/anonymization workflow replaces that identity.
-  knowledgeVersionsConfirmed KnowledgeVersion[] @relation("KnowledgeVersionConfirmer")
+  knowledgeVersionsConfirmed KnowledgeVersion[]               @relation("KnowledgeVersionConfirmer")
+  knowledgeDocumentsUploaded KnowledgeDocument[]              @relation("KnowledgeDocumentUploader")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -62,12 +63,12 @@ model AuthToken {
   expiresAt  DateTime
   consumedAt DateTime?
   createdAt  DateTime         @default(now())
+  /// Partial unique index created in migration 20260810010000 (active tokens only).
 
   @@unique([purpose, tokenHash])
   @@index([userId, purpose, consumedAt])
   @@index([expiresAt])
   @@index([tokenHash])
-  /// Partial unique index created in migration 20260810010000 (active tokens only).
 }
 
 /// Database-backed rate-limit counters suitable for serverless runtimes.
@@ -138,6 +139,16 @@ enum OrganizationAuditAction {
   KNOWLEDGE_VERSION_CONFIRMED
   KNOWLEDGE_SOURCE_ARCHIVED
   KNOWLEDGE_VERSION_RESTORED
+  KNOWLEDGE_DOCUMENT_UPLOAD_INITIATED
+  KNOWLEDGE_DOCUMENT_UPLOAD_FINALIZED
+  KNOWLEDGE_DOCUMENT_SCAN_COMPLETED
+  KNOWLEDGE_DOCUMENT_PROCESSING_COMPLETED
+  KNOWLEDGE_DOCUMENT_PROCESSING_FAILED
+  KNOWLEDGE_DOCUMENT_RETRY_REQUESTED
+  KNOWLEDGE_DOCUMENT_CORRECTIONS_SAVED
+  KNOWLEDGE_DOCUMENT_DUPLICATE_ACKNOWLEDGED
+  KNOWLEDGE_DOCUMENT_CONFIRMED
+  KNOWLEDGE_DOCUMENT_REPLACED
 }
 
 enum BusinessType {
@@ -256,35 +267,38 @@ enum ConfigSection {
 
 /// Tenant root for Phase 2 multi-organization support.
 model Organization {
-  id                String                    @id @default(cuid())
-  name              String
+  id                      String                              @id @default(cuid())
+  name                    String
   /// URL-safe unique slug. Normalized at write time; not silently rewritten on rename.
-  slug              String                    @unique
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
-  memberships       Membership[]
-  invitations       OrganizationInvitation[]
-  auditEvents       OrganizationAuditEvent[]
-  activeUsers       User[]                    @relation("UserActiveOrganization")
-  businessProfile       BusinessProfile?
-  businessLocations     BusinessLocation[]
-  operatingHours        OperatingHourInterval[]
-  services              BusinessService[]
-  products              BusinessProduct[]
-  settings              OrganizationSettings?
-  onboarding            OrganizationOnboarding?
-  templateAssignment    OrganizationTemplateAssignment?
-  localeSettings        OrganizationLocaleSettings?
-  callbackPolicy        OrganizationCallbackPolicy?
-  recordingConsentPolicy OrganizationRecordingConsentPolicy?
-  notificationDefaults  OrganizationNotificationDefaults?
-  configProgress        OrganizationConfigProgress?
-  customFieldDefinitions CustomFieldDefinition[]
-  serviceAreas          ServiceArea[]
-  holidayClosures       HolidayClosure[]
-  leadStageDefaults     LeadStageDefault[]
+  slug                    String                              @unique
+  createdAt               DateTime                            @default(now())
+  updatedAt               DateTime                            @updatedAt
+  memberships             Membership[]
+  invitations             OrganizationInvitation[]
+  auditEvents             OrganizationAuditEvent[]
+  activeUsers             User[]                              @relation("UserActiveOrganization")
+  businessProfile         BusinessProfile?
+  businessLocations       BusinessLocation[]
+  operatingHours          OperatingHourInterval[]
+  services                BusinessService[]
+  products                BusinessProduct[]
+  settings                OrganizationSettings?
+  onboarding              OrganizationOnboarding?
+  templateAssignment      OrganizationTemplateAssignment?
+  localeSettings          OrganizationLocaleSettings?
+  callbackPolicy          OrganizationCallbackPolicy?
+  recordingConsentPolicy  OrganizationRecordingConsentPolicy?
+  notificationDefaults    OrganizationNotificationDefaults?
+  configProgress          OrganizationConfigProgress?
+  customFieldDefinitions  CustomFieldDefinition[]
+  serviceAreas            ServiceArea[]
+  holidayClosures         HolidayClosure[]
+  leadStageDefaults       LeadStageDefault[]
   callDispositionDefaults CallDispositionDefault[]
-  knowledgeSources      KnowledgeSource[]
+  knowledgeSources        KnowledgeSource[]
+  knowledgeDocuments      KnowledgeDocument[]
+  knowledgeDocumentJobs   KnowledgeDocumentJob[]
+  knowledgeDocumentIssues KnowledgeDocumentIssue[]
 
   @@index([createdAt])
 }
@@ -326,24 +340,24 @@ model OrganizationInvitation {
   invitedBy       User             @relation("InvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Restrict)
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+  /// Partial unique index created in Phase 2 migration (one usable invite per org+email).
 
   @@index([organizationId, emailNormalized])
   @@index([expiresAt])
   @@index([organizationId, revokedAt, acceptedAt])
-  /// Partial unique index created in Phase 2 migration (one usable invite per org+email).
 }
 
 /// Focused audit trail for sensitive Phase 2+ organization actions.
 model OrganizationAuditEvent {
-  id             String                   @id @default(cuid())
+  id             String                  @id @default(cuid())
   organizationId String
-  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   actorUserId    String?
-  actor          User?                    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actor          User?                   @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   action         OrganizationAuditAction
   /// Structured, minimal metadata. Never store secrets or raw tokens.
   metadata       Json?
-  createdAt      DateTime                 @default(now())
+  createdAt      DateTime                @default(now())
 
   @@index([organizationId, createdAt])
   @@index([actorUserId, createdAt])
@@ -392,9 +406,9 @@ model BusinessLocation {
   countryCode    String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
+  /// Partial unique index in migration: one primary location per organization.
 
   @@index([organizationId])
-  /// Partial unique index in migration: one primary location per organization.
 }
 
 /// Normalized weekly operating-hour intervals.
@@ -460,38 +474,38 @@ model BusinessProduct {
 
 /// Explicit typed employee-access defaults. Cannot grant MEMBER owner/admin powers.
 model OrganizationSettings {
-  id                         String                      @id @default(cuid())
-  organizationId             String                      @unique
-  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  membersCanViewServices     Boolean                     @default(true)
-  membersCanViewProducts     Boolean                     @default(true)
-  membersCanViewBusinessInfo Boolean                     @default(true)
-  futureCallingAccessDefault FutureCallingAccessDefault  @default(DISABLED)
-  version                    Int                         @default(0)
-  createdAt                  DateTime                    @default(now())
-  updatedAt                  DateTime                    @updatedAt
+  id                         String                     @id @default(cuid())
+  organizationId             String                     @unique
+  organization               Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  membersCanViewServices     Boolean                    @default(true)
+  membersCanViewProducts     Boolean                    @default(true)
+  membersCanViewBusinessInfo Boolean                    @default(true)
+  futureCallingAccessDefault FutureCallingAccessDefault @default(DISABLED)
+  version                    Int                        @default(0)
+  createdAt                  DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
 }
 
 /// Authoritative onboarding progress. URL/localStorage are never the source of truth.
 model OrganizationOnboarding {
-  id                    String          @id @default(cuid())
-  organizationId        String          @unique
-  organization          Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  status                OnboardingStatus @default(NOT_STARTED)
-  currentStep           OnboardingStep  @default(BUSINESS_BASICS)
+  id                   String           @id @default(cuid())
+  organizationId       String           @unique
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status               OnboardingStatus @default(NOT_STARTED)
+  currentStep          OnboardingStep   @default(BUSINESS_BASICS)
   /// JSON string array of completed OnboardingStep values (validated in application code).
-  completedSteps        Json            @default("[]")
+  completedSteps       Json             @default("[]")
   /// Server-computed readiness for later Phase 3B prerequisites.
-  isConfigurationReady  Boolean         @default(false)
-  completedAt           DateTime?
-  completedByUserId     String?
-  completedBy           User?           @relation("OnboardingCompleter", fields: [completedByUserId], references: [id], onDelete: SetNull)
-  reopenedAt            DateTime?
-  reopenedByUserId      String?
-  reopenedBy            User?           @relation("OnboardingReopener", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
-  version               Int             @default(0)
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  isConfigurationReady Boolean          @default(false)
+  completedAt          DateTime?
+  completedByUserId    String?
+  completedBy          User?            @relation("OnboardingCompleter", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  reopenedAt           DateTime?
+  reopenedByUserId     String?
+  reopenedBy           User?            @relation("OnboardingReopener", fields: [reopenedByUserId], references: [id], onDelete: SetNull)
+  version              Int              @default(0)
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
 
   @@index([status])
 }
@@ -499,65 +513,65 @@ model OrganizationOnboarding {
 /// Explicit organization selection of a platform business template.
 /// Template examples never become customer facts; only confirmed customization is stored.
 model OrganizationTemplateAssignment {
-  id                       String              @id @default(cuid())
-  organizationId           String              @unique
-  organization             Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  templateKey              BusinessTemplateKey
+  id                        String              @id @default(cuid())
+  organizationId            String              @unique
+  organization              Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  templateKey               BusinessTemplateKey
   /// Version of the platform template definition at selection/switch time.
   templateDefinitionVersion Int
   /// Confirmed customization metadata only (labels, enabled suggested keys). Never auto-facts.
-  customization            Json                @default("{}")
-  selectedByUserId         String?
-  selectedBy               User?               @relation("TemplateSelector", fields: [selectedByUserId], references: [id], onDelete: SetNull)
-  selectedAt               DateTime            @default(now())
-  version                  Int                 @default(0)
-  createdAt                DateTime            @default(now())
-  updatedAt                DateTime            @updatedAt
+  customization             Json                @default("{}")
+  selectedByUserId          String?
+  selectedBy                User?               @relation("TemplateSelector", fields: [selectedByUserId], references: [id], onDelete: SetNull)
+  selectedAt                DateTime            @default(now())
+  version                   Int                 @default(0)
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
 }
 
 /// Locale / language / display preferences. Distinct from BusinessProfile.timeZone.
 model OrganizationLocaleSettings {
-  id                     String       @id @default(cuid())
-  organizationId         String       @unique
-  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                      String       @id @default(cuid())
+  organizationId          String       @unique
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// BCP 47 locale tag (e.g. en-CA).
-  locale                 String       @default("en-CA")
+  locale                  String       @default("en-CA")
   /// BCP 47 language tag (e.g. en).
-  defaultLanguage        String       @default("en")
-  dateDisplayPreference  String       @default("locale")
-  timeDisplayPreference  String       @default("locale")
-  numberDisplayPreference String      @default("locale")
-  version                Int          @default(0)
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  defaultLanguage         String       @default("en")
+  dateDisplayPreference   String       @default("locale")
+  timeDisplayPreference   String       @default("locale")
+  numberDisplayPreference String       @default("locale")
+  version                 Int          @default(0)
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
 }
 
 /// Organization-defined field definitions for later knowledge/CRM phases.
 /// Phase 3B stores definitions only — never prospect or knowledge values.
 model CustomFieldDefinition {
-  id               String             @id @default(cuid())
-  organizationId   String
-  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id              String              @id @default(cuid())
+  organizationId  String
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// Stable key unique within organization + scope.
-  key              String
-  label            String
-  description      String?
-  dataType         CustomFieldDataType
-  required         Boolean            @default(false)
-  isActive         Boolean            @default(true)
-  displayOrder     Int                @default(0)
+  key             String
+  label           String
+  description     String?
+  dataType        CustomFieldDataType
+  required        Boolean             @default(false)
+  isActive        Boolean             @default(true)
+  displayOrder    Int                 @default(0)
   /// Select options as validated JSON string array when applicable.
-  options          Json?
+  options         Json?
   /// Optional validation constraints (min/max/pattern) as schema-validated JSON.
-  validation       Json?
-  scope            CustomFieldScope   @default(BUSINESS)
-  version          Int                @default(0)
-  createdByUserId  String?
-  createdBy        User?              @relation("CustomFieldCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  updatedByUserId  String?
-  updatedBy        User?              @relation("CustomFieldUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  validation      Json?
+  scope           CustomFieldScope    @default(BUSINESS)
+  version         Int                 @default(0)
+  createdByUserId String?
+  createdBy       User?               @relation("CustomFieldCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedByUserId String?
+  updatedBy       User?               @relation("CustomFieldUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
   @@unique([organizationId, scope, key])
   @@index([organizationId, scope, displayOrder])
@@ -591,22 +605,22 @@ model ServiceArea {
 /// Exceptional availability separate from weekly OperatingHourInterval rows.
 /// Dates are local calendar dates in the organization's IANA timezone.
 model HolidayClosure {
-  id             String       @id @default(cuid())
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// Local calendar start date YYYY-MM-DD (organization timezone).
-  localDateStart String
+  localDateStart       String
   /// Optional inclusive local end date for a bounded range.
-  localDateEnd   String?
-  isClosedAllDay Boolean      @default(true)
+  localDateEnd         String?
+  isClosedAllDay       Boolean      @default(true)
   /// Optional replacement opening intervals [{startMinute,endMinute}] half-open.
   replacementIntervals Json?
-  customerNote   String?
-  internalLabel  String?
-  isActive       Boolean      @default(true)
-  version        Int          @default(0)
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  customerNote         String?
+  internalLabel        String?
+  isActive             Boolean      @default(true)
+  version              Int          @default(0)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   @@index([organizationId, localDateStart])
   @@index([organizationId, isActive, localDateStart])
@@ -614,18 +628,18 @@ model HolidayClosure {
 
 /// Organization-configured lead stages for later CRM. No prospect records here.
 model LeadStageDefault {
-  id               String                  @id @default(cuid())
-  organizationId   String
-  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  key              String
-  label            String
-  isActive         Boolean                 @default(true)
-  displayOrder     Int                     @default(0)
-  classification   LeadStageClassification @default(NONE)
-  isDefault        Boolean                 @default(false)
-  version          Int                     @default(0)
-  createdAt        DateTime                @default(now())
-  updatedAt        DateTime                @updatedAt
+  id             String                  @id @default(cuid())
+  organizationId String
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key            String
+  label          String
+  isActive       Boolean                 @default(true)
+  displayOrder   Int                     @default(0)
+  classification LeadStageClassification @default(NONE)
+  isDefault      Boolean                 @default(false)
+  version        Int                     @default(0)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
 
   @@unique([organizationId, key])
   @@index([organizationId, displayOrder])
@@ -633,18 +647,18 @@ model LeadStageDefault {
 
 /// Organization-configured call dispositions for later calling. No call records here.
 model CallDispositionDefault {
-  id               String       @id @default(cuid())
-  organizationId   String
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  key              String
-  label            String
-  isActive         Boolean      @default(true)
-  displayOrder     Int          @default(0)
-  expectsFollowUp  Boolean      @default(false)
-  isTerminal       Boolean      @default(false)
-  version          Int          @default(0)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  key             String
+  label           String
+  isActive        Boolean      @default(true)
+  displayOrder    Int          @default(0)
+  expectsFollowUp Boolean      @default(false)
+  isTerminal      Boolean      @default(false)
+  version         Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
   @@unique([organizationId, key])
   @@index([organizationId, displayOrder])
@@ -652,72 +666,72 @@ model CallDispositionDefault {
 
 /// Future workflow callback defaults. Not a scheduler.
 model OrganizationCallbackPolicy {
-  id                         String                      @id @default(cuid())
-  organizationId             String                      @unique
-  organization               Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  id                        String                     @id @default(cuid())
+  organizationId            String                     @unique
+  organization              Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   /// Default suggested callback window length in minutes.
-  defaultWindowMinutes       Int                         @default(60)
-  maxSuggestedAttempts       Int                         @default(3)
-  minSpacingMinutes          Int                         @default(120)
-  businessHoursOnly          Boolean                     @default(true)
-  defaultAssignmentBehavior  CallbackAssignmentBehavior  @default(UNASSIGNED)
-  version                    Int                         @default(0)
-  createdAt                  DateTime                    @default(now())
-  updatedAt                  DateTime                    @updatedAt
+  defaultWindowMinutes      Int                        @default(60)
+  maxSuggestedAttempts      Int                        @default(3)
+  minSpacingMinutes         Int                        @default(120)
+  businessHoursOnly         Boolean                    @default(true)
+  defaultAssignmentBehavior CallbackAssignmentBehavior @default(UNASSIGNED)
+  version                   Int                        @default(0)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 }
 
 /// Recording / transcription / retention / consent policy defaults.
 /// Configuration only — not legal approval; recording/transcription default OFF.
 model OrganizationRecordingConsentPolicy {
-  id                      String                 @id @default(cuid())
-  organizationId          String                 @unique
-  organization            Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  recordingEnabled        Boolean                @default(false)
-  transcriptionEnabled    Boolean                @default(false)
-  consentCaptureRequired  Boolean                @default(true)
+  id                        String                 @id @default(cuid())
+  organizationId            String                 @unique
+  organization              Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recordingEnabled          Boolean                @default(false)
+  transcriptionEnabled      Boolean                @default(false)
+  consentCaptureRequired    Boolean                @default(true)
   /// Placeholder text for later disclosure workflows — not legal advice.
   disclosureTextPlaceholder String?
   /// Retention duration in days within reviewed bounds.
-  retentionDays           Int                    @default(30)
-  accessDefault           RecordingAccessDefault @default(ADMINS_ONLY)
-  reviewRequired          Boolean                @default(true)
-  version                 Int                    @default(0)
-  createdAt               DateTime               @default(now())
-  updatedAt               DateTime               @updatedAt
+  retentionDays             Int                    @default(30)
+  accessDefault             RecordingAccessDefault @default(ADMINS_ONLY)
+  reviewRequired            Boolean                @default(true)
+  version                   Int                    @default(0)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 }
 
 /// Notification and escalation configuration metadata only (no Slack/SMS/telephony).
 model OrganizationNotificationDefaults {
-  id                      String       @id @default(cuid())
-  organizationId          String       @unique
-  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  escalationContactLabel  String?
-  escalationContactEmail  String?
+  id                     String       @id @default(cuid())
+  organizationId         String       @unique
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  escalationContactLabel String?
+  escalationContactEmail String?
   /// Enabled notification category keys (validated).
-  notificationCategories  Json         @default("[]")
+  notificationCategories Json         @default("[]")
   /// Delivery channels already supported by the app (e.g. in_app, email).
-  enabledChannels         Json         @default("[\"in_app\"]")
+  enabledChannels        Json         @default("[\"in_app\"]")
   /// Optional operational threshold placeholders.
-  thresholdPlaceholders   Json         @default("{}")
-  version                 Int          @default(0)
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
+  thresholdPlaceholders  Json         @default("{}")
+  version                Int          @default(0)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
 }
 
 /// Bounded Phase 3B configuration progress. Independent of OrganizationOnboarding.
 model OrganizationConfigProgress {
-  id                    String               @id @default(cuid())
-  organizationId        String               @unique
-  organization          Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  status                ConfigProgressStatus @default(NOT_STARTED)
-  currentSection        ConfigSection        @default(BUSINESS_TEMPLATE)
+  id                String               @id @default(cuid())
+  organizationId    String               @unique
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  status            ConfigProgressStatus @default(NOT_STARTED)
+  currentSection    ConfigSection        @default(BUSINESS_TEMPLATE)
   /// JSON string array of completed ConfigSection values.
-  completedSections     Json                 @default("[]")
-  updatedByUserId       String?
-  updatedBy             User?                @relation("ConfigProgressUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
-  version               Int                  @default(0)
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
+  completedSections Json                 @default("[]")
+  updatedByUserId   String?
+  updatedBy         User?                @relation("ConfigProgressUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  version           Int                  @default(0)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
   @@index([status])
 }
@@ -725,6 +739,38 @@ model OrganizationConfigProgress {
 /// How knowledge entered the workspace. Phase 4A persists MANUAL only.
 enum KnowledgeInputKind {
   MANUAL
+  DOCUMENT
+}
+
+enum KnowledgeDocumentScanState {
+  PENDING
+  CLEAN
+  INFECTED
+  FAILED
+}
+
+enum KnowledgeDocumentProcessingState {
+  UPLOADING
+  QUEUED
+  SCANNING
+  EXTRACTING
+  NEEDS_ATTENTION
+  COMPLETE
+  FAILED
+  ABANDONED
+}
+
+enum KnowledgeDocumentJobState {
+  QUEUED
+  RUNNING
+  RETRY
+  SUCCEEDED
+  FAILED
+}
+
+enum KnowledgeDocumentIssueSeverity {
+  WARNING
+  BLOCKING
 }
 
 /// Source-class labels (KNOW-004). Phase 4A may activate only customer-confirmed facts.
@@ -752,23 +798,23 @@ enum KnowledgeLifecycleState {
 
 /// Organization-owned logical knowledge identity. Versions are immutable once confirmed.
 model KnowledgeSource {
-  id               String                   @id @default(cuid())
+  id               String                  @id @default(cuid())
   organizationId   String
-  organization     Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  inputKind        KnowledgeInputKind       @default(MANUAL)
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inputKind        KnowledgeInputKind      @default(MANUAL)
   category         KnowledgeSourceCategory
   /// Denormalized title promoted from a version only on confirmation.
   /// Draft updates do not overwrite this while an ACTIVE version exists.
   title            String
   archivedAt       DateTime?
   archivedByUserId String?
-  archivedBy       User?                    @relation("KnowledgeSourceArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  archivedBy       User?                   @relation("KnowledgeSourceArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
   createdByUserId  String?
-  createdBy        User?                    @relation("KnowledgeSourceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy        User?                   @relation("KnowledgeSourceCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   /// OCC for source-level archive / restore / replacement-draft creation.
-  version          Int                      @default(0)
-  createdAt        DateTime                 @default(now())
-  updatedAt        DateTime                 @updatedAt
+  version          Int                     @default(0)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
   versions         KnowledgeVersion[]
 
   @@unique([id, organizationId])
@@ -787,23 +833,23 @@ model KnowledgeSource {
 /// Confirmer identity is retained with ON DELETE RESTRICT. Membership
 /// deactivation and demotion do not rewrite confirmation evidence.
 model KnowledgeVersion {
-  id                          String                  @id @default(cuid())
+  id                          String                   @id @default(cuid())
   organizationId              String
   sourceId                    String
-  source                      KnowledgeSource         @relation(fields: [sourceId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  source                      KnowledgeSource          @relation(fields: [sourceId, organizationId], references: [id, organizationId], onDelete: Cascade)
   state                       KnowledgeLifecycleState
   title                       String
   contentChecksum             String
-  effectiveFrom               DateTime?               @db.Timestamptz(3)
-  effectiveUntil              DateTime?               @db.Timestamptz(3)
+  effectiveFrom               DateTime?                @db.Timestamptz(3)
+  effectiveUntil              DateTime?                @db.Timestamptz(3)
   /// OCC for draft updates and confirmation. Frozen after confirmation.
-  draftRevision               Int                     @default(0)
+  draftRevision               Int                      @default(0)
   createdByUserId             String?
-  createdBy                   User?                   @relation("KnowledgeVersionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdBy                   User?                    @relation("KnowledgeVersionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   confirmerUserId             String?
   /// Retained confirmer identity. Hard-delete of this user is rejected until a
   /// future retention/anonymization workflow safely replaces the reference.
-  confirmer                   User?                   @relation("KnowledgeVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: Restrict)
+  confirmer                   User?                    @relation("KnowledgeVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: Restrict)
   confirmedAt                 DateTime?
   confirmationLanguageVersion String?
   /// Previous active version this confirmation replaced, if any.
@@ -814,9 +860,12 @@ model KnowledgeVersion {
   /// SQL-only composite FK to (id, organizationId, sourceId); Prisma cannot
   /// declare a second relation on these shared scalar columns.
   restoredFromVersionId       String?
-  createdAt                   DateTime                @default(now())
-  updatedAt                   DateTime                @updatedAt
+  createdAt                   DateTime                 @default(now())
+  updatedAt                   DateTime                 @updatedAt
   sections                    KnowledgeSection[]
+  document                    KnowledgeDocument?
+  documentJobs                KnowledgeDocumentJob[]
+  documentIssues              KnowledgeDocumentIssue[]
 
   @@unique([id, organizationId])
   @@unique([id, organizationId, sourceId])
@@ -863,4 +912,109 @@ model KnowledgePassage {
   @@unique([sectionId, displayOrder])
   @@index([organizationId, versionId])
   @@index([sourceId])
+}
+
+/// Private storage metadata and durable processing state for one DOCUMENT
+/// knowledge version. File bytes remain in private object storage.
+model KnowledgeDocument {
+  id                        String                           @id @default(cuid())
+  organizationId            String
+  sourceId                  String
+  versionId                 String                           @unique
+  organization              Organization                     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  version                   KnowledgeVersion                 @relation(fields: [versionId, organizationId, sourceId], references: [id, organizationId, sourceId], onDelete: Cascade)
+  originalFilename          String
+  displayFilename           String
+  storageBucket             String
+  storageObjectKey          String                           @unique
+  declaredMimeType          String
+  detectedMimeType          String?
+  byteSize                  BigInt?
+  binaryChecksum            String?
+  normalizedContentChecksum String?
+  objectVersion             String?
+  objectEtag                String?
+  uploadedByUserId          String
+  uploadedBy                User                             @relation("KnowledgeDocumentUploader", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+  uploadedAt                DateTime                         @default(now())
+  finalizedAt               DateTime?
+  scanState                 KnowledgeDocumentScanState       @default(PENDING)
+  scannedChecksum           String?
+  scannerName               String?
+  scannerVersion            String?
+  scannedAt                 DateTime?
+  processingState           KnowledgeDocumentProcessingState @default(UPLOADING)
+  processingAttempts        Int                              @default(0)
+  leaseOwner                String?
+  leaseExpiresAt            DateTime?
+  retryAt                   DateTime?
+  lastSafeErrorCode         String?
+  extractorName             String?
+  extractorVersion          String?
+  exactDuplicateSourceId    String?
+  exactDuplicateVersionId   String?
+  nearDuplicateSourceId     String?
+  nearDuplicateVersionId    String?
+  duplicateAcknowledgedAt   DateTime?
+  createdAt                 DateTime                         @default(now())
+  updatedAt                 DateTime                         @updatedAt
+  jobs                      KnowledgeDocumentJob[]
+  issues                    KnowledgeDocumentIssue[]
+
+  @@unique([id, organizationId, sourceId, versionId])
+  @@unique([versionId, organizationId, sourceId])
+  @@index([organizationId, binaryChecksum])
+  @@index([organizationId, normalizedContentChecksum])
+  @@index([organizationId, processingState, retryAt])
+  @@index([processingState, leaseExpiresAt])
+  @@index([organizationId, sourceId])
+}
+
+/// Minimal Phase 4B durable job. Phase 12 may generalize this contract.
+model KnowledgeDocumentJob {
+  id                String                    @id @default(cuid())
+  organizationId    String
+  sourceId          String
+  versionId         String
+  documentId        String
+  organization      Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  version           KnowledgeVersion          @relation(fields: [versionId, organizationId, sourceId], references: [id, organizationId, sourceId], onDelete: Cascade)
+  document          KnowledgeDocument         @relation(fields: [documentId, organizationId, sourceId, versionId], references: [id, organizationId, sourceId, versionId], onDelete: Cascade)
+  idempotencyKey    String                    @unique
+  state             KnowledgeDocumentJobState @default(QUEUED)
+  attempts          Int                       @default(0)
+  maxAttempts       Int                       @default(5)
+  availableAt       DateTime                  @default(now())
+  leaseOwner        String?
+  leaseExpiresAt    DateTime?
+  lastSafeErrorCode String?
+  completedAt       DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@unique([id, organizationId])
+  @@index([state, availableAt])
+  @@index([state, leaseExpiresAt])
+  @@index([organizationId, state, availableAt])
+}
+
+model KnowledgeDocumentIssue {
+  id             String                         @id @default(cuid())
+  organizationId String
+  sourceId       String
+  versionId      String
+  documentId     String
+  organization   Organization                   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  version        KnowledgeVersion               @relation(fields: [versionId, organizationId, sourceId], references: [id, organizationId, sourceId], onDelete: Cascade)
+  document       KnowledgeDocument              @relation(fields: [documentId, organizationId, sourceId, versionId], references: [id, organizationId, sourceId, versionId], onDelete: Cascade)
+  code           String
+  severity       KnowledgeDocumentIssueSeverity
+  sectionLocator String?
+  safeMessage    String
+  resolvedAt     DateTime?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
+
+  @@unique([documentId, code, sectionLocator])
+  @@index([organizationId, versionId, severity, resolvedAt])
 }

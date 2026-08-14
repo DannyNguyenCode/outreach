@@ -14,3 +14,6 @@ process.env.AUTH_EMAIL_FROM ??= "Outreach <auth@mail.example.com>";
 process.env.AUTH_EMAIL_DELIVERY ??= "mock";
 process.env.EMAIL_PROVIDER_TIMEOUT_MS ??= "10000";
 process.env.NEXT_PUBLIC_APP_URL ??= "http://127.0.0.1:3100";
+process.env.KNOWLEDGE_DOCUMENT_ADAPTER_MODE ??= "fake";
+process.env.KNOWLEDGE_WORKER_TOKEN ??=
+  "dev-only-knowledge-worker-token-32chars";

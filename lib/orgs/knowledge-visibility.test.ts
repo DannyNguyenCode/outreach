@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  MEMBER_VISIBLE_INPUT_KIND,
+  MEMBER_VISIBLE_INPUT_KINDS,
   MEMBER_VISIBLE_SOURCE_CATEGORY,
   memberVisibleSourceWhere,
   memberVisibleSourceWithVersionWhere,
@@ -12,13 +12,13 @@ describe("member-visible knowledge predicates", () => {
   const now = new Date("2026-08-14T16:00:00.000Z");
   const organizationId = "org_member_visible";
 
-  it("requires MANUAL customer-confirmed non-archived sources", () => {
+  it("requires MANUAL or DOCUMENT customer-confirmed non-archived sources", () => {
     expect(memberVisibleSourceWhere()).toEqual({
       archivedAt: null,
-      inputKind: "MANUAL",
+      inputKind: { in: ["MANUAL", "DOCUMENT"] },
       category: "CUSTOMER_CONFIRMED_BUSINESS_FACTS",
     });
-    expect(MEMBER_VISIBLE_INPUT_KIND).toBe("MANUAL");
+    expect(MEMBER_VISIBLE_INPUT_KINDS).toEqual(["MANUAL", "DOCUMENT"]);
     expect(MEMBER_VISIBLE_SOURCE_CATEGORY).toBe(
       "CUSTOMER_CONFIRMED_BUSINESS_FACTS",
     );
@@ -31,7 +31,7 @@ describe("member-visible knowledge predicates", () => {
     );
     expect(sourceWhere.organizationId).toBe(organizationId);
     expect(sourceWhere.archivedAt).toBeNull();
-    expect(sourceWhere.inputKind).toBe("MANUAL");
+    expect(sourceWhere.inputKind).toEqual({ in: ["MANUAL", "DOCUMENT"] });
     expect(sourceWhere.category).toBe("CUSTOMER_CONFIRMED_BUSINESS_FACTS");
     expect(sourceWhere.versions).toEqual({
       some: expect.objectContaining({ state: "ACTIVE" }),
@@ -45,7 +45,7 @@ describe("member-visible knowledge predicates", () => {
     expect(versionWhere.source).toEqual({
       organizationId,
       archivedAt: null,
-      inputKind: "MANUAL",
+      inputKind: { in: ["MANUAL", "DOCUMENT"] },
       category: "CUSTOMER_CONFIRMED_BUSINESS_FACTS",
     });
   });

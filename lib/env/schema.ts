@@ -44,6 +44,18 @@ export const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((value) => value === "true"),
+  SUPABASE_URL: nonemptyUrl.optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(20).optional(),
+  KNOWLEDGE_STORAGE_BUCKET: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9_-]{2,62}$/)
+    .optional(),
+  MALWARE_SCANNER_URL: nonemptyUrl.optional(),
+  MALWARE_SCANNER_API_KEY: z.string().min(1).optional(),
+  MALWARE_SCANNER_NAME: z.string().min(1).optional(),
+  MALWARE_SCANNER_VERSION: z.string().min(1).optional(),
+  KNOWLEDGE_WORKER_TOKEN: z.string().min(32).optional(),
+  KNOWLEDGE_DOCUMENT_ADAPTER_MODE: z.enum(["production", "fake"]).optional(),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),

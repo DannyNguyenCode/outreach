@@ -23,6 +23,12 @@ import {
   restoreKnowledgeVersion,
   updateKnowledgeDraft,
 } from "@/lib/orgs/knowledge";
+import {
+  acknowledgeDocumentDuplicateWarning,
+  requestKnowledgeDocumentRetry,
+  restoreKnowledgeDocumentVersion,
+} from "@/lib/orgs/knowledge-documents";
+import { getPrivateDocumentStorage } from "@/lib/orgs/document-runtime";
 import { parseContentJson } from "@/lib/orgs/knowledge-validation";
 import { prisma } from "@/lib/prisma";
 
@@ -312,5 +318,72 @@ export async function createReplacementDraftAction(
     message:
       "Replacement draft created. Edit, preview, then confirm to activate.",
     data: { sourceId: result.version.sourceId, versionId: result.version.id },
+  };
+}
+
+export async function retryKnowledgeDocumentAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const result = await requestKnowledgeDocumentRetry({
+    actor: guarded.user,
+    organizationId: guarded.membership.organizationId,
+    sourceId: String(formData.get("sourceId") ?? ""),
+    versionId: String(formData.get("versionId") ?? ""),
+  });
+  if (!result.ok) return failureFromService(result);
+  revalidateKnowledgePaths(
+    guarded.slug,
+    String(formData.get("sourceId") ?? ""),
+  );
+  return {
+    status: "success",
+    message: "Document processing was queued for a safe retry.",
+  };
+}
+
+export async function acknowledgeDocumentDuplicateAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const result = await acknowledgeDocumentDuplicateWarning({
+    actor: guarded.user,
+    organizationId: guarded.membership.organizationId,
+    sourceId: String(formData.get("sourceId") ?? ""),
+    versionId: String(formData.get("versionId") ?? ""),
+  });
+  if (!result.ok) return failureFromService(result);
+  revalidateKnowledgePaths(
+    guarded.slug,
+    String(formData.get("sourceId") ?? ""),
+  );
+  return { status: "success", message: "Duplicate warning acknowledged." };
+}
+
+export async function restoreKnowledgeDocumentAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const result = await restoreKnowledgeDocumentVersion({
+    actor: guarded.user,
+    organizationId: guarded.membership.organizationId,
+    sourceId: String(formData.get("sourceId") ?? ""),
+    versionId: String(formData.get("versionId") ?? ""),
+    expectedSourceVersion: Number(formData.get("expectedVersion")),
+    storage: getPrivateDocumentStorage(),
+  });
+  if (!result.ok) return failureFromService(result);
+  const sourceId = String(formData.get("sourceId") ?? "");
+  revalidateKnowledgePaths(guarded.slug, sourceId);
+  return {
+    status: "success",
+    message: "Restored as a new unconfirmed document draft.",
+    data: { sourceId, versionId: result.versionId },
   };
 }

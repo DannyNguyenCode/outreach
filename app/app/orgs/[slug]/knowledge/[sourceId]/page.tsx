@@ -6,6 +6,7 @@ import {
   KnowledgeArchiveForm,
   KnowledgeReplacementForm,
 } from "@/components/orgs/knowledge/knowledge-actions";
+import { DocumentUploadForm } from "@/components/orgs/knowledge/document-upload-form";
 import { KnowledgeNav } from "@/components/orgs/knowledge/knowledge-nav";
 import { KnowledgePreview } from "@/components/orgs/knowledge/knowledge-preview";
 import { requireVerifiedUser } from "@/lib/auth/session";
@@ -110,12 +111,42 @@ export default async function KnowledgeSourcePage({ params }: PageProps) {
         </p>
       ) : null}
 
-      {canManage && source.active && !source.draft && !source.archivedAt ? (
+      {canManage &&
+      source.inputKind === "MANUAL" &&
+      source.active &&
+      !source.draft &&
+      !source.archivedAt ? (
         <KnowledgeReplacementForm
           organizationSlug={slug}
           sourceId={source.id}
           expectedVersion={source.version}
         />
+      ) : null}
+
+      {canManage &&
+      source.inputKind === "DOCUMENT" &&
+      source.active &&
+      !source.draft &&
+      !source.archivedAt ? (
+        <section
+          className="space-y-2"
+          aria-labelledby="replace-document-heading"
+        >
+          <h2 id="replace-document-heading" className="text-lg font-medium">
+            Replace document
+          </h2>
+          <p className="text-sm text-[var(--muted)]">
+            Replacement creates a new immutable private object and unconfirmed
+            version. The current version remains active until confirmation.
+          </p>
+          <DocumentUploadForm
+            organizationSlug={slug}
+            replacement={{
+              sourceId: source.id,
+              expectedSourceVersion: source.version,
+            }}
+          />
+        </section>
       ) : null}
 
       {canArchive && !source.archivedAt ? (

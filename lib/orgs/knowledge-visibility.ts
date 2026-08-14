@@ -1,6 +1,6 @@
 import type { Prisma } from "@prisma/client";
 
-export const MEMBER_VISIBLE_INPUT_KIND = "MANUAL" as const;
+export const MEMBER_VISIBLE_INPUT_KINDS = ["MANUAL", "DOCUMENT"] as const;
 export const MEMBER_VISIBLE_SOURCE_CATEGORY =
   "CUSTOMER_CONFIRMED_BUSINESS_FACTS" as const;
 
@@ -11,7 +11,7 @@ export const MEMBER_VISIBLE_SOURCE_CATEGORY =
 export function memberVisibleSourceWhere(): Prisma.KnowledgeSourceWhereInput {
   return {
     archivedAt: null,
-    inputKind: MEMBER_VISIBLE_INPUT_KIND,
+    inputKind: { in: [...MEMBER_VISIBLE_INPUT_KINDS] },
     category: MEMBER_VISIBLE_SOURCE_CATEGORY,
   };
 }

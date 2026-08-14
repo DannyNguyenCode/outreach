@@ -242,12 +242,18 @@ export default async function KnowledgeListPage({
       ) : null}
 
       {canManage ? (
-        <p>
+        <p className="flex flex-wrap gap-2">
           <Link
             href={`/app/orgs/${slug}/knowledge/new`}
             className="rounded-sm border border-[var(--border)] px-3 py-2 text-sm"
           >
             Create manual knowledge
+          </Link>{" "}
+          <Link
+            href={`/app/orgs/${slug}/knowledge/upload`}
+            className="rounded-sm border border-[var(--border)] px-3 py-2 text-sm"
+          >
+            Upload private document
           </Link>
         </p>
       ) : (
