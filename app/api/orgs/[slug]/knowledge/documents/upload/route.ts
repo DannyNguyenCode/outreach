@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth/session";
 import { getPrivateDocumentStorage } from "@/lib/orgs/document-runtime";
-import { DOCUMENT_MAX_BYTES } from "@/lib/orgs/document-types";
+import {
+  assertDocumentUploadContentLength,
+  DocumentUploadRequestError,
+  getDocumentUploadFile,
+  parseBoundedDocumentFormData,
+} from "@/lib/orgs/document-upload-request";
 import {
   DocumentValidationError,
   validateDocument,
@@ -19,15 +24,13 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ slug: string }> },
 ) {
-  const contentLength = Number(request.headers.get("content-length"));
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > DOCUMENT_MAX_BYTES + 256 * 1024
-  ) {
-    return NextResponse.json(
-      { ok: false, message: "The upload request is too large." },
-      { status: 413 },
-    );
+  try {
+    assertDocumentUploadContentLength(request);
+  } catch (error) {
+    if (error instanceof DocumentUploadRequestError) {
+      return uploadRequestError(error);
+    }
+    throw error;
   }
   const user = await getCurrentUser();
   if (!user || !user.emailVerifiedAt) {
@@ -52,28 +55,24 @@ export async function POST(
 
   let formData: FormData;
   try {
-    formData = await request.formData();
-  } catch {
+    formData = await parseBoundedDocumentFormData(request);
+  } catch (error) {
+    if (error instanceof DocumentUploadRequestError) {
+      return uploadRequestError(error);
+    }
     return NextResponse.json(
       { ok: false, message: "The upload request is malformed." },
       { status: 400 },
     );
   }
-  const file = formData.get("file");
-  if (!(file instanceof File)) {
-    return NextResponse.json(
-      { ok: false, message: "Choose a PDF, DOCX, or TXT document." },
-      { status: 400 },
-    );
-  }
-  if (file.size < 1 || file.size > DOCUMENT_MAX_BYTES) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: `Documents must be between 1 byte and ${DOCUMENT_MAX_BYTES} bytes.`,
-      },
-      { status: 400 },
-    );
+  let file: File;
+  try {
+    file = getDocumentUploadFile(formData);
+  } catch (error) {
+    if (error instanceof DocumentUploadRequestError) {
+      return uploadRequestError(error);
+    }
+    throw error;
   }
 
   try {
@@ -146,6 +145,13 @@ export async function POST(
       { status: 503 },
     );
   }
+}
+
+function uploadRequestError(error: DocumentUploadRequestError) {
+  return NextResponse.json(
+    { ok: false, code: error.code, message: error.message },
+    { status: error.status },
+  );
 }
 
 function declaredMimeFromUpload(file: File): string {

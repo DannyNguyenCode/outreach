@@ -21,6 +21,7 @@ Trust boundaries:
 - Extensions: `.pdf`, `.docx`, `.txt`
 - Declared MIME must agree with extension and server-detected signature
 - Maximum size: **10 MiB**
+- Multipart requests are stream-bounded to **10 MiB + 256 KiB overhead** before parsing; oversized and chunked bodies receive `413`
 - PDF page cap: **40 pages** (aligned with knowledge section limits; enforced before page iteration)
 - DOCX ZIP bomb protections: entry count, expanded size, compression ratio, nesting, and validation time
 - TXT must be valid UTF-8 and not NUL/binary-heavy
@@ -63,6 +64,15 @@ Only a clean verdict for the exact uploaded SHA-256 may proceed to extraction.
 
 CI and automated tests inject deterministic scanners and never contact malware providers.
 
+## Deployment request limit
+
+The application enforces its own bounded multipart reader and 10 MiB document
+limit without trusting `Content-Length`. Vercel Functions also impose a lower
+4.5 MiB request/response body limit and return an infrastructure `413` before a
+Route Handler runs. Deployments that must accept documents above that platform
+limit require a direct signed-storage upload flow; changing Next.js body-size
+configuration does not raise Vercel's limit.
+
 ## Worker invocation
 
 Minimal Phase 4B durable jobs (`KnowledgeDocumentJob`) are claimed by:
@@ -92,6 +102,7 @@ This is intentionally not Phase 12’s general-purpose job platform.
 | Clean extraction | `DRAFT` | `COMPLETE` |
 | Recoverable structural issues | `NEEDS_ATTENTION` | `NEEDS_ATTENTION` |
 | Unsafe/unrecoverable | `FAILED` | `FAILED` |
+| Interrupted upload | removed after cleanup, or temporary `FAILED` | temporary `ABANDONED` |
 | Explicit confirmation | `ACTIVE` | unchanged evidence |
 | Replacement confirmation | prior `SUPERSEDED` | prior object retained |
 | Archive | `ARCHIVED` | objects retained |
@@ -122,8 +133,10 @@ Background workers have no membership row. They acquire the organization knowled
 - Bounded exponential backoff
 - Permanent vs retryable classification
 - Exactly one successful extraction publication
-- Storage-success / DB-finalization failure leaves an inspectable `UPLOADING` or queued object for reconciliation
-- Abandoned uploads with missing objects can be marked `ABANDONED`
+- Upload/storage/finalization failures atomically become non-runnable before object deletion
+- Successful compensation removes the unfinished graph and restores replacement OCC
+- Failed object deletion remains `FAILED` / `ABANDONED`; the worker retries tenant-scoped cleanup after 15 minutes
+- Compensation and cleanup are idempotent and never act on finalized documents
 
 ## Duplicate warnings
 

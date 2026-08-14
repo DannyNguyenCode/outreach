@@ -8,7 +8,10 @@ import {
   getDocumentMalwareScanner,
   getPrivateDocumentStorage,
 } from "@/lib/orgs/document-runtime";
-import { processNextKnowledgeDocumentJob } from "@/lib/orgs/knowledge-documents";
+import {
+  processNextKnowledgeDocumentJob,
+  reconcileAbandonedDocumentUploads,
+} from "@/lib/orgs/knowledge-documents";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,6 +39,10 @@ export async function POST(request: Request) {
     const storage = getPrivateDocumentStorage();
     const malware = getDocumentMalwareScanner();
     const workerId = `http-worker-${crypto.randomUUID()}`;
+    const uploadCleanup = await reconcileAbandonedDocumentUploads({
+      storage,
+      olderThan: new Date(Date.now() - 15 * 60_000),
+    });
     const outcomes = [];
     for (let count = 0; count < 5; count += 1) {
       const result = await processNextKnowledgeDocumentJob({
@@ -55,6 +62,7 @@ export async function POST(request: Request) {
       ok: true,
       processed: outcomes.length,
       outcomes,
+      uploadCleanup,
     });
   } catch {
     return NextResponse.json(

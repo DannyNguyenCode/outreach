@@ -52,6 +52,8 @@ export type KnowledgeMutationTestHooks = {
    * service returns its success payload.
    */
   testAfterTransactionCommit?: () => Promise<void>;
+  /** Invoked after upload storage verification and before DB finalization. */
+  testBeforeDocumentUploadFinalization?: () => Promise<void>;
 };
 
 export function organizationKnowledgeLockKey(organizationId: string): string {

@@ -149,9 +149,15 @@ export async function uploadValidatedKnowledgeDocument(
           where: {
             organizationId: input.organizationId,
             sourceId: locked.id,
-            state: {
-              in: ["DRAFT", "PROCESSING", "NEEDS_ATTENTION", "FAILED"],
-            },
+            OR: [
+              { state: { in: ["DRAFT", "PROCESSING", "NEEDS_ATTENTION"] } },
+              {
+                state: "FAILED",
+                document: {
+                  is: { processingState: { not: "ABANDONED" } },
+                },
+              },
+            ],
           },
           select: { id: true },
         });
@@ -248,6 +254,7 @@ export async function uploadValidatedKnowledgeDocument(
     ) {
       throw new Error("Stored object checksum does not match the upload.");
     }
+    await hooks.testBeforeDocumentUploadFinalization?.();
 
     const finalized = await prisma.$transaction(async (tx) => {
       await acquireOrganizationKnowledgeLock(tx, input.organizationId, hooks);
@@ -358,12 +365,25 @@ export async function uploadValidatedKnowledgeDocument(
       },
     };
   } catch (error) {
+    if (initiated) {
+      await compensateFailedDocumentUpload({
+        storage: input.storage,
+        organizationId: input.organizationId,
+        sourceId: initiated.source.id,
+        versionId: initiated.version.id,
+        documentId: initiated.document.id,
+        actorUserId: input.actor.id,
+      }).catch(() => {
+        // The durable stale-upload sweep retries compensation. Never replace
+        // the original safe client failure with cleanup internals.
+      });
+    }
     return (
       mapKnowledgeError(error) ?? {
         ok: false,
         reason: "failed",
         message: initiated
-          ? "The upload could not be finalized. Its private object will be reconciled safely."
+          ? "The upload could not be finalized. No document was activated."
           : "The document could not be uploaded.",
       }
     );
@@ -928,7 +948,12 @@ export async function restoreKnowledgeDocumentVersion(
   },
   hooks: KnowledgeMutationTestHooks = {},
 ): Promise<{ ok: true; versionId: string } | AuthFailure> {
-  let copiedKey: string | null = null;
+  let initiated:
+    | {
+        version: KnowledgeVersion;
+        document: KnowledgeDocument;
+      }
+    | undefined;
   try {
     await requireOrganizationPermission({
       user: input.actor,
@@ -969,25 +994,11 @@ export async function restoreKnowledgeDocumentVersion(
     if (validated.sha256 !== historical.document.binaryChecksum) {
       throw new Error("Historical object checksum mismatch.");
     }
-    copiedKey = input.storage.createObjectKey(
+    const copiedKey = input.storage.createObjectKey(
       input.organizationId,
       validated.kind,
     );
-    const copiedRef = {
-      organizationId: input.organizationId,
-      key: copiedKey,
-    };
-    await input.storage.upload(
-      copiedRef,
-      sourceBytes,
-      historical.document.declaredMimeType,
-    );
-    const copiedBytes = await input.storage.download(copiedRef);
-    if (sha256(copiedBytes) !== validated.sha256) {
-      throw new Error("Restored object checksum mismatch.");
-    }
-
-    const created = await prisma.$transaction(async (tx) => {
+    initiated = await prisma.$transaction(async (tx) => {
       await acquireOrganizationKnowledgeLock(tx, input.organizationId, hooks);
       await requireActiveActorInTx(
         tx,
@@ -1030,9 +1041,15 @@ export async function restoreKnowledgeDocumentVersion(
         where: {
           organizationId: input.organizationId,
           sourceId: input.sourceId,
-          state: {
-            in: ["DRAFT", "PROCESSING", "NEEDS_ATTENTION", "FAILED"],
-          },
+          OR: [
+            { state: { in: ["DRAFT", "PROCESSING", "NEEDS_ATTENTION"] } },
+            {
+              state: "FAILED",
+              document: {
+                is: { processingState: { not: "ABANDONED" } },
+              },
+            },
+          ],
         },
         select: { id: true },
       });
@@ -1046,7 +1063,7 @@ export async function restoreKnowledgeDocumentVersion(
         data: {
           organizationId: input.organizationId,
           sourceId: input.sourceId,
-          state: "DRAFT",
+          state: "PROCESSING",
           title: historical.title,
           contentChecksum: historical.contentChecksum,
           effectiveFrom: historical.effectiveFrom,
@@ -1055,12 +1072,111 @@ export async function restoreKnowledgeDocumentVersion(
           restoredFromVersionId: historical.id,
         },
       });
+      const document = await tx.knowledgeDocument.create({
+        data: {
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+          versionId: version.id,
+          originalFilename: historical.document!.originalFilename,
+          displayFilename: historical.document!.displayFilename,
+          storageBucket: historical.document!.storageBucket,
+          storageObjectKey: copiedKey,
+          declaredMimeType: historical.document!.declaredMimeType,
+          uploadedByUserId: input.actor.id,
+        },
+      });
+      const bumped = await tx.knowledgeSource.updateMany({
+        where: {
+          id: input.sourceId,
+          organizationId: input.organizationId,
+          version: input.expectedSourceVersion,
+        },
+        data: { version: { increment: 1 } },
+      });
+      if (bumped.count !== 1) throw new ConflictError();
+      await recordOrganizationAuditEvent(tx, {
+        organizationId: input.organizationId,
+        actorUserId: input.actor.id,
+        action: "KNOWLEDGE_DOCUMENT_UPLOAD_INITIATED",
+        metadata: {
+          sourceId: input.sourceId,
+          versionId: version.id,
+          documentId: document.id,
+          restore: true,
+        },
+      });
+      return { version, document };
+    });
+
+    const copiedRef = {
+      organizationId: input.organizationId,
+      key: copiedKey,
+    };
+    await input.storage.upload(
+      copiedRef,
+      sourceBytes,
+      historical.document.declaredMimeType,
+    );
+    const copiedBytes = await input.storage.download(copiedRef);
+    if (sha256(copiedBytes) !== validated.sha256) {
+      throw new Error("Restored object checksum mismatch.");
+    }
+    await hooks.testBeforeDocumentUploadFinalization?.();
+
+    const created = await prisma.$transaction(async (tx) => {
+      await acquireOrganizationKnowledgeLock(tx, input.organizationId, hooks);
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.knowledge.archive",
+        },
+        hooks,
+      );
+      const source = await lockKnowledgeSourceForUpdate(
+        tx,
+        {
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+        },
+        hooks,
+      );
+      if (
+        !source ||
+        source.inputKind !== "DOCUMENT" ||
+        source.version !== input.expectedSourceVersion + 1
+      ) {
+        throw new ConflictError();
+      }
+      const lockedVersion = await lockKnowledgeVersionForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: initiated!.version.id,
+      });
+      const lockedDocument = await lockKnowledgeDocumentForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: initiated!.version.id,
+        documentId: initiated!.document.id,
+      });
+      if (
+        !lockedVersion ||
+        !lockedDocument ||
+        lockedVersion.state !== "PROCESSING" ||
+        lockedDocument.processingState !== "UPLOADING"
+      ) {
+        throw new KnowledgeLifecycleError(
+          "not_restorable",
+          "This document version can no longer be restored.",
+        );
+      }
       for (const section of historical.sections) {
         const createdSection = await tx.knowledgeSection.create({
           data: {
             organizationId: input.organizationId,
             sourceId: input.sourceId,
-            versionId: version.id,
+            versionId: initiated!.version.id,
             citationKey: section.citationKey,
             title: section.title,
             displayOrder: section.displayOrder,
@@ -1070,7 +1186,7 @@ export async function restoreKnowledgeDocumentVersion(
           data: section.passages.map((passage) => ({
             organizationId: input.organizationId,
             sourceId: input.sourceId,
-            versionId: version.id,
+            versionId: initiated!.version.id,
             sectionId: createdSection.id,
             citationKey: passage.citationKey,
             body: passage.body,
@@ -1078,15 +1194,13 @@ export async function restoreKnowledgeDocumentVersion(
           })),
         });
       }
-      const document = await tx.knowledgeDocument.create({
+      await tx.knowledgeVersion.update({
+        where: { id: initiated!.version.id },
+        data: { state: "DRAFT" },
+      });
+      const document = await tx.knowledgeDocument.update({
+        where: { id: initiated!.document.id },
         data: {
-          organizationId: input.organizationId,
-          sourceId: input.sourceId,
-          versionId: version.id,
-          originalFilename: historical.document!.originalFilename,
-          displayFilename: historical.document!.displayFilename,
-          storageBucket: historical.document!.storageBucket,
-          storageObjectKey: copiedKey!,
           declaredMimeType: historical.document!.declaredMimeType,
           detectedMimeType: historical.document!.detectedMimeType,
           byteSize: historical.document!.byteSize,
@@ -1112,12 +1226,11 @@ export async function restoreKnowledgeDocumentVersion(
         where: {
           id: input.sourceId,
           organizationId: input.organizationId,
-          version: input.expectedSourceVersion,
+          version: input.expectedSourceVersion + 1,
         },
         data: {
           archivedAt: null,
           archivedByUserId: null,
-          version: { increment: 1 },
         },
       });
       if (changed.count !== 1) throw new ConflictError();
@@ -1127,25 +1240,27 @@ export async function restoreKnowledgeDocumentVersion(
         action: "KNOWLEDGE_VERSION_RESTORED",
         metadata: {
           sourceId: input.sourceId,
-          versionId: version.id,
+          versionId: initiated!.version.id,
           restoredFromVersionId: historical.id,
           documentId: document.id,
           checksum: historical.contentChecksum,
         },
       });
-      return version;
+      return initiated!.version;
     });
     return { ok: true, versionId: created.id };
   } catch (error) {
-    if (copiedKey) {
-      try {
-        await input.storage.delete({
-          organizationId: input.organizationId,
-          key: copiedKey,
-        });
-      } catch {
-        // Reconciliation can safely identify an unreferenced private object.
-      }
+    if (initiated) {
+      await compensateFailedDocumentUpload({
+        storage: input.storage,
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: initiated.version.id,
+        documentId: initiated.document.id,
+        actorUserId: input.actor.id,
+      }).catch(() => {
+        // The durable stale-upload sweep retries compensation.
+      });
     }
     return (
       mapKnowledgeError(error) ?? {
@@ -1254,39 +1369,209 @@ export async function createAuthorizedDocumentDownload(input: {
   }
 }
 
+export type FailedUploadCompensationResult =
+  "cleaned" | "cleanup_pending" | "already_clean" | "protected";
+
+/**
+ * Compensate an upload that initialized DB state but did not finalize.
+ *
+ * The first transaction atomically makes the graph non-runnable and restores
+ * replacement OCC. Only then may storage be deleted. A second transaction
+ * removes the abandoned graph after object deletion succeeds. Repeated calls
+ * are harmless and every lookup is scoped to the owning organization.
+ */
+export async function compensateFailedDocumentUpload(input: {
+  storage: PrivateDocumentStorage;
+  organizationId: string;
+  sourceId: string;
+  versionId: string;
+  documentId: string;
+  actorUserId: string | null;
+}): Promise<FailedUploadCompensationResult> {
+  const prepared = await prisma.$transaction(async (tx) => {
+    await acquireOrganizationKnowledgeLock(tx, input.organizationId);
+    const source = await lockKnowledgeSourceForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+    });
+    if (!source) return { state: "already_clean" as const };
+
+    const version = await lockKnowledgeVersionForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+      versionId: input.versionId,
+    });
+    const document = await lockKnowledgeDocumentForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+      versionId: input.versionId,
+      documentId: input.documentId,
+    });
+    if (!version || !document) {
+      return { state: "already_clean" as const };
+    }
+
+    const alreadyAbandoned =
+      version.state === "FAILED" && document.processingState === "ABANDONED";
+    if (
+      !alreadyAbandoned &&
+      (version.state !== "PROCESSING" ||
+        document.processingState !== "UPLOADING")
+    ) {
+      return { state: "protected" as const };
+    }
+
+    if (!alreadyAbandoned) {
+      const isReplacement =
+        (await tx.knowledgeVersion.count({
+          where: {
+            organizationId: input.organizationId,
+            sourceId: input.sourceId,
+            id: { not: input.versionId },
+          },
+        })) > 0;
+      await tx.knowledgeDocument.update({
+        where: { id: input.documentId },
+        data: {
+          processingState: "ABANDONED",
+          lastSafeErrorCode: "upload_finalization_failed",
+        },
+      });
+      await tx.knowledgeVersion.update({
+        where: { id: input.versionId },
+        data: { state: "FAILED" },
+      });
+      if (isReplacement) {
+        await tx.knowledgeSource.update({
+          where: { id: input.sourceId },
+          data: { version: { decrement: 1 } },
+        });
+      }
+      await recordOrganizationAuditEvent(tx, {
+        organizationId: input.organizationId,
+        actorUserId: input.actorUserId,
+        action: "KNOWLEDGE_DOCUMENT_UPLOAD_FAILED",
+        metadata: {
+          sourceId: input.sourceId,
+          versionId: input.versionId,
+          documentId: input.documentId,
+          replacement: isReplacement,
+          cleanupPending: true,
+        },
+      });
+    }
+
+    return {
+      state: "cleanup_pending" as const,
+      objectKey: document.storageObjectKey,
+    };
+  });
+
+  if (prepared.state !== "cleanup_pending") {
+    return prepared.state;
+  }
+
+  try {
+    await input.storage.delete({
+      organizationId: input.organizationId,
+      key: prepared.objectKey,
+    });
+  } catch {
+    return "cleanup_pending";
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await acquireOrganizationKnowledgeLock(tx, input.organizationId);
+    const source = await lockKnowledgeSourceForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+    });
+    if (!source) return "already_clean";
+
+    const version = await lockKnowledgeVersionForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+      versionId: input.versionId,
+    });
+    const document = await lockKnowledgeDocumentForUpdate(tx, {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+      versionId: input.versionId,
+      documentId: input.documentId,
+    });
+    if (!version || !document) return "already_clean";
+    if (
+      version.state !== "FAILED" ||
+      document.processingState !== "ABANDONED"
+    ) {
+      return "protected";
+    }
+
+    const isReplacement =
+      (await tx.knowledgeVersion.count({
+        where: {
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+          id: { not: input.versionId },
+        },
+      })) > 0;
+    await recordOrganizationAuditEvent(tx, {
+      organizationId: input.organizationId,
+      actorUserId: input.actorUserId,
+      action: "KNOWLEDGE_DOCUMENT_UPLOAD_CLEANED",
+      metadata: {
+        sourceId: input.sourceId,
+        versionId: input.versionId,
+        documentId: input.documentId,
+        replacement: isReplacement,
+      },
+    });
+    await tx.knowledgeVersion.delete({ where: { id: input.versionId } });
+    if (!isReplacement) {
+      await tx.knowledgeSource.delete({ where: { id: input.sourceId } });
+    }
+    return "cleaned";
+  });
+}
+
+/**
+ * Durable retry for process interruption or a temporarily unavailable object
+ * store during synchronous compensation.
+ */
 export async function reconcileAbandonedDocumentUploads(input: {
   storage: PrivateDocumentStorage;
   olderThan: Date;
-}): Promise<{ examined: number; abandoned: number; objectsPresent: number }> {
+}): Promise<{ examined: number; cleaned: number; pending: number }> {
   const rows = await prisma.knowledgeDocument.findMany({
     where: {
-      processingState: "UPLOADING",
+      processingState: { in: ["UPLOADING", "ABANDONED"] },
       createdAt: { lt: input.olderThan },
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: 100,
   });
-  let abandoned = 0;
-  let objectsPresent = 0;
+  let cleaned = 0;
+  let pending = 0;
   for (const row of rows) {
-    const head = await input.storage.head({
-      organizationId: row.organizationId,
-      key: row.storageObjectKey,
-    });
-    if (head) {
-      objectsPresent += 1;
-      continue;
+    try {
+      const result = await compensateFailedDocumentUpload({
+        storage: input.storage,
+        organizationId: row.organizationId,
+        sourceId: row.sourceId,
+        versionId: row.versionId,
+        documentId: row.id,
+        actorUserId: row.uploadedByUserId,
+      });
+      if (result === "cleaned" || result === "already_clean") {
+        cleaned += 1;
+      } else if (result === "cleanup_pending") {
+        pending += 1;
+      }
+    } catch {
+      pending += 1;
     }
-    const changed = await prisma.knowledgeDocument.updateMany({
-      where: { id: row.id, processingState: "UPLOADING" },
-      data: {
-        processingState: "ABANDONED",
-        lastSafeErrorCode: "missing_object",
-      },
-    });
-    abandoned += changed.count;
   }
-  return { examined: rows.length, abandoned, objectsPresent };
+  return { examined: rows.length, cleaned, pending };
 }
 
 async function findDocumentDuplicates(input: {
