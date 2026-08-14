@@ -6,13 +6,16 @@ import {
   confirmKnowledgeVersion,
   createManualKnowledgeSource,
   getKnowledgeSource,
+  getKnowledgeVersion,
   listKnowledgeSources,
   updateKnowledgeDraft,
 } from "@/lib/orgs/knowledge";
+import { retrieveActiveKnowledge } from "@/lib/orgs/knowledge-retrieval";
 import { changeMemberRole, deactivateMember } from "@/lib/orgs/memberships";
 import {
   addMember,
   confirmSample,
+  createMemberAccessFixtures,
   createOrgWithOwner,
   createSampleDraft,
 } from "@/tests/integration/helpers/knowledge";
@@ -235,7 +238,7 @@ describe("Phase 4A knowledge security", () => {
     }
   });
 
-  it("hides drafts, future, expired, and other-class versions from members", async () => {
+  it("hides non-visible knowledge behind the same not_found as unknown IDs", async () => {
     const ctx = await createOrgWithOwner(prisma, "know-member-hide");
     const member = await addMember(
       prisma,
@@ -243,81 +246,263 @@ describe("Phase 4A knowledge security", () => {
       "know-member-hide-user",
       "MEMBER",
     );
-    const draft = await createSampleDraft(ctx.owner, ctx.organizationId, {
-      title: "Hidden draft",
-    });
-    const future = await createSampleDraft(ctx.owner, ctx.organizationId, {
-      title: "Future only",
-      effectiveFrom: new Date(Date.now() + 86_400_000).toISOString(),
-    });
+    const other = await createOrgWithOwner(prisma, "know-member-hide-other");
+    const otherVisible = await createSampleDraft(
+      other.owner,
+      other.organizationId,
+      { title: "Other tenant policy" },
+    );
     await confirmSample(
+      other.owner,
+      other.organizationId,
+      otherVisible.source.id,
+      otherVisible.version.id,
+      otherVisible.version.draftRevision,
+      otherVisible.version.contentChecksum,
+    );
+    const fixtures = await createMemberAccessFixtures(
+      prisma,
       ctx.owner,
       ctx.organizationId,
-      future.source.id,
-      future.version.id,
-      future.version.draftRevision,
-      future.version.contentChecksum,
     );
-    const visible = await createSampleDraft(ctx.owner, ctx.organizationId, {
-      title: "Visible policy",
+    const unknownId = "clkbogus00000000000000000";
+
+    const unknownSource = await getKnowledgeSource({
+      actor: member,
+      organizationId: ctx.organizationId,
+      sourceId: unknownId,
     });
-    await confirmSample(
+    const unknownVersion = await getKnowledgeVersion({
+      actor: member,
+      organizationId: ctx.organizationId,
+      sourceId: unknownId,
+      versionId: unknownId,
+    });
+    expect(unknownSource.ok).toBe(false);
+    expect(unknownVersion.ok).toBe(false);
+    if (!unknownSource.ok && !unknownVersion.ok) {
+      expect(unknownSource.reason).toBe("not_found");
+      expect(unknownVersion.reason).toBe("not_found");
+    }
+
+    const hiddenSourceLookups = [
+      fixtures.draft.sourceId,
+      fixtures.future.sourceId,
+      fixtures.expired.sourceId,
+      fixtures.archived.sourceId,
+      fixtures.wrongCategory.sourceId,
+      fixtures.wrongKind.sourceId,
+      otherVisible.source.id,
+      unknownId,
+    ];
+    for (const sourceId of hiddenSourceLookups) {
+      const result = await getKnowledgeSource({
+        actor: member,
+        organizationId: ctx.organizationId,
+        sourceId,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok && !unknownSource.ok) {
+        expect(result.reason).toBe("not_found");
+        expect(result.message).toBe(unknownSource.message);
+      }
+    }
+
+    const hiddenVersionLookups = [
+      fixtures.draft,
+      fixtures.future,
+      fixtures.expired,
+      fixtures.archived,
+      fixtures.superseded,
+      fixtures.replacementDraft,
+      fixtures.wrongCategory,
+      fixtures.wrongKind,
+      {
+        sourceId: otherVisible.source.id,
+        versionId: otherVisible.version.id,
+      },
+      { sourceId: unknownId, versionId: unknownId },
+      { sourceId: fixtures.alpha.sourceId, versionId: unknownId },
+    ];
+    for (const pair of hiddenVersionLookups) {
+      const result = await getKnowledgeVersion({
+        actor: member,
+        organizationId: ctx.organizationId,
+        sourceId: pair.sourceId,
+        versionId: pair.versionId,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok && !unknownVersion.ok) {
+        expect(result.reason).toBe("not_found");
+        expect(result.message).toBe(unknownVersion.message);
+      }
+    }
+
+    for (const pair of [fixtures.alpha, fixtures.current, fixtures.zebra]) {
+      const source = await getKnowledgeSource({
+        actor: member,
+        organizationId: ctx.organizationId,
+        sourceId: pair.sourceId,
+      });
+      const version = await getKnowledgeVersion({
+        actor: member,
+        organizationId: ctx.organizationId,
+        sourceId: pair.sourceId,
+        versionId: pair.versionId,
+      });
+      expect(source.ok).toBe(true);
+      expect(version.ok).toBe(true);
+      if (source.ok) {
+        expect(source.source.versions.map((item) => item.id)).toEqual([
+          pair.versionId,
+        ]);
+      }
+      if (version.ok) {
+        expect(version.version.id).toBe(pair.versionId);
+        expect(version.version.title).toBe(pair.title);
+      }
+    }
+
+    const retrieved = await retrieveActiveKnowledge({
+      actor: member,
+      organizationId: ctx.organizationId,
+    });
+    expect(retrieved.ok).toBe(true);
+    if (!retrieved.ok) throw new Error(retrieved.message);
+    expect(retrieved.items.map((item) => item.versionTitle)).toEqual(
+      fixtures.visibleTitles,
+    );
+    const bodies = retrieved.items.map((item) => item.body);
+    expect(bodies).toEqual([
+      "alpha-visible-body",
+      "currently-effective-body",
+      "zebra-visible-body",
+    ]);
+    for (const hiddenBody of [
+      "unconfirmed-draft-body",
+      "future-confirmed-body",
+      "expired-confirmed-body",
+      "archived-confirmed-body",
+      "superseded-historical-body",
+      "secret-replacement-draft-body",
+      "wrong-category-body",
+      "wrong-kind-body",
+    ]) {
+      expect(bodies).not.toContain(hiddenBody);
+    }
+
+    const secretRetrieved = await retrieveActiveKnowledge({
+      actor: member,
+      organizationId: ctx.organizationId,
+      query: "secret-replacement-draft-body",
+    });
+    expect(secretRetrieved.ok).toBe(true);
+    if (secretRetrieved.ok) {
+      expect(secretRetrieved.items).toEqual([]);
+      expect(secretRetrieved.total).toBe(0);
+    }
+  });
+
+  it("lists member-visible sources after SQL filtering, search, and pagination", async () => {
+    const ctx = await createOrgWithOwner(prisma, "know-member-list");
+    const member = await addMember(
+      prisma,
+      ctx.organizationId,
+      "know-member-list-user",
+      "MEMBER",
+    );
+    const fixtures = await createMemberAccessFixtures(
+      prisma,
       ctx.owner,
       ctx.organizationId,
-      visible.source.id,
-      visible.version.id,
-      visible.version.draftRevision,
-      visible.version.contentChecksum,
     );
 
-    const listed = await listKnowledgeSources({
+    const listedAll = await listKnowledgeSources({
       actor: member,
       organizationId: ctx.organizationId,
-      query: "Hidden",
+      status: "all",
     });
-    expect(listed.ok).toBe(true);
-    if (listed.ok) {
-      expect(listed.items).toEqual([]);
-      expect(listed.total).toBe(0);
+    expect(listedAll.ok).toBe(true);
+    if (!listedAll.ok) throw new Error(listedAll.message);
+    expect(listedAll.total).toBe(3);
+    expect(listedAll.items.map((item) => item.title)).toEqual(
+      fixtures.visibleTitles,
+    );
+    expect(new Set(listedAll.items.map((item) => item.id)).size).toBe(3);
+    expect(
+      listedAll.items.filter((item) => item.id === fixtures.alpha.sourceId),
+    ).toHaveLength(1);
+
+    for (const item of listedAll.items) {
+      expect(item.versions).toHaveLength(1);
+      expect(item.versions[0]?.draftRevision).toBeUndefined();
+      expect(item.versions[0]?.contentChecksum).toBeUndefined();
+      expect(item).not.toHaveProperty("confirmerUserId");
+      expect(item.versions[0]).not.toHaveProperty("confirmerUserId");
+      expect(item.versions[0]).not.toHaveProperty("supersedesVersionId");
+      expect(item.versions[0]).not.toHaveProperty("restoredFromVersionId");
+      expect(item.versions[0]).not.toHaveProperty("createdByUserId");
     }
 
-    const draftGet = await getKnowledgeSource({
+    const page1 = await listKnowledgeSources({
       actor: member,
       organizationId: ctx.organizationId,
-      sourceId: draft.source.id,
+      page: 1,
+      pageSize: 2,
     });
-    const unknownGet = await getKnowledgeSource({
+    const page2 = await listKnowledgeSources({
       actor: member,
       organizationId: ctx.organizationId,
-      sourceId: "clkbogus00000000000000000",
+      page: 2,
+      pageSize: 2,
     });
-    const futureGet = await getKnowledgeSource({
+    expect(page1.ok).toBe(true);
+    expect(page2.ok).toBe(true);
+    if (!page1.ok || !page2.ok) {
+      throw new Error("expected member list pagination to succeed");
+    }
+    expect(page1.total).toBe(3);
+    expect(page2.total).toBe(3);
+    expect(page1.items).toHaveLength(2);
+    expect(page2.items).toHaveLength(1);
+    expect([
+      ...page1.items.map((item) => item.title),
+      ...page2.items.map((item) => item.title),
+    ]).toEqual(fixtures.visibleTitles);
+
+    const secretSearch = await listKnowledgeSources({
       actor: member,
       organizationId: ctx.organizationId,
-      sourceId: future.source.id,
+      query: "Secret replacement",
     });
-    expect(draftGet.ok).toBe(false);
-    expect(unknownGet.ok).toBe(false);
-    expect(futureGet.ok).toBe(false);
-    if (!draftGet.ok && !unknownGet.ok && !futureGet.ok) {
-      expect(draftGet.reason).toBe("not_found");
-      expect(draftGet.message).toBe(unknownGet.message);
-      expect(futureGet.message).toBe(unknownGet.message);
+    expect(secretSearch.ok).toBe(true);
+    if (secretSearch.ok) {
+      expect(secretSearch.items).toEqual([]);
+      expect(secretSearch.total).toBe(0);
     }
 
-    const visibleList = await listKnowledgeSources({
+    const historicalSearch = await listKnowledgeSources({
       actor: member,
       organizationId: ctx.organizationId,
+      query: "Superseded historical",
     });
-    expect(visibleList.ok).toBe(true);
-    if (visibleList.ok) {
-      expect(visibleList.items.map((item) => item.title)).toEqual([
-        "Visible policy",
+    expect(historicalSearch.ok).toBe(true);
+    if (historicalSearch.ok) {
+      expect(historicalSearch.items).toEqual([]);
+      expect(historicalSearch.total).toBe(0);
+    }
+
+    const alphaSearch = await listKnowledgeSources({
+      actor: member,
+      organizationId: ctx.organizationId,
+      query: "Alpha member",
+    });
+    expect(alphaSearch.ok).toBe(true);
+    if (alphaSearch.ok) {
+      expect(alphaSearch.total).toBe(1);
+      expect(alphaSearch.items.map((item) => item.title)).toEqual([
+        "Alpha member policy",
       ]);
-      expect(visibleList.items[0]?.versions[0]?.draftRevision).toBeUndefined();
-      expect(
-        visibleList.items[0]?.versions[0]?.contentChecksum,
-      ).toBeUndefined();
     }
   });
 });

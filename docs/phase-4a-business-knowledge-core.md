@@ -48,6 +48,8 @@ Activation is the confirmation gate. Outreach does not review content for truth 
 
 Server-controlled statement (`KNOWLEDGE_CONFIRMATION_STATEMENT`) and language version (`knowledge.confirm.v1`) are stored on the confirmed version. The browser cannot supply confirmer identity, timestamp, language version, checksum, lifecycle state, audit fields, or organization ownership.
 
+Confirmation evidence is immutable. `confirmerUserId`, `confirmedAt`, and `confirmationLanguageVersion` stay together, and the confirmer user FK is `ON DELETE RESTRICT`. Users referenced by that evidence cannot be hard-deleted until a future explicit retention/anonymization workflow safely replaces the identity. Ordinary membership deactivation and demotion do not rewrite or clear confirmation fields.
+
 The activation transaction:
 
 1. Authenticates
@@ -70,7 +72,7 @@ The activation transaction:
 - Source: `archivedAt` null, `inputKind: MANUAL`, `category: CUSTOMER_CONFIRMED_BUSINESS_FACTS`
 - Version: `ACTIVE`, `confirmedAt` and `confirmationLanguageVersion` not null, `effectiveFrom` null or `<= now`, `effectiveUntil` null or `> now`
 
-Members never receive draft, future, expired, archived, superseded, unconfirmed, or other-category rows. Direct access to those IDs returns the same `not_found` as an unknown ID. Member list search/order/count/pagination uses the ACTIVE version title (not denormalized `KnowledgeSource.title`) and omits `draftRevision`, checksums, confirmer fields, and historical IDs.
+Members never receive draft, future, expired, archived, superseded, unconfirmed, other-category, or other-input-kind rows. Direct lookups of those IDs — including `getKnowledgeVersion` — return the same `not_found` and the same message as an unknown ID or another tenant's ID. Member list search, ordering, count, and pagination run in SQL after that visibility filter, use the currently effective ACTIVE version title (not denormalized `KnowledgeSource.title` or an unconfirmed replacement-draft title), and omit `draftRevision`, checksums, confirmer fields, and historical IDs.
 
 `sourceTitle` in retrieval is the ACTIVE version title. `KnowledgeSource.title` is promoted from a version only on confirmation. Draft updates and restores do not overwrite it while an ACTIVE version exists.
 
@@ -139,6 +141,12 @@ Forward-only migrations:
 - `supersedesVersionId` / `restoredFromVersionId` `(id, organizationId, sourceId)` with `ON DELETE NO ACTION` (SQL-only; Prisma cannot share those scalar columns with the source relation)
 - Checks: effective range; confirmation fields all-null or all-present; ACTIVE/SUPERSEDED require confirmation; DRAFT forbids confirmation metadata
 - `effectiveFrom` / `effectiveUntil` migrated to `TIMESTAMPTZ(3)`
+- Apply only to disposable local and CI PostgreSQL — not Supabase/production from this branch workflow
+
+`prisma/migrations/20260814140000_phase_04a_confirmer_retention`
+
+- Recreates `KnowledgeVersion_confirmerUserId_fkey` as `ON DELETE RESTRICT` so hard-deleting a confirmer cannot null only `confirmerUserId` and trip the confirmation-field checks
+- Does not weaken confirmation consistency checks
 - Apply only to disposable local and CI PostgreSQL — not Supabase/production from this branch workflow
 
 ## UI routes

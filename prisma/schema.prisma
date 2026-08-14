@@ -38,6 +38,8 @@ model User {
   knowledgeSourcesCreated  KnowledgeSource[]  @relation("KnowledgeSourceCreator")
   knowledgeSourcesArchived KnowledgeSource[]  @relation("KnowledgeSourceArchiver")
   knowledgeVersionsCreated KnowledgeVersion[] @relation("KnowledgeVersionCreator")
+  /// Users referenced by immutable confirmation evidence cannot be hard-deleted
+  /// until a future retention/anonymization workflow replaces that identity.
   knowledgeVersionsConfirmed KnowledgeVersion[] @relation("KnowledgeVersionConfirmer")
 
   @@index([emailVerifiedAt])
@@ -777,10 +779,13 @@ model KnowledgeSource {
 
 /// Immutable confirmed content identity. Drafts may be updated until confirmation.
 /// PostgreSQL (not Prisma) also enforces:
-/// - composite FKs `supersedesVersionId`/`restoredFromVersionId` → (id, organizationId, sourceId) ON DELETE NO ACTION
+/// - composite FKs `supersedesVersionId`/`restoredFromVersionId` → (id, organizationId, sourceId)
+///   ON DELETE NO ACTION, same organization and same source only
 /// - effectiveUntil > effectiveFrom when both are set
 /// - confirmation fields are all-null or all-present
 /// - ACTIVE/SUPERSEDED require confirmation metadata; DRAFT forbids it
+/// Confirmer identity is retained with ON DELETE RESTRICT. Membership
+/// deactivation and demotion do not rewrite confirmation evidence.
 model KnowledgeVersion {
   id                          String                  @id @default(cuid())
   organizationId              String
@@ -796,12 +801,18 @@ model KnowledgeVersion {
   createdByUserId             String?
   createdBy                   User?                   @relation("KnowledgeVersionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   confirmerUserId             String?
-  confirmer                   User?                   @relation("KnowledgeVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: SetNull)
+  /// Retained confirmer identity. Hard-delete of this user is rejected until a
+  /// future retention/anonymization workflow safely replaces the reference.
+  confirmer                   User?                   @relation("KnowledgeVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: Restrict)
   confirmedAt                 DateTime?
   confirmationLanguageVersion String?
   /// Previous active version this confirmation replaced, if any.
+  /// SQL-only composite FK to (id, organizationId, sourceId); Prisma cannot
+  /// declare a second relation on these shared scalar columns.
   supersedesVersionId         String?
   /// Historical version this draft was restored from, if any.
+  /// SQL-only composite FK to (id, organizationId, sourceId); Prisma cannot
+  /// declare a second relation on these shared scalar columns.
   restoredFromVersionId       String?
   createdAt                   DateTime                @default(now())
   updatedAt                   DateTime                @updatedAt
