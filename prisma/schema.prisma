@@ -42,6 +42,10 @@ model User {
   /// until a future retention/anonymization workflow replaces that identity.
   knowledgeVersionsConfirmed KnowledgeVersion[]               @relation("KnowledgeVersionConfirmer")
   knowledgeDocumentsUploaded KnowledgeDocument[]              @relation("KnowledgeDocumentUploader")
+  offeringsCreated           Offering[]                       @relation("OfferingCreator")
+  offeringsArchived          Offering[]                       @relation("OfferingArchiver")
+  offeringVersionsCreated    OfferingVersion[]                @relation("OfferingVersionCreator")
+  offeringVersionsConfirmed  OfferingVersion[]                @relation("OfferingVersionConfirmer")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -151,6 +155,14 @@ enum OrganizationAuditAction {
   KNOWLEDGE_DOCUMENT_DUPLICATE_ACKNOWLEDGED
   KNOWLEDGE_DOCUMENT_CONFIRMED
   KNOWLEDGE_DOCUMENT_REPLACED
+  OFFERING_DRAFT_CREATED
+  OFFERING_DRAFT_UPDATED
+  OFFERING_REPLACEMENT_DRAFT_CREATED
+  OFFERING_PRICE_CHANGED
+  OFFERING_VERSION_CONFIRMED
+  OFFERING_SUPERSEDED
+  OFFERING_ARCHIVED
+  OFFERING_RESTORED
 }
 
 enum BusinessType {
@@ -301,6 +313,7 @@ model Organization {
   knowledgeDocuments      KnowledgeDocument[]
   knowledgeDocumentJobs   KnowledgeDocumentJob[]
   knowledgeDocumentIssues KnowledgeDocumentIssue[]
+  offerings               Offering[]
 
   @@index([createdAt])
 }
@@ -449,12 +462,11 @@ model BusinessService {
   category         String?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
+  linkedOfferings  Offering[]   @relation("OfferingLegacyService")
 
   @@index([organizationId, displayOrder])
   @@index([organizationId, isActive, displayOrder])
 }
-
-/// Minimal product catalogue for later conversation context.
 /// SKU uniqueness is organization-scoped when sku is non-null (partial unique index).
 model BusinessProduct {
   id               String       @id @default(cuid())
@@ -469,12 +481,11 @@ model BusinessProduct {
   category         String?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
+  linkedOfferings  Offering[]   @relation("OfferingLegacyProduct")
 
   @@index([organizationId, displayOrder])
   @@index([organizationId, isActive, displayOrder])
 }
-
-/// Explicit typed employee-access defaults. Cannot grant MEMBER owner/admin powers.
 model OrganizationSettings {
   id                         String                     @id @default(cuid())
   organizationId             String                     @unique
@@ -572,10 +583,12 @@ model CustomFieldDefinition {
   createdBy       User?               @relation("CustomFieldCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   updatedByUserId String?
   updatedBy       User?               @relation("CustomFieldUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  offeringValues  OfferingCustomValue[]
 
   @@unique([organizationId, scope, key])
+  @@unique([id, organizationId])
   @@index([organizationId, scope, displayOrder])
   @@index([organizationId, isActive, displayOrder])
 }
@@ -1019,4 +1032,249 @@ model KnowledgeDocumentIssue {
 
   @@unique([documentId, code, sectionLocator])
   @@index([organizationId, versionId, severity, resolvedAt])
+}
+
+/// Shared Phase 4C offering types. Not industry-specific.
+enum OfferingType {
+  PRODUCT
+  SERVICE
+  PLAN
+  PACKAGE
+  SUBSCRIPTION
+  CUSTOM_QUOTE
+}
+
+enum OfferingPricingModel {
+  NONE
+  QUOTE_REQUIRED
+  FIXED_ONE_TIME
+  RECURRING
+  MULTI_OPTION
+  TIERED
+}
+
+enum OfferingLifecycleState {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  ARCHIVED
+}
+
+enum OfferingBillingFrequency {
+  ONE_TIME
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  CUSTOM
+}
+
+/// Logical organization offering identity. Versions are immutable once confirmed.
+model Offering {
+  id               String          @id @default(cuid())
+  organizationId   String
+  organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// Denormalized name promoted from a version only on confirmation.
+  name             String
+  offeringType     OfferingType
+  archivedAt       DateTime?
+  archivedByUserId String?
+  archivedBy       User?           @relation("OfferingArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  createdByUserId  String?
+  createdBy        User?           @relation("OfferingCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  /// Optional provenance link to Phase 3A operational catalogue rows.
+  legacyServiceId  String?
+  legacyService    BusinessService? @relation("OfferingLegacyService", fields: [legacyServiceId], references: [id], onDelete: SetNull)
+  legacyProductId  String?
+  legacyProduct    BusinessProduct? @relation("OfferingLegacyProduct", fields: [legacyProductId], references: [id], onDelete: SetNull)
+  /// OCC for archive / restore / replacement-draft creation.
+  version          Int             @default(0)
+  displayOrder     Int             @default(0)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  versions         OfferingVersion[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, legacyServiceId])
+  @@unique([organizationId, legacyProductId])
+  @@index([organizationId, archivedAt, displayOrder])
+  @@index([organizationId, offeringType])
+  @@index([organizationId, name])
+}
+
+/// Immutable confirmed offering snapshot. Drafts may be updated until confirmation.
+model OfferingVersion {
+  id                          String                 @id @default(cuid())
+  organizationId              String
+  offeringId                  String
+  offering                    Offering               @relation(fields: [offeringId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  state                       OfferingLifecycleState
+  name                        String
+  description                 String?
+  offeringType                OfferingType
+  pricingModel                OfferingPricingModel
+  quoteRequired               Boolean                @default(false)
+  contentChecksum             String
+  effectiveFrom               DateTime?              @db.Timestamptz(3)
+  effectiveUntil              DateTime?              @db.Timestamptz(3)
+  displayOrder                Int                    @default(0)
+  /// OCC for draft updates and confirmation. Frozen after confirmation.
+  draftRevision               Int                    @default(0)
+  createdByUserId             String?
+  createdBy                   User?                  @relation("OfferingVersionCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  confirmerUserId             String?
+  confirmer                   User?                  @relation("OfferingVersionConfirmer", fields: [confirmerUserId], references: [id], onDelete: Restrict)
+  confirmedAt                 DateTime?
+  confirmationLanguageVersion String?
+  /// SQL-only composite FK to (id, organizationId, offeringId) in migration.
+  supersedesVersionId         String?
+  /// SQL-only composite FK to (id, organizationId, offeringId) in migration.
+  restoredFromVersionId       String?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+  prices                      OfferingPrice[]
+  features                    OfferingFeature[]
+  variants                    OfferingVariant[]
+  eligibility                 OfferingEligibility?
+  customValues                OfferingCustomValue[]
+
+  @@unique([id, organizationId])
+  @@unique([id, organizationId, offeringId])
+  @@index([organizationId, state])
+  @@index([offeringId, state])
+  @@index([organizationId, state, effectiveFrom])
+  @@index([contentChecksum])
+}
+
+model OfferingPrice {
+  id               String                    @id @default(cuid())
+  organizationId   String
+  offeringId       String
+  versionId        String
+  version          OfferingVersion           @relation(fields: [versionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Cascade)
+  label            String?
+  /// Authoritative money amount. Never store JS floating-point as source of truth.
+  amount           Decimal                   @db.Decimal(19, 4)
+  /// ISO 4217 currency code.
+  currencyCode     String                    @db.Char(3)
+  billingFrequency OfferingBillingFrequency
+  /// Optional interval multiplier for CUSTOM (and explicit counts).
+  intervalCount    Int?
+  isActive         Boolean                   @default(true)
+  effectiveFrom    DateTime?                 @db.Timestamptz(3)
+  effectiveUntil   DateTime?                 @db.Timestamptz(3)
+  displayOrder     Int                       @default(0)
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+  variantPrices    OfferingVariantPrice[]
+
+  @@unique([id, organizationId, offeringId, versionId])
+  @@index([organizationId, versionId, isActive, displayOrder])
+  @@index([organizationId, versionId, effectiveFrom])
+}
+
+model OfferingFeature {
+  id             String          @id @default(cuid())
+  organizationId String
+  offeringId     String
+  versionId      String
+  version        OfferingVersion @relation(fields: [versionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Cascade)
+  /// Stable comparison key within a version.
+  featureKey     String
+  name           String
+  value          String?
+  unit           String?
+  displayOrder   Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([versionId, featureKey])
+  @@unique([versionId, displayOrder])
+  @@unique([id, organizationId, offeringId, versionId])
+  @@index([organizationId, versionId, displayOrder])
+}
+
+model OfferingVariant {
+  id             String                 @id @default(cuid())
+  organizationId String
+  offeringId     String
+  versionId      String
+  version        OfferingVersion        @relation(fields: [versionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Cascade)
+  name           String
+  sku            String?
+  referenceCode  String?
+  /// Organization-defined attribute map validated in application code.
+  attributes     Json                   @default("{}")
+  isActive       Boolean                @default(true)
+  displayOrder   Int                    @default(0)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  prices         OfferingVariantPrice[]
+
+  @@unique([versionId, displayOrder])
+  @@unique([id, organizationId, offeringId, versionId])
+  @@index([organizationId, versionId, isActive, displayOrder])
+}
+
+model OfferingVariantPrice {
+  id             String          @id @default(cuid())
+  organizationId String
+  offeringId     String
+  versionId      String
+  variantId      String
+  priceId        String
+  variant        OfferingVariant @relation(fields: [variantId, organizationId, offeringId, versionId], references: [id, organizationId, offeringId, versionId], onDelete: Cascade)
+  price          OfferingPrice   @relation(fields: [priceId, organizationId, offeringId, versionId], references: [id, organizationId, offeringId, versionId], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+
+  @@unique([variantId, priceId])
+  @@index([organizationId, versionId])
+}
+
+/// Conservative eligibility notes for the initial release. Not a rules engine.
+model OfferingEligibility {
+  id                       String          @id @default(cuid())
+  organizationId           String
+  offeringId               String
+  versionId                String
+  version                  OfferingVersion @relation(fields: [versionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Cascade)
+  description              String?
+  availabilityRestrictions String?
+  qualificationNotes       String?
+  geographicNotes          String?
+  minimumQuantity          Int?
+  maximumQuantity          Int?
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+
+  @@unique([versionId])
+  @@unique([versionId, organizationId, offeringId])
+  @@unique([id, organizationId, offeringId, versionId])
+  @@index([organizationId, versionId])
+}
+
+/// Typed custom values bound to Phase 3B OFFERING-scoped field definitions.
+model OfferingCustomValue {
+  id               String               @id @default(cuid())
+  organizationId   String
+  offeringId       String
+  versionId        String
+  definitionId     String
+  version          OfferingVersion      @relation(fields: [versionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Cascade)
+  definition       CustomFieldDefinition @relation(fields: [definitionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  /// Stable key snapshot at write time.
+  definitionKey    String
+  stringValue      String?
+  numberValue      Decimal?             @db.Decimal(19, 4)
+  booleanValue     Boolean?
+  dateValue        DateTime?            @db.Timestamptz(3)
+  /// Validated JSON array/string for select types.
+  jsonValue        Json?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([versionId, definitionId])
+  @@unique([versionId, definitionKey])
+  @@index([organizationId, versionId])
+  @@index([organizationId, definitionId])
 }
