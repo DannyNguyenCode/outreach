@@ -174,6 +174,7 @@ export async function lockKnowledgeDocumentForUpdate(
   scannedChecksum: string | null;
   normalizedContentChecksum: string | null;
   storageObjectKey: string;
+  storageBucket: string;
 } | null> {
   const rows = await tx.$queryRaw<
     Array<{
@@ -184,6 +185,7 @@ export async function lockKnowledgeDocumentForUpdate(
       scannedChecksum: string | null;
       normalizedContentChecksum: string | null;
       storageObjectKey: string;
+      storageBucket: string;
     }>
   >`
     SELECT id,
@@ -192,7 +194,8 @@ export async function lockKnowledgeDocumentForUpdate(
            "binaryChecksum",
            "scannedChecksum",
            "normalizedContentChecksum",
-           "storageObjectKey"
+           "storageObjectKey",
+           "storageBucket"
     FROM "KnowledgeDocument"
     WHERE "organizationId" = ${input.organizationId}
       AND "sourceId" = ${input.sourceId}

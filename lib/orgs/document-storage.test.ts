@@ -46,10 +46,27 @@ describe("Supabase private document storage", () => {
     expect(bucket.download).not.toHaveBeenCalled();
   });
 
+  it("rejects mismatched persisted buckets before calling storage", async () => {
+    const { storage, bucket } = makeStorage();
+    const key = storage.createObjectKey("org-1", "txt");
+    await expect(
+      storage.download({
+        organizationId: "org-1",
+        key,
+        bucket: "other-private-bucket",
+      }),
+    ).rejects.toThrow(/bucket is not available/i);
+    expect(bucket.download).not.toHaveBeenCalled();
+  });
+
   it("supports upload, download, head, and delete", async () => {
     const { storage, bucket } = makeStorage();
     const key = storage.createObjectKey("org-1", "txt");
-    const ref = { organizationId: "org-1", key };
+    const ref = {
+      organizationId: "org-1",
+      key,
+      bucket: PRIVATE_DOCUMENT_BUCKET,
+    };
 
     await storage.upload(ref, Uint8Array.of(1, 2), "text/plain");
     await expect(storage.download(ref)).resolves.toEqual(Uint8Array.of(4, 5));
@@ -72,14 +89,6 @@ describe("Supabase private document storage", () => {
 
 function makeStorage() {
   const bucket = {
-    createSignedUploadUrl: vi.fn(async () => ({
-      data: {
-        signedUrl: "https://upload.example",
-        token: "token",
-        path: "key",
-      },
-      error: null,
-    })),
     createSignedUrl: vi.fn(async () => ({
       data: { signedUrl: "https://download.example" },
       error: null,

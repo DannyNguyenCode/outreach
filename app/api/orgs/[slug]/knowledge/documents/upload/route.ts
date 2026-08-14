@@ -15,6 +15,7 @@ import {
 import {
   OrganizationAuthError,
   requireOrganizationMemberBySlug,
+  requireOrganizationPermission,
 } from "@/lib/orgs/authorization";
 import { uploadValidatedKnowledgeDocument } from "@/lib/orgs/knowledge-documents";
 
@@ -43,6 +44,11 @@ export async function POST(
   let membership;
   try {
     membership = await requireOrganizationMemberBySlug({ user, slug });
+    await requireOrganizationPermission({
+      user,
+      organizationId: membership.organizationId,
+      permission: "org.knowledge.manage",
+    });
   } catch (error) {
     if (error instanceof OrganizationAuthError) {
       return NextResponse.json(

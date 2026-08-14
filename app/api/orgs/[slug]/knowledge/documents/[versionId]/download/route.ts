@@ -46,6 +46,7 @@ export async function GET(
     const bytes = await storage.download({
       organizationId: membership.organizationId,
       key: result.objectKey,
+      bucket: result.objectBucket,
     });
     return new Response(new Blob([bytes.slice().buffer]), {
       status: 200,

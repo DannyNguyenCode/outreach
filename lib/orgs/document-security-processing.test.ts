@@ -141,6 +141,20 @@ describe("near duplicates and retries", () => {
       retryable: true,
       reason: "remote",
     });
+    expect(
+      classifyDocumentProcessingError(
+        new Error("wrapped storage failure", {
+          cause: { status: 503 },
+        }),
+      ),
+    ).toEqual({ retryable: true, reason: "remote" });
+    expect(
+      classifyDocumentProcessingError(
+        new Error("wrapped rate limit", {
+          cause: { statusCode: 429 },
+        }),
+      ),
+    ).toEqual({ retryable: true, reason: "rate_limit" });
     expect(classifyDocumentProcessingError({ status: 400 })).toEqual({
       retryable: false,
       reason: "permanent",

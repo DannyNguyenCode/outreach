@@ -23,6 +23,9 @@ import {
 import {
   claimKnowledgeDocumentJob,
   compensateFailedDocumentUpload,
+  createAuthorizedDocumentDownload,
+  DOCUMENT_JOB_MAX_ATTEMPTS,
+  failExpiredExhaustedKnowledgeDocumentJobs,
   getKnowledgeDocument,
   processNextKnowledgeDocumentJob,
   restoreKnowledgeDocumentVersion,
@@ -164,6 +167,132 @@ describe("Phase 4B private document processing", () => {
       },
     });
     expect(confirmation.ok).toBe(false);
+
+    const download = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(download.ok).toBe(false);
+  });
+
+  it("denies private download until scan evidence is clean and matching", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-download-gate");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "pending.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const pending = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(pending.ok).toBe(false);
+
+    const processed = await processNextKnowledgeDocumentJob({
+      workerId: "worker-download-gate",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    });
+    expect(processed).toMatchObject({ claimed: true, outcome: "published" });
+
+    const allowed = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(allowed.ok).toBe(true);
+    if (!allowed.ok) throw new Error(allowed.message);
+    expect(allowed.objectBucket).toBe(storage.bucketName);
+  });
+
+  it("terminalizes expired leases after the final attempt", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-lease-exhaust");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "lease.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const expired = new Date("2020-01-01T00:00:00.000Z");
+    await prisma.knowledgeDocumentJob.update({
+      where: { id: uploaded.value.job.id },
+      data: {
+        state: "RUNNING",
+        attempts: DOCUMENT_JOB_MAX_ATTEMPTS,
+        leaseOwner: "dead-worker",
+        leaseExpiresAt: expired,
+      },
+    });
+    await prisma.knowledgeDocument.update({
+      where: { id: uploaded.value.document.id },
+      data: {
+        processingState: "SCANNING",
+        leaseOwner: "dead-worker",
+        leaseExpiresAt: expired,
+      },
+    });
+
+    expect(
+      await failExpiredExhaustedKnowledgeDocumentJobs({
+        now: new Date("2026-08-14T12:00:00.000Z"),
+      }),
+    ).toBe(1);
+
+    const job = await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+      where: { id: uploaded.value.job.id },
+    });
+    expect(job).toMatchObject({
+      state: "FAILED",
+      leaseOwner: null,
+      lastSafeErrorCode: "lease_exhausted",
+    });
+    const document = await prisma.knowledgeDocument.findUniqueOrThrow({
+      where: { id: uploaded.value.document.id },
+    });
+    expect(document).toMatchObject({
+      processingState: "FAILED",
+      leaseOwner: null,
+      lastSafeErrorCode: "lease_exhausted",
+    });
+    const version = await prisma.knowledgeVersion.findUniqueOrThrow({
+      where: { id: uploaded.value.version.id },
+    });
+    expect(version.state).toBe("FAILED");
+
+    const next = await processNextKnowledgeDocumentJob({
+      workerId: "worker-after-exhaust",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+        now: () => new Date("2026-08-14T12:01:00.000Z"),
+      },
+    });
+    expect(next).toEqual({ claimed: false });
   });
 
   it("denies cross-tenant document status and atomically claims one job once", async () => {
@@ -569,22 +698,21 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
     return `${organizationStoragePrefix(organizationId)}${randomUUID()}.${kind}`;
   }
 
-  async createSignedUpload(ref: PrivateDocumentRef): Promise<SignedObjectUrl> {
-    return this.signed(ref);
-  }
-
   async createSignedDownload(
     ref: PrivateDocumentRef,
   ): Promise<SignedObjectUrl> {
+    this.assertScoped(ref);
     return this.signed(ref);
   }
 
   async upload(ref: PrivateDocumentRef, bytes: Uint8Array) {
+    this.assertScoped(ref);
     if (this.failUpload) throw new Error("upload unavailable");
     this.objects.set(ref.key, bytes.slice());
   }
 
   async download(ref: PrivateDocumentRef) {
+    this.assertScoped(ref);
     if (this.failDownload) throw new Error("download unavailable");
     const bytes = this.objects.get(ref.key);
     if (!bytes) throw new Error("missing");
@@ -595,6 +723,7 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   }
 
   async head(ref: PrivateDocumentRef): Promise<PrivateObjectHead | null> {
+    this.assertScoped(ref);
     const bytes = this.objects.get(ref.key);
     return bytes
       ? {
@@ -607,9 +736,17 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   }
 
   async delete(ref: PrivateDocumentRef) {
+    this.assertScoped(ref);
     if (this.failDelete) throw new Error("delete unavailable");
     this.deletedKeys.push(ref.key);
     this.objects.delete(ref.key);
+  }
+
+  private assertScoped(ref: PrivateDocumentRef) {
+    const requested = ref.bucket ?? this.bucketName;
+    if (requested !== this.bucketName) {
+      throw new Error("Document storage bucket is not available.");
+    }
   }
 
   private signed(ref: PrivateDocumentRef): SignedObjectUrl {

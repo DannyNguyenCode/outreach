@@ -155,10 +155,20 @@ function jaccard(left: Set<string>, right: Set<string>): number {
 }
 
 function httpStatus(error: unknown): number | null {
-  if (!error || typeof error !== "object") {
-    return null;
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const value = current as {
+      status?: unknown;
+      statusCode?: unknown;
+      cause?: unknown;
+    };
+    const status = Number(value.status ?? value.statusCode);
+    if (Number.isInteger(status)) {
+      return status;
+    }
+    current = "cause" in value ? value.cause : undefined;
   }
-  const value = error as { status?: unknown; statusCode?: unknown };
-  const status = Number(value.status ?? value.statusCode);
-  return Number.isInteger(status) ? status : null;
+  return null;
 }

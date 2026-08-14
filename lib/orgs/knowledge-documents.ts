@@ -26,7 +26,10 @@ import {
   documentRetryDelayMs,
   findNearDuplicates,
 } from "@/lib/orgs/document-processing";
-import type { PrivateDocumentStorage } from "@/lib/orgs/document-storage";
+import type {
+  PrivateDocumentStorage,
+  PrivateDocumentRef,
+} from "@/lib/orgs/document-storage";
 import { PRIVATE_DOCUMENT_BUCKET } from "@/lib/orgs/document-storage";
 import type {
   ExtractedDocument,
@@ -230,10 +233,7 @@ export async function uploadValidatedKnowledgeDocument(
       return { source, version, document };
     });
 
-    const ref = {
-      organizationId: input.organizationId,
-      key: initiated.document.storageObjectKey,
-    };
+    const ref = documentStorageRef(initiated.document);
     await input.storage.upload(
       ref,
       input.document.bytes,
@@ -390,6 +390,101 @@ export async function uploadValidatedKnowledgeDocument(
   }
 }
 
+/**
+ * Terminalize RUNNING jobs whose lease expired after the final attempt.
+ * Without this, exhausted leases are never reclaimable and remain stranded.
+ */
+export async function failExpiredExhaustedKnowledgeDocumentJobs(
+  input: {
+    now?: Date;
+    limit?: number;
+  } = {},
+): Promise<number> {
+  const now = input.now ?? new Date();
+  const limit = input.limit ?? 20;
+  let failed = 0;
+  for (let count = 0; count < limit; count += 1) {
+    const terminalized = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          organizationId: string;
+          sourceId: string;
+          versionId: string;
+          documentId: string;
+          attempts: number;
+        }>
+      >`
+        WITH candidate AS (
+          SELECT id
+          FROM "KnowledgeDocumentJob"
+          WHERE state = 'RUNNING'
+            AND "leaseExpiresAt" < ${now}
+            AND attempts >= "maxAttempts"
+          ORDER BY "leaseExpiresAt" ASC, id ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
+        )
+        UPDATE "KnowledgeDocumentJob" AS job
+        SET state = 'FAILED',
+            "leaseOwner" = NULL,
+            "leaseExpiresAt" = NULL,
+            "lastSafeErrorCode" = 'lease_exhausted',
+            "completedAt" = ${now},
+            "updatedAt" = ${now}
+        FROM candidate
+        WHERE job.id = candidate.id
+        RETURNING job.id,
+                  job."organizationId",
+                  job."sourceId",
+                  job."versionId",
+                  job."documentId",
+                  job.attempts
+      `;
+      const job = rows[0];
+      if (!job) return false;
+      await tx.knowledgeDocument.updateMany({
+        where: {
+          id: job.documentId,
+          organizationId: job.organizationId,
+        },
+        data: {
+          processingState: "FAILED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastSafeErrorCode: "lease_exhausted",
+        },
+      });
+      await tx.knowledgeVersion.updateMany({
+        where: {
+          id: job.versionId,
+          organizationId: job.organizationId,
+          sourceId: job.sourceId,
+          state: "PROCESSING",
+        },
+        data: { state: "FAILED" },
+      });
+      await recordOrganizationAuditEvent(tx, {
+        organizationId: job.organizationId,
+        actorUserId: null,
+        action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        metadata: {
+          sourceId: job.sourceId,
+          versionId: job.versionId,
+          documentId: job.documentId,
+          jobId: job.id,
+          safeErrorCode: "lease_exhausted",
+          attempts: job.attempts,
+        },
+      });
+      return true;
+    });
+    if (!terminalized) break;
+    failed += 1;
+  }
+  return failed;
+}
+
 export async function claimKnowledgeDocumentJob(input: {
   workerId: string;
   now?: Date;
@@ -467,15 +562,18 @@ export async function processNextKnowledgeDocumentJob(input: {
       outcome: "published" | "needs_attention" | "retry" | "failed";
     }
 > {
-  const job = await claimKnowledgeDocumentJob({ workerId: input.workerId });
+  await failExpiredExhaustedKnowledgeDocumentJobs({
+    now: input.dependencies.now?.(),
+  });
+  const job = await claimKnowledgeDocumentJob({
+    workerId: input.workerId,
+    now: input.dependencies.now?.(),
+  });
   if (!job) return { claimed: false };
   const now = input.dependencies.now ?? (() => new Date());
 
   try {
-    const ref = {
-      organizationId: job.organizationId,
-      key: job.document.storageObjectKey,
-    };
+    const ref = documentStorageRef(job.document);
     const bytes = await input.dependencies.storage.download(ref);
     const checksum = sha256(bytes);
     if (
@@ -982,10 +1080,9 @@ export async function restoreKnowledgeDocumentVersion(
       },
     });
     if (!historical?.document) throw new KnowledgeNotFoundError();
-    const sourceBytes = await input.storage.download({
-      organizationId: input.organizationId,
-      key: historical.document.storageObjectKey,
-    });
+    const sourceBytes = await input.storage.download(
+      documentStorageRef(historical.document),
+    );
     const validated = await validateDocument({
       bytes: sourceBytes,
       filename: historical.document.displayFilename,
@@ -1111,6 +1208,7 @@ export async function restoreKnowledgeDocumentVersion(
     const copiedRef = {
       organizationId: input.organizationId,
       key: copiedKey,
+      bucket: initiated.document.storageBucket,
     };
     await input.storage.upload(
       copiedRef,
@@ -1324,6 +1422,7 @@ export async function createAuthorizedDocumentDownload(input: {
       url: string;
       expiresAt: Date;
       objectKey: string;
+      objectBucket: string;
       filename: string;
       mimeType: string;
     }
@@ -1343,11 +1442,19 @@ export async function createAuthorizedDocumentDownload(input: {
       },
     });
     if (!document) throw new KnowledgeNotFoundError();
+    if (
+      document.scanState !== "CLEAN" ||
+      !document.finalizedAt ||
+      !document.binaryChecksum ||
+      document.scannedChecksum !== document.binaryChecksum
+    ) {
+      throw new KnowledgeLifecycleError(
+        "not_confirmable",
+        "This document is not available for private download.",
+      );
+    }
     const signed = await input.storage.createSignedDownload(
-      {
-        organizationId: input.organizationId,
-        key: document.storageObjectKey,
-      },
+      documentStorageRef(document),
       60,
     );
     return {
@@ -1355,6 +1462,7 @@ export async function createAuthorizedDocumentDownload(input: {
       url: signed.url,
       expiresAt: signed.expiresAt,
       objectKey: document.storageObjectKey,
+      objectBucket: document.storageBucket,
       filename: document.displayFilename,
       mimeType: document.detectedMimeType ?? document.declaredMimeType,
     };
@@ -1464,6 +1572,7 @@ export async function compensateFailedDocumentUpload(input: {
     return {
       state: "cleanup_pending" as const,
       objectKey: document.storageObjectKey,
+      objectBucket: document.storageBucket,
     };
   });
 
@@ -1475,6 +1584,7 @@ export async function compensateFailedDocumentUpload(input: {
     await input.storage.delete({
       organizationId: input.organizationId,
       key: prepared.objectKey,
+      bucket: prepared.objectBucket,
     });
   } catch {
     return "cleanup_pending";
@@ -1641,6 +1751,18 @@ async function findDocumentDuplicates(input: {
       nearSourceId && nearVersionId
         ? { sourceId: nearSourceId, versionId: nearVersionId }
         : null,
+  };
+}
+
+function documentStorageRef(document: {
+  organizationId: string;
+  storageObjectKey: string;
+  storageBucket: string;
+}): PrivateDocumentRef {
+  return {
+    organizationId: document.organizationId,
+    key: document.storageObjectKey,
+    bucket: document.storageBucket,
   };
 }
 
