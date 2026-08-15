@@ -109,6 +109,20 @@ test.describe("Phase 4A business knowledge", () => {
     ).toBeVisible();
     await expect(page.getByText(/Citation source/i)).toBeVisible();
 
+    await page.getByRole("link", { name: "Runtime sources" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Runtime source inspector" }),
+    ).toBeVisible();
+    await page.getByLabel("Evidence query").fill("return");
+    await page.getByRole("button", { name: "Inspect evidence" }).click();
+    await expect(page.getByText("Composition state: SUPPORTED")).toBeVisible();
+    await expect(
+      page.getByText("Customer-confirmed business knowledge"),
+    ).toBeVisible();
+    await expect(page.getByText(/passage pas_/i)).toBeVisible();
+    await expect(page.getByText(/No answer was invented/i)).toHaveCount(0);
+
+    await page.goto(`/app/orgs/${slug}/knowledge`);
     await page
       .getByRole("link", { name: /Return policy/ })
       .first()

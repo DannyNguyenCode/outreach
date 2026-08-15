@@ -31,6 +31,20 @@ export function memberVisibleVersionWhere(
     AND: [
       { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
       { OR: [{ effectiveUntil: null }, { effectiveUntil: { gt: now } }] },
+      {
+        OR: [
+          { source: { inputKind: "MANUAL" } },
+          {
+            source: { inputKind: "DOCUMENT" },
+            document: {
+              is: {
+                scanState: "CLEAN",
+                processingState: "COMPLETE",
+              },
+            },
+          },
+        ],
+      },
     ],
   };
 }
