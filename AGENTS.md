@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: 58010d58b1a71432d8857e4335cd1adc46064c44
 last_reviewed_sha: 8b059037a9462efafa72adac0eec83e42b725d2a
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -74,7 +74,7 @@ required_tests: |
   Add regression tests that fail against b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 and pass after the fix for: malformed CSV bytes after a closing quote; complete formula-injection prefixes before normalization in CSV and XLSX; commented fake OOXML workbook/relationship/worksheet elements plus duplicate cell coordinates; XLSX aggregate text at and one past the limit including cells wider than the header; and workbook content type bound to /xl/workbook.xml.
   Retain all existing tabular, document, offering, security, boundary, deterministic-preview, and safe-error tests.
   Rerun npm ci, format:check, lint, typecheck, prisma:validate, a fresh PostgreSQL prisma:migrate:deploy, focused tabular tests, npm test, test:integration, build, CI=true test:e2e, npm audit --omit=dev, and git diff --check. Missing, skipped, pending, flaky, or failing checks are not a pass.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "Cursor must pause. ChatGPT owns the branch while reviewing corrective attempt 2 at the exact remote head for the develop merge gate."
 ```
 
 ## Cursor corrective implementation prompt — Phase 4D task 1, attempt 2
