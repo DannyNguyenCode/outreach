@@ -451,13 +451,13 @@ describe("CSV mapped preview rows", () => {
   ])("flags $name without locale guessing", (example) => {
     const family = example.family ?? "knowledge";
     const headers = example.headers ?? ["Title", "Section", "Body"];
-    const targets =
-      example.targets ??
-      ({
+    const targets: Partial<Record<number, CsvMappingColumnTarget>> =
+      (example.targets as
+        Partial<Record<number, CsvMappingColumnTarget>> | undefined) ?? {
         1: "knowledge.title",
         2: "knowledge.sectionTitle",
         3: "knowledge.passageBody",
-      } as const);
+      };
     const preview = makePreview({ headers, rows: [example.row] });
     const mapped = mapCsvPreview(preview, covering(preview, family, targets));
     expect(
@@ -795,7 +795,7 @@ function makePreview(options: {
 function covering(
   preview: TabularNormalizedPreview,
   family: CsvMappingTargetFamily,
-  targets: Record<number, CsvMappingColumnTarget>,
+  targets: Partial<Record<number, CsvMappingColumnTarget>>,
 ): CsvMappingInput {
   return {
     family,
@@ -808,7 +808,7 @@ function covering(
 
 function offeringCovering(
   preview: TabularNormalizedPreview,
-  targets: Record<number, CsvMappingColumnTarget>,
+  targets: Partial<Record<number, CsvMappingColumnTarget>>,
 ): CsvMappingInput {
   return covering(preview, "offering", {
     1: "offering.name",
