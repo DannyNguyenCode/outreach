@@ -4,7 +4,7 @@ Outreach is a hosted, multi-tenant calling workspace that helps representatives 
 
 Twilio provides the communication infrastructure. Outreach owns the business context, customer records, permissions, call workflow, AI assistance, follow-up actions, and audit history surrounding each interaction.
 
-> Project status: Phases 4B and 4C are merged into `develop`. Phase 4D tabular import hardening has begun on `feature/phase-04d-tabular-validation-foundation` (bounded CSV/XLSX validation and normalized preview only). See [`docs/phase-4d-tabular-import-hardening.md`](./docs/phase-4d-tabular-import-hardening.md). Phase 4C notes remain in [`docs/phase-4c-structured-offerings.md`](./docs/phase-4c-structured-offerings.md). Phase 4B notes remain in [`docs/phase-4b-private-document-processing.md`](./docs/phase-4b-private-document-processing.md). Phase 4A notes remain in [`docs/phase-4a-business-knowledge-core.md`](./docs/phase-4a-business-knowledge-core.md). Phase 3B notes remain in [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md). Phase 3A notes remain in [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md). Phase 2 notes remain in [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md). Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
+> Project status: Phase 4D tabular CSV/XLSX validation is merged into `develop`. Source classification and runtime composition is in progress on `feature/phase-04d-source-runtime-composition-v2`. See [`docs/phase-4d-source-runtime-composition.md`](./docs/phase-4d-source-runtime-composition.md). Tabular mapping, persistence, and activation remain later Phase 4D work. Phase 4D tabular notes remain in [`docs/phase-4d-tabular-import-hardening.md`](./docs/phase-4d-tabular-import-hardening.md). Phase 4C notes remain in [`docs/phase-4c-structured-offerings.md`](./docs/phase-4c-structured-offerings.md). Phase 4B notes remain in [`docs/phase-4b-private-document-processing.md`](./docs/phase-4b-private-document-processing.md). Phase 4A notes remain in [`docs/phase-4a-business-knowledge-core.md`](./docs/phase-4a-business-knowledge-core.md). Phase 3B notes remain in [`docs/phase-3b-business-templates-settings.md`](./docs/phase-3b-business-templates-settings.md). Phase 3A notes remain in [`docs/phase-3a-business-onboarding.md`](./docs/phase-3a-business-onboarding.md). Phase 2 notes remain in [`docs/phase-2-organizations.md`](./docs/phase-2-organizations.md). Phase 1 auth notes remain in [`docs/phase-1-authentication.md`](./docs/phase-1-authentication.md). Phase 0 foundation notes remain in [`docs/phase-0-setup.md`](./docs/phase-0-setup.md).
 
 ## Product vision
 
@@ -216,6 +216,7 @@ Developer docs:
 - [`docs/phase-4b-private-document-processing.md`](./docs/phase-4b-private-document-processing.md) — private document upload and processing
 - [`docs/phase-4c-structured-offerings.md`](./docs/phase-4c-structured-offerings.md) — structured offering catalog
 - [`docs/phase-4d-tabular-import-hardening.md`](./docs/phase-4d-tabular-import-hardening.md) — CSV/XLSX validation and normalized preview
+- [`docs/phase-4d-source-runtime-composition.md`](./docs/phase-4d-source-runtime-composition.md) — runtime source classification, provenance, conflicts, and unknown state
 
 ## Project documents
 
@@ -230,9 +231,10 @@ Developer docs:
 - [`docs/phase-4b-private-document-processing.md`](./docs/phase-4b-private-document-processing.md) — Phase 4B private documents
 - [`docs/phase-4c-structured-offerings.md`](./docs/phase-4c-structured-offerings.md) — Phase 4C structured offerings
 - [`docs/phase-4d-tabular-import-hardening.md`](./docs/phase-4d-tabular-import-hardening.md) — Phase 4D tabular import hardening (validation/preview foundation)
+- [`docs/phase-4d-source-runtime-composition.md`](./docs/phase-4d-source-runtime-composition.md) — Phase 4D source classification and runtime composition
 
 If documents conflict, `requirements.md` defines product behavior. The implementation phases define build order and decomposition, and this README serves as the project entry point.
 
 ## Current next step
 
-Phases 4B and 4C are merged into `develop`. Continue Phase 4D tabular import hardening on `feature/phase-04d-tabular-validation-foundation`. The current task is bounded CSV/XLSX validation and normalized preview only; do not claim the complete Phase 4D import journey or overall Phase 4 is finished.
+Phase 4D tabular CSV/XLSX validation is merged into `develop`. Continue source classification and runtime composition on `feature/phase-04d-source-runtime-composition-v2`. Do not claim the complete Phase 4D import journey or overall Phase 4 is finished.

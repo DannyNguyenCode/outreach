@@ -5,6 +5,7 @@ import {
   MEMBER_VISIBLE_SOURCE_CATEGORY,
   memberVisibleSourceWhere,
   memberVisibleSourceWithVersionWhere,
+  memberVisibleVersionWhere,
   memberVisibleVersionWithSourceWhere,
 } from "@/lib/orgs/knowledge-visibility";
 
@@ -48,5 +49,27 @@ describe("member-visible knowledge predicates", () => {
       inputKind: { in: ["MANUAL", "DOCUMENT"] },
       category: "CUSTOMER_CONFIRMED_BUSINESS_FACTS",
     });
+  });
+
+  it("requires CLEAN complete documents for DOCUMENT versions and allows MANUAL", () => {
+    const versionWhere = memberVisibleVersionWhere(now);
+    expect(versionWhere.AND).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          OR: [
+            { source: { inputKind: "MANUAL" } },
+            {
+              source: { inputKind: "DOCUMENT" },
+              document: {
+                is: {
+                  scanState: "CLEAN",
+                  processingState: "COMPLETE",
+                },
+              },
+            },
+          ],
+        }),
+      ]),
+    );
   });
 });

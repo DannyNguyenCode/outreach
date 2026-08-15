@@ -32,6 +32,7 @@ export type KnowledgeCitation = {
 export type RetrievedKnowledgePassage = {
   sourceId: string;
   sourceTitle: string;
+  inputKind: "MANUAL" | "DOCUMENT";
   versionId: string;
   versionTitle: string;
   sectionId: string;
@@ -111,6 +112,7 @@ export async function retrieveActiveKnowledge(input: {
                   select: {
                     id: true,
                     title: true,
+                    inputKind: true,
                     organizationId: true,
                   },
                 },
@@ -219,7 +221,11 @@ function mapRetrievedPassage(row: {
   sectionId: string;
   citationKey: string;
   body: string;
-  source: { id: string; title: string };
+  source: {
+    id: string;
+    title: string;
+    inputKind: "MANUAL" | "DOCUMENT";
+  };
   version: {
     id: string;
     title: string;
@@ -236,7 +242,8 @@ function mapRetrievedPassage(row: {
   }
   return {
     sourceId: row.sourceId,
-    sourceTitle: row.version.title,
+    sourceTitle: row.source.title,
+    inputKind: row.source.inputKind,
     versionId: row.versionId,
     versionTitle: row.version.title,
     sectionId: row.sectionId,
