@@ -18,16 +18,16 @@ phase: "Phase 4D — CSV mapping foundation"
 active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_implementation_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
-last_reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+last_reviewed_sha: edf544c3e5a6ff7fc03c99913bf4d0510822c1ce
+status: APPROVED_TO_MERGE
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_attempt_count: 1
 cursor_attempt_count_legacy: true
 blocker_set_revision: 1
-blocker_set_signature: [P4D-CSV-MAPPING-RUNTIME-001]
-blocker_attempt_count: 1
+blocker_set_signature: []
+blocker_attempt_count: 0
 blocker_history:
   - revision: 1
     reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
@@ -38,6 +38,15 @@ blocker_history:
     new_ids: [P4D-CSV-MAPPING-RUNTIME-001]
     attempt: 1
     evidence: "The public runtime validator dereferences mapping.family and column.sourceColumn before validating that the mapping and column entries are objects; malformed JSON can throw raw TypeError instead of a static CsvMappingError."
+  - revision: 1
+    reviewed_sha: edf544c3e5a6ff7fc03c99913bf4d0510822c1ce
+    implementation_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
+    previous_signature: [P4D-CSV-MAPPING-RUNTIME-001]
+    resulting_signature: []
+    verified_resolved_ids: [P4D-CSV-MAPPING-RUNTIME-001]
+    new_ids: []
+    attempt: 1
+    evidence: "parseCsvMappingInput now validates unknown roots, column containers, bounds, entries, source-column types, and target types before semantic use; focused regressions cover malformed and payload-bearing inputs; all application changes are present in successful exact-head CI run 31904145210."
 consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 stop_reason: null
@@ -79,10 +88,14 @@ cursor_report: |
   Remaining risks: the mapper is deliberately non-semantic and does not validate the complete file beyond previewRows. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
   Deferred work: complete-file row validation, mapping UI, saved templates, persistence, confirmation, activation, retrieval, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Blocker-set revision, signature, attempt count, and history were preserved exactly.
 review_findings: |
-  P4D-CSV-MAPPING-RUNTIME-001: The mapping contract is not structurally runtime-safe. validateCsvMapping() reads mapping.family before proving mapping is a non-null object, and iterates columns while reading column.sourceColumn before proving each entry is a non-null object. mapCsvPreview() inherits the same failure. Malformed JSON such as a null mapping, columns containing null, or sparse entries can therefore throw raw TypeError instead of the promised static, payload-free CsvMappingError. Existing tests cover semantic mapping errors only and do not exercise malformed runtime shapes.
+  PASS — P4D-CSV-MAPPING-RUNTIME-001 is independently verified resolved at implementation SHA 50bb35a02ebd92edd6816e695a3d309c4ce6090e. Structural parsing accepts unknown, rejects malformed mapping roots/columns/entries with static payload-free errors, bounds mappings before iteration, and preserves valid semantic behavior.
+  PASS — Focused regression coverage includes null, primitive, array, sparse, oversized, wrong-typed, secret, URL, and formula-bearing shapes; valid mapped-preview output remains byte-for-byte stable.
+  PASS — Implementation SHA 50bb35a02ebd92edd6816e695a3d309c4ce6090e is an ancestor of review head edf544c3e5a6ff7fc03c99913bf4d0510822c1ce; later commits modify AGENTS.md only. The branch is 0 commits behind develop.
+  PASS — GitHub Actions run 31904145210 succeeded on exact review head edf544c3e5a6ff7fc03c99913bf4d0510822c1ce with format, lint, typecheck, unit/component, integration, production build, and E2E gates.
+  PASS — No routes, persistence, migrations, tenant boundaries, XLSX consumption, or Phase 5 behavior changed. MR-4D-OOXML-001 remains OPEN.
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "ChatGPT owns the branch while reviewing implementation SHA 50bb35a02ebd92edd6816e695a3d309c4ce6090e and the complete remote head."
+next_action: "ChatGPT must open the develop-targeted PR, require successful CI on the final head, and squash-merge with the expected-head guard."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
