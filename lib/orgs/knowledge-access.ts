@@ -267,9 +267,7 @@ export async function lockKnowledgeDocumentJobForUpdate(
 export function isInFlightDocumentProcessingState(
   state: string | null | undefined,
 ): boolean {
-  return (
-    state === "QUEUED" || state === "SCANNING" || state === "EXTRACTING"
-  );
+  return state === "QUEUED" || state === "SCANNING" || state === "EXTRACTING";
 }
 
 /**

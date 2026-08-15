@@ -1,12 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getCurrentUserMock = vi.fn();
 
@@ -50,7 +43,7 @@ describe("Phase 4B document upload route authorization", () => {
         bodyPulls += 1;
         controller.enqueue(
           new TextEncoder().encode(
-            "--test-boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"secret.txt\"\r\ncontent-type: text/plain\r\n\r\nsecret\r\n--test-boundary--\r\n",
+            '--test-boundary\r\ncontent-disposition: form-data; name="file"; filename="secret.txt"\r\ncontent-type: text/plain\r\n\r\nsecret\r\n--test-boundary--\r\n',
           ),
         );
         controller.close();

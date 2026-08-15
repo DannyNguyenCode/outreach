@@ -391,8 +391,7 @@ describe("Phase 4B document worker concurrency", () => {
         where: { id: foreign.document.id },
       }),
     ).toMatchObject({
-      processingState:
-        foreignJob.state === "FAILED" ? "FAILED" : "SCANNING",
+      processingState: foreignJob.state === "FAILED" ? "FAILED" : "SCANNING",
     });
     expect(
       await prisma.knowledgeDocument.findUniqueOrThrow({
