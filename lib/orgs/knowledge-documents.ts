@@ -1122,7 +1122,7 @@ async function failOrRetryDocumentJob(
         sourceId: input.job.sourceId,
         versionId: input.job.versionId,
         leaseOwner: input.workerId,
-        processingState: graph.document.processingState,
+        processingState: { in: ["SCANNING", "EXTRACTING"] },
       },
       data: {
         processingState: retryable ? "QUEUED" : "FAILED",
