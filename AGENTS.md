@@ -35,6 +35,13 @@ stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T17:10:00Z"
 cursor_completed_at: "2026-08-15T17:38:00Z"
+cursor_claim_sha: 5e9842267369dcba18fbf8ee220061e2b5b5deba
+cursor_lease_id: null
+cursor_lease_expires_at: null
+cursor_heartbeat_at: "2026-08-15T17:38:00Z"
+cursor_checkpoint_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
+cursor_checkpoint_summary: "Implementation committed, full verification complete, and handed off as READY_FOR_REVIEW."
+cursor_resume_count: 0
 cursor_report: |
   Attempt 1 completed at implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b (claim 5e9842267369dcba18fbf8ee220061e2b5b5deba). Objective: add a server-only CSV column-mapping and bounded dry-run mapped-preview foundation on top of the existing tabular validator without persisting, activating, or importing records.
   Requirements/acceptance: mapCsvPreview accepts only kind=csv previews whose parser outcome is ready and that have no error-level or security-relevant parser issues. XLSX previews fail closed as unsupported_kind. Mapping identity is the parser's stable one-based sourceColumn. Every source column must be assigned to a knowledge or offering target or explicitly ignored. Duplicate source/target, unknown columns/targets, missing required targets, and cross-family targets are rejected. Knowledge required fields are title, section title, and passage body. Offering required fields are name, offering type, and pricing model. Preview rows keep sourceRowNumber, skip only completely blank rows, parse booleans/ISO dates/enums/decimals/ISO currencies/billing frequencies without locale guessing, distinguish missing vs invalid values, and emit payload-free row issues. Price amount/currency/frequency triples, quote-required vs QUOTE_REQUIRED, FIXED_ONE_TIME vs RECURRING frequency rules, and effectiveUntil-after-effectiveFrom are enforced. MULTI_OPTION and TIERED cannot form a complete single-row draft and receive incompatible_pricing_model. Exact-alias suggestions are returned separately only when unique and are never auto-applied. hasMoreRows is true when totalRowCount exceeds the bounded preview rows inspected. Inputs are not mutated. Mapped customer values appear only in explicit preview values. MR-4D-OOXML-001 remains OPEN; no XLSX mapping path was added.
@@ -80,6 +87,60 @@ manual_review_flags:
     created_at: "2026-08-15"
     resolution_evidence: "Corrective implementation f49e3a54847a5317cde2fc1187b301da78636b0e; exact final-head CI run 31887553240; PR #12 squash-merged to develop at 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad. Awaiting Bao explicit removal instruction."
 ```
+
+
+## Cursor execution durability, lease, checkpoint, and recovery
+
+A `CURSOR_WORKING` claim is a renewable lease, not permanent ownership by one ephemeral workspace. The remote branch is the durable source of truth.
+
+Track these fields in the YAML handoff on every new task:
+
+- `cursor_claim_sha`
+- `cursor_lease_id`
+- `cursor_lease_expires_at`
+- `cursor_heartbeat_at`
+- `cursor_checkpoint_sha`
+- `cursor_checkpoint_summary`
+- `cursor_resume_count`
+
+Initialize them to `null`, `null`, `null`, `null`, `null`, `null`, and `0` respectively.
+
+### Claim and lease
+
+- When claiming `READY_FOR_CURSOR`, generate a unique lease ID, set `cursor_heartbeat_at`, set `cursor_lease_expires_at` to 55 minutes after the claim, change status to `CURSOR_WORKING`, and commit and push the claim before implementation.
+- Every Cursor run must inspect both `READY_FOR_CURSOR` and `CURSOR_WORKING`. Never skip a task merely because it is already `CURSOR_WORKING`.
+- If `CURSOR_WORKING` has an unexpired lease and the remote branch has recent activity from that lease, do not start competing work.
+- If the lease is expired and no newer Cursor heartbeat or checkpoint exists, atomically reclaim the same task: re-fetch the remote head, generate a new lease ID, increment `cursor_resume_count`, refresh the heartbeat/expiry, record the checkpoint to resume from, commit and push the recovery claim, then continue.
+- Before every commit or push, re-fetch `AGENTS.md` and verify the current lease ID still matches the run. A superseded run must stop without pushing.
+- Refresh the heartbeat and lease in the same commit as every durable checkpoint.
+
+### Mandatory durable checkpoints
+
+Cursor must never end a run with application code or tests existing only in an ephemeral working tree.
+
+After implementation and focused tests pass, and before starting the long full verification suite:
+
+1. Commit the implementation, tests, and documentation.
+2. Push the commit to the active branch.
+3. Record that SHA in `cursor_checkpoint_sha`.
+4. Write a concise `cursor_checkpoint_summary` with completed work, focused-test results, and the exact next command.
+5. Keep status `CURSOR_WORKING`, refresh the heartbeat/lease, and push the checkpoint state.
+
+Create additional checkpoint commits after any later meaningful milestone if the run may end before completion. Checkpoint commits may be labelled WIP and are not eligible for review or merge.
+
+### Required end-of-run invariant
+
+Before any run yields, times out, or ends, it must leave the remote branch in exactly one recoverable state:
+
+1. `READY_FOR_REVIEW`: implementation is committed and pushed, the complete required verification and exact-head CI passed, and the completion report and `cursor_implementation_sha` are recorded.
+2. `CURSOR_WORKING`: all meaningful work is committed and pushed as a checkpoint, with a current checkpoint SHA, summary, heartbeat, lease expiry, and exact next action so another hourly run can resume.
+3. `READY_FOR_CURSOR`: no safe implementation checkpoint exists; discard ephemeral changes, record why the run could not progress, clear the lease, and permit a clean retry.
+4. `BLOCKED`: only for a genuine external, permission, infrastructure, safety, or human-decision blocker—not because the run is ending or verification remains.
+
+A run must not end with an uncommitted implementation, an unpushed commit, a missing checkpoint summary, or a permanent `CURSOR_WORKING` claim that later hourly runs skip. Finishing the full verification in one run is preferred, but recoverability is mandatory.
+
+ChatGPT must not review or merge a checkpoint. It reviews only `READY_FOR_REVIEW`. A checkpoint or recovery claim is genuine Cursor activity and resets `consecutive_unchanged_checks` without changing the blocker-attempt epoch.
+
 
 ## Cursor implementation prompt — CSV mapping foundation
 
