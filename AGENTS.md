@@ -17,25 +17,30 @@ task_id: phase-04d-tabular-validation-001
 phase: "Phase 4D — tabular import validation foundation"
 active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
-cursor_implementation_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
+cursor_implementation_sha: 58010d58b1a71432d8857e4335cd1adc46064c44
 last_reviewed_sha: 8b059037a9462efafa72adac0eec83e42b725d2a
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
+last_cursor_activity_sha: 58010d58b1a71432d8857e4335cd1adc46064c44
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T07:06:00Z"
-cursor_completed_at: "2026-08-15T06:16:46Z"
+cursor_completed_at: "2026-08-15T07:16:30Z"
 cursor_report: |
-  Attempt 1 of 3 completed at implementation SHA b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 (claim 8c0539315eda7172d0a52d033552c57a15bf882e). Objective: server-only bounded CSV/XLSX validation and deterministic normalized preview for later mapping; fail closed on unsafe or over-limit input.
-  Requirements/acceptance: validateTabularImport accepts bytes + filename + declared MIME and returns kind, size, sha256, sheet metadata, selected sheet or explicit ambiguity, headers with source columns, bounded preview rows with source row numbers, totals, and safe issue codes/locations. Hard failures throw TabularValidationError without file bytes, formulas, URLs, or secrets. Formulas, cached values, hyperlinks, external links, macros, hidden sheets, merged cells, and blank/duplicate headers are treated explicitly and never executed or fetched.
-  Files changed: lib/orgs/tabular-types.ts; lib/orgs/tabular-helpers.ts; lib/orgs/tabular-zip.ts; lib/orgs/tabular-csv.ts; lib/orgs/tabular-xlsx.ts; lib/orgs/tabular-validation.ts; lib/orgs/tabular-validation.test.ts; lib/orgs/tabular-security.test.ts; tests/helpers/tabular-fixtures.ts; docs/phase-4d-tabular-import-hardening.md; README.md (project status, next step, Phase 4C/4D doc lists). No migrations added or changed. No new npm dependencies; CSV is parsed in-repo and XLSX reuses existing jszip.
-  Accepted formats/limits: .csv text/csv UTF-8 and non-macro .xlsx spreadsheet MIME with PK signature; 5 MiB, 16 sheets, 10,000 rows, 100 columns, 4,000 cell chars, 1,000,000 aggregate chars, 50 preview rows, 2,000 ms, ZIP entry/expansion/ratio/nesting guards matching the DOCX class of checks.
-  Tests added/updated: equivalent CSV/XLSX preview; BOM/CRLF/quoted commas/newlines/escaped quotes/trailing blanks; checksum/order stability; extension/MIME/signature mismatch and .xls/.xlsm/zip rejection; malformed/encoding/NUL/encrypted/polyglot/traversal/nested/zip-bomb; byte/sheet/row/column/cell/aggregate/time limits at boundary and one past; blank/duplicate headers, hidden sheets, multi-sheet ambiguity; formulas/cached formulas/hyperlinks/external links/merged cells without fetch; bounded preview row numbers; document PDF/DOCX/TXT and Phase 4C offering schema regression; security tests for macros, formula-like CSV, and secret/URL-free issues/logs/errors.
+  Attempt 2 of 3 completed at implementation SHA 58010d58b1a71432d8857e4335cd1adc46064c44 (claim ee273dc3d89a7deaa76f06a8aaf9c4c39a6d79a7). Objective: harden the server-only CSV/XLSX validation foundation so malformed quoted CSV, spreadsheet-formula prefixes, OOXML comment injection, duplicate cell coordinates, extra-column aggregate bypasses, and misbound workbook content types fail closed or produce the required payload-free attention issue.
+  Requirements/acceptance: post-quote CSV state allows only delimiter, CR/LF, or EOF; formula_like is classified from the untrimmed source for leading = + - @ tab CR LF on CSV headers/rows and XLSX string cells; OOXML comments are stripped with a bounded scanner that preserves quoted attributes and CDATA, and only real sheet/Relationship/sheetData elements are consumed; duplicate coordinates throw malformed; every populated XLSX cell is counted once toward the aggregate limit including extra columns and hidden sheets without enlarging preview output; [Content_Types].xml must bind the non-macro workbook main type to /xl/workbook.xml.
+  Root cause and fix per finding:
+  1. parseCsvRecords returned to the ordinary state after a closing quote, so "safe"attacker was accepted. A post-quoted-field state now rejects any byte other than comma/CR/LF/EOF.
+  2. isFormulaLike required ()!| after +/- and CSV/XLSX trimmed before classification. Classification now uses the untrimmed first character; display values remain whitespace-normalized; issues stay payload-free.
+  3. Regex scans treated XML comments as workbook markup and last-write won on duplicate cells. Comments/PIs/CDATA are scanned structurally; sheet, Relationship, and cell tags are read from required parents; duplicate coordinates throw malformed.
+  4. addAggregate visited only header-width columns. Every stored populated cell is counted once before building the bounded preview.
+  5. Any Override with the workbook main type was accepted. The canonical /xl/workbook.xml part must carry that type; an unrelated part carrying it while workbook.xml is misdeclared is type_mismatch.
+  Files changed: lib/orgs/tabular-csv.ts; lib/orgs/tabular-helpers.ts; lib/orgs/tabular-xlsx.ts; lib/orgs/tabular-validation.test.ts; lib/orgs/tabular-security.test.ts; tests/helpers/tabular-fixtures.ts; docs/phase-4d-tabular-import-hardening.md (formula prefixes, comment stripping, aggregate counting, canonical content type). No migrations added or changed. No new npm dependencies.
+  Tests added/updated: junk after closing quote, quotes in unquoted fields, escaped-quote and quoted delimiter/newline controls; CSV/XLSX formula prefixes including +1+1, -2+3, tab/CR/LF before trim, payload-free issues; commented fake sheet/Relationship/c/f/hyperlink/mergeCell markup plus duplicate A1; XLSX aggregate at and one past the limit for selected columns, extra columns, and hidden-sheet extra columns; misbound workbook content type on a worksheet Override. Existing tabular, document, offering, security, boundary, preview, and safe-error tests retained.
   Commands and exact results on this implementation head:
   - npm ci: added 553 packages, audited 554, 0 vulnerabilities
   - npm run format:check: All matched files use Prettier code style
@@ -43,20 +48,20 @@ cursor_report: |
   - npm run typecheck: next typegen + tsc --noEmit succeeded
   - npm run prisma:validate: schema valid
   - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - focused lib/orgs/tabular-validation.test.ts lib/orgs/tabular-security.test.ts lib/orgs/document-validation.test.ts lib/orgs/offering-validation.test.ts: 4 files, 27 passed
-  - npm test: 25 files, 145 passed
+  - focused lib/orgs/tabular-validation.test.ts lib/orgs/tabular-security.test.ts lib/orgs/document-validation.test.ts lib/orgs/offering-validation.test.ts: 4 files, 34 passed
+  - npm test: 25 files, 152 passed
   - npm run test:integration: 40 files, 477 passed
   - npm run build: Next.js 16.3.0 compiled successfully
-  - CI=true npm run test:e2e: 16 passed (28.0s)
+  - CI=true npm run test:e2e: 16 passed (30.8s)
   - npm audit --omit=dev: found 0 vulnerabilities
   - git diff --check: clean
   Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. Existing Phase 4A–4C integration and E2E suites passed unchanged.
-  Security/privacy: no credentials, tokens, or customer data exposed. Macros/encryption/polyglots/zip bombs fail closed. Formulas and links remain inert. Safe errors and console spies contain codes/locations only.
-  Failure/recovery: over-limit and unsafe files throw terminal parse errors for this attempt. Ambiguous or formula-bearing files return needs_attention without selecting a sheet silently. No jobs or storage objects are created.
+  Security/privacy: no credentials, tokens, or customer data exposed. Macros/encryption/polyglots/zip bombs still fail closed. Formulas and links remain inert and are not fetched. Safe errors and issue objects contain codes/locations only.
+  Failure/recovery: malformed quotes, duplicate cells, misbound content types, and over-limit aggregate text are terminal for this parse attempt. Formula-like and extra-column files return needs_attention. No jobs or storage objects are created.
   Manual configuration still required: none for this foundation.
-  Assumptions: comma is the only CSV delimiter; header row is the first non-empty record/row; ZIP comments and CSV trailing whitespace may pad to the byte limit without changing table content.
-  Remaining risks: later mapping/persistence must consume this preview rather than re-parsing with a second library; worksheet XML scanning is tag-based, not a full OOXML DOM.
-  Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched.
+  Assumptions: comma remains the only CSV delimiter; header row is the first non-empty record/row; leading space before =/+/-/@ is not a spreadsheet prefix (only the untrimmed first character is classified); XML comments cannot contain --.
+  Remaining risks: worksheet markup after comment stripping is still tag-scanned rather than a full OOXML DOM; later mapping/persistence must consume this preview rather than re-parsing with a second library.
+  Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate.
 review_findings: |
   REVIEW FAILED on exact remote review head 8b059037a9462efafa72adac0eec83e42b725d2a (Cursor implementation b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 is an ancestor; the two later commits modify AGENTS.md only). The branch is based on current develop d446ca52c1c8397d8b24bf7c2dc009b14800808d and is not behind.
   BLOCKING — lib/orgs/tabular-csv.ts accepts malformed quoted fields. After a closing quote, parseCsvRecords returns to the ordinary state and accepts arbitrary bytes before a delimiter/end-of-record, so input such as Name\n\"safe\"attacker is normalized as a valid cell instead of failing closed. Track the post-quote state and permit only delimiter, CR/LF, or end-of-input after a closing quote. Add regression tests for junk after a closing quote, quotes in unquoted fields, escaped quotes, and valid delimiters/newlines after quoted fields.
@@ -69,7 +74,7 @@ required_tests: |
   Add regression tests that fail against b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 and pass after the fix for: malformed CSV bytes after a closing quote; complete formula-injection prefixes before normalization in CSV and XLSX; commented fake OOXML workbook/relationship/worksheet elements plus duplicate cell coordinates; XLSX aggregate text at and one past the limit including cells wider than the header; and workbook content type bound to /xl/workbook.xml.
   Retain all existing tabular, document, offering, security, boundary, deterministic-preview, and safe-error tests.
   Rerun npm ci, format:check, lint, typecheck, prisma:validate, a fresh PostgreSQL prisma:migrate:deploy, focused tabular tests, npm test, test:integration, build, CI=true test:e2e, npm audit --omit=dev, and git diff --check. Missing, skipped, pending, flaky, or failing checks are not a pass.
-next_action: "Cursor may claim corrective attempt 2 on this same branch, increment cursor_attempt_count once, implement only the review prompt below, run every required check, and return READY_FOR_REVIEW with the exact implementation SHA and report."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 ```
 
 ## Cursor corrective implementation prompt — Phase 4D task 1, attempt 2
