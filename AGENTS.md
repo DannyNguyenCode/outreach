@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-source-runtime-composition-v2
 base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_implementation_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
 last_reviewed_sha: null
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 12
 previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
@@ -64,7 +64,7 @@ review_findings: |
   This task is independently safe under MR-4D-OOXML-001 because it composes only existing confirmed Phase 4A–4C sources and must not consume, expose, map, persist, activate, or reparse CSV/XLSX previews.
 required_tests: |
   Require focused runtime evidence/composition unit and integration tests; authorization and cross-tenant regressions; inactive/draft/future/expired/archived/unsafe-source exclusion; deterministic conflict and UNKNOWN behavior; prompt-boundary and safe-output tests; source-inspector accessibility/E2E; npm ci; format:check; lint; typecheck; prisma:validate; fresh PostgreSQL prisma:migrate:deploy; npm test; test:integration; build; CI=true test:e2e; npm audit --omit=dev; git diff --check; and successful exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT owns the branch and must complete the full develop merge-gate review. Cursor must not modify or push until ChatGPT returns the branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -120,5 +120,9 @@ Regression and completion requirements:
 - Test exhaustive registry/adapters, deterministic ordering/bounds, provenance, safe JSON/text limits, unavailable future classes, missing prospect/call context, UNKNOWN, narrow conflict detection, prompt-injection-like source text treated as data, payload-free failures/audit, and accessible inspector behavior.
 - Run every command in `required_tests`. Missing, skipped, pending, unavailable, or failed checks are not a pass.
 - When claiming, increment `cursor_attempt_count` exactly once from 0 to 1, set `CURSOR_WORKING`, and record the claim commit. On completion set `READY_FOR_REVIEW`, set `cursor_implementation_sha`, reset unchanged checks, and report changed files, behavior, security/tenant evidence, migrations, exact command results, CI URL/head SHA, remaining risks, exclusions, and manual configuration.
+
+## ChatGPT review in progress
+
+Cursor must not modify code, update this file, push commits, merge, or begin another task while `status: CHATGPT_REVIEWING_FOR_DEVELOP`.
 
 <!-- END:outreach-automation -->
