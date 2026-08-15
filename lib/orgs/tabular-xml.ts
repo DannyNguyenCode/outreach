@@ -77,9 +77,13 @@ export function parseOoxmlDocument(options: {
   const stack: Array<OoxmlName & { text: string }> = [];
   let sawRoot = false;
   let closedRoot = false;
+  let events = 0;
 
   const bump = (): void => {
-    enforceTabularDeadline(options.started);
+    events += 1;
+    if (events % 256 === 0) {
+      enforceTabularDeadline(options.started);
+    }
   };
 
   parser.on("error", () => {
@@ -258,7 +262,6 @@ function skipXmlTag(xml: string, start: number, started: number): number {
       continue;
     }
     if (character === ">") {
-      enforceTabularDeadline(started);
       return index + 1;
     }
     index += 1;

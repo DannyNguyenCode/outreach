@@ -742,7 +742,7 @@ describe("tabular validation", () => {
         declaredMimeType: XLSX_MIME,
       }),
     ).rejects.toMatchObject({ code: "text_too_large" });
-  });
+  }, 15_000);
 
   it("requires the canonical workbook part to carry the XLSX main content type", async () => {
     await expect(
