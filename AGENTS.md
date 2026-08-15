@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-complete-file-validation
 base_develop_sha: a10489131522e79cf6bec9983ff520171254a7df
 cursor_implementation_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 last_reviewed_sha: null
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 14
 previous_develop_merge_sha: a10489131522e79cf6bec9983ff520171254a7df
@@ -72,7 +72,7 @@ cursor_report: |
 review_findings: null
 required_tests: |
   Add focused deterministic unit/security tests proving complete-file CSV row validation beyond the 50-row preview, source-row preservation, blank-row behavior, full-file bounds, static payload-free failures, immutability, deterministic output, and no database/storage/network/formula side effects. Preserve all existing Phase 4A–4D and mapping regressions. Run the complete repository verification suite and successful exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT owns the branch while reviewing implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 and the complete remote head."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
