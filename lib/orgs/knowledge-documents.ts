@@ -810,7 +810,7 @@ export async function processNextKnowledgeDocumentJob(
   | {
       claimed: true;
       jobId: string;
-      outcome: "published" | "needs_attention" | "retry" | "failed";
+      outcome: "published" | "needs_attention" | "retry" | "failed" | "stale";
     }
 > {
   await failExpiredExhaustedKnowledgeDocumentJobs(
@@ -1053,7 +1053,7 @@ async function failOrRetryDocumentJob(
     now: Date;
   },
   hooks: KnowledgeMutationTestHooks = {},
-): Promise<"retry" | "failed"> {
+): Promise<"retry" | "failed" | "stale"> {
   const classification = classifyDocumentProcessingError(input.error);
   const infected = input.error instanceof MalwareDetectedError;
   const retryable =
@@ -1068,7 +1068,7 @@ async function failOrRetryDocumentJob(
       )
     : null;
 
-  await prisma.$transaction(async (tx) => {
+  const mutated = await prisma.$transaction(async (tx) => {
     const graph = await lockKnowledgeWorkerGraphForUpdate(
       tx,
       {
@@ -1081,14 +1081,16 @@ async function failOrRetryDocumentJob(
       hooks,
     );
     if (
-      !graph.job ||
-      graph.job.state !== "RUNNING" ||
-      graph.job.leaseOwner !== input.workerId ||
-      graph.job.sourceId !== input.job.sourceId ||
-      graph.job.versionId !== input.job.versionId ||
-      graph.job.documentId !== input.job.documentId
+      !isCurrentFailureRetryGraph(graph, {
+        workerId: input.workerId,
+        attempts: input.job.attempts,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        now: input.now,
+      })
     ) {
-      throw new ConflictError();
+      return false;
     }
     const terminalAt = retryable ? null : input.now;
     const jobUpdated = await tx.knowledgeDocumentJob.updateMany({
@@ -1100,6 +1102,8 @@ async function failOrRetryDocumentJob(
         documentId: input.job.documentId,
         state: "RUNNING",
         leaseOwner: input.workerId,
+        attempts: input.job.attempts,
+        leaseExpiresAt: { gte: input.now },
       },
       data: {
         state: retryable ? "RETRY" : "FAILED",
@@ -1111,56 +1115,52 @@ async function failOrRetryDocumentJob(
       },
     });
     if (jobUpdated.count !== 1) throw new ConflictError();
-    if (
-      graph.document &&
-      (graph.document.leaseOwner === input.workerId ||
-        isInFlightDocumentProcessingState(graph.document.processingState))
-    ) {
-      await tx.knowledgeDocument.updateMany({
-        where: {
-          id: input.job.documentId,
-          organizationId: input.job.organizationId,
-          sourceId: input.job.sourceId,
-          versionId: input.job.versionId,
-        },
-        data: {
-          processingState: retryable ? "QUEUED" : "FAILED",
-          ...(infected
+    const documentUpdated = await tx.knowledgeDocument.updateMany({
+      where: {
+        id: input.job.documentId,
+        organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        leaseOwner: input.workerId,
+        processingState: graph.document.processingState,
+      },
+      data: {
+        processingState: retryable ? "QUEUED" : "FAILED",
+        ...(infected
+          ? {
+              scanState: "INFECTED" as const,
+              scannedChecksum: input.job.document.binaryChecksum,
+              scannerName: input.scannerName,
+              scannerVersion: input.scannerVersion,
+              scannedAt: input.now,
+            }
+          : scanFailed
             ? {
-                scanState: "INFECTED" as const,
-                scannedChecksum: input.job.document.binaryChecksum,
+                scanState: "FAILED" as const,
+                scannedChecksum: null,
                 scannerName: input.scannerName,
                 scannerVersion: input.scannerVersion,
                 scannedAt: input.now,
               }
-            : scanFailed
-              ? {
-                  scanState: "FAILED" as const,
-                  scannedChecksum: null,
-                  scannerName: input.scannerName,
-                  scannerVersion: input.scannerVersion,
-                  scannedAt: input.now,
-                }
-              : {}),
-          leaseOwner: null,
-          leaseExpiresAt: null,
-          retryAt,
-          lastSafeErrorCode: safeErrorCode,
-        },
-      });
-    }
+            : {}),
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        retryAt,
+        lastSafeErrorCode: safeErrorCode,
+      },
+    });
+    if (documentUpdated.count !== 1) throw new ConflictError();
     if (!retryable) {
-      if (graph.version?.state === "PROCESSING") {
-        await tx.knowledgeVersion.updateMany({
-          where: {
-            id: input.job.versionId,
-            organizationId: input.job.organizationId,
-            sourceId: input.job.sourceId,
-            state: "PROCESSING",
-          },
-          data: { state: "FAILED" },
-        });
-      }
+      const versionUpdated = await tx.knowledgeVersion.updateMany({
+        where: {
+          id: input.job.versionId,
+          organizationId: input.job.organizationId,
+          sourceId: input.job.sourceId,
+          state: "PROCESSING",
+        },
+        data: { state: "FAILED" },
+      });
+      if (versionUpdated.count !== 1) throw new ConflictError();
       await recordOrganizationAuditEvent(tx, {
         organizationId: input.job.organizationId,
         actorUserId: null,
@@ -1175,8 +1175,47 @@ async function failOrRetryDocumentJob(
         },
       });
     }
+    return true;
   });
+  if (!mutated) return "stale";
   return retryable ? "retry" : "failed";
+}
+
+function isCurrentFailureRetryGraph(
+  graph: Awaited<ReturnType<typeof lockKnowledgeWorkerGraphForUpdate>>,
+  expected: {
+    workerId: string;
+    attempts: number;
+    sourceId: string;
+    versionId: string;
+    documentId: string;
+    now: Date;
+  },
+): graph is {
+  source: NonNullable<(typeof graph)["source"]>;
+  version: NonNullable<(typeof graph)["version"]>;
+  document: NonNullable<(typeof graph)["document"]>;
+  job: NonNullable<(typeof graph)["job"]>;
+} {
+  return (
+    Boolean(graph.source) &&
+    graph.source?.archivedAt === null &&
+    graph.source?.inputKind === "DOCUMENT" &&
+    graph.version?.state === "PROCESSING" &&
+    graph.job !== null &&
+    graph.job.state === "RUNNING" &&
+    graph.job.leaseOwner === expected.workerId &&
+    graph.job.attempts === expected.attempts &&
+    graph.job.sourceId === expected.sourceId &&
+    graph.job.versionId === expected.versionId &&
+    graph.job.documentId === expected.documentId &&
+    graph.job.leaseExpiresAt !== null &&
+    graph.job.leaseExpiresAt >= expected.now &&
+    graph.document !== null &&
+    graph.document.leaseOwner === expected.workerId &&
+    (graph.document.processingState === "SCANNING" ||
+      graph.document.processingState === "EXTRACTING")
+  );
 }
 
 export async function requestKnowledgeDocumentRetry(

@@ -18,6 +18,7 @@ import type {
 import { organizationStoragePrefix } from "@/lib/orgs/document-storage";
 import { validateDocument } from "@/lib/orgs/document-validation";
 import { archiveKnowledgeSource } from "@/lib/orgs/knowledge";
+import type { KnowledgeMutationTestHooks } from "@/lib/orgs/knowledge-access";
 import {
   claimKnowledgeDocumentJob,
   DOCUMENT_JOB_MAX_ATTEMPTS,
@@ -277,7 +278,7 @@ describe("Phase 4B document worker concurrency", () => {
     }
   });
 
-  it("serializes worker failure/retry and archive without deadlock", async () => {
+  it("serializes worker failure/retry first, then archive, without deadlock", async () => {
     const ctx = await createOrgWithOwner(prisma, "doc-fail-archive");
     const storage = new MemoryPrivateStorage();
     const uploaded = await uploadQueued(ctx, storage);
@@ -285,24 +286,16 @@ describe("Phase 4B document worker concurrency", () => {
       where: { id: uploaded.source.id },
     });
 
-    let workerLocks = 0;
+    let workerGraphLocks = 0;
     const failureHeld = createGate();
     const archiveBeforeLock = createGate();
-    const processed = processNextKnowledgeDocumentJob(
+    const processed = processFailingDocumentJob(
+      storage,
+      "worker-fail-archive",
       {
-        workerId: "worker-fail-archive",
-        dependencies: {
-          storage,
-          scanner: new UnavailableScanner(),
-          scannerName: "test-unavailable",
-          scannerVersion: "1",
-          extract: extractDocument,
-        },
-      },
-      {
-        testBeforeKnowledgeLock: async () => {
-          workerLocks += 1;
-          if (workerLocks === 2) {
+        testAfterGraphLocks: async () => {
+          workerGraphLocks += 1;
+          if (workerGraphLocks === 2) {
             failureHeld.markReached();
             await failureHeld.waitForRelease();
           }
@@ -335,14 +328,202 @@ describe("Phase 4B document worker concurrency", () => {
     ]);
     expect(processedResult).toMatchObject({ claimed: true, outcome: "retry" });
     expect(archiveResult.ok).toBe(true);
-    const version = await prisma.knowledgeVersion.findUniqueOrThrow({
-      where: { id: uploaded.version.id },
+    expect(
+      await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+        where: { id: uploaded.job.id },
+      }),
+    ).toMatchObject({
+      state: "RETRY",
+      leaseOwner: null,
+      lastSafeErrorCode: "processing_remote",
     });
-    expect(version.state).toBe("ARCHIVED");
-    const job = await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+    expect(
+      await prisma.knowledgeDocument.findUniqueOrThrow({
+        where: { id: uploaded.document.id },
+      }),
+    ).toMatchObject({
+      processingState: "QUEUED",
+      leaseOwner: null,
+      lastSafeErrorCode: "processing_remote",
+    });
+    expect(
+      (
+        await prisma.knowledgeVersion.findUniqueOrThrow({
+          where: { id: uploaded.version.id },
+        })
+      ).state,
+    ).toBe("ARCHIVED");
+    expect(
+      await prisma.knowledgeSource.findUniqueOrThrow({
+        where: { id: uploaded.source.id },
+      }),
+    ).toMatchObject({ archivedAt: expect.any(Date) });
+    expect(
+      await prisma.organizationAuditEvent.count({
+        where: {
+          organizationId: ctx.organizationId,
+          action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("does not let a stale failure/retry overwrite an archive that already committed", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-archive-first-fail");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadQueued(ctx, storage);
+    const source = await prisma.knowledgeSource.findUniqueOrThrow({
+      where: { id: uploaded.source.id },
+    });
+
+    let workerBeforeLocks = 0;
+    const beforeFailMutation = createGate();
+    const processed = processFailingDocumentJob(
+      storage,
+      "worker-archive-first",
+      {
+        testBeforeKnowledgeLock: async () => {
+          workerBeforeLocks += 1;
+          if (workerBeforeLocks === 2) {
+            beforeFailMutation.markReached();
+            await beforeFailMutation.waitForRelease();
+          }
+        },
+      },
+    );
+    await beforeFailMutation.waitUntilReached();
+
+    const archiveResult = await archiveKnowledgeSource({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      raw: {
+        sourceId: uploaded.source.id,
+        expectedVersion: String(source.version),
+      },
+    });
+    expect(archiveResult.ok).toBe(true);
+    beforeFailMutation.release();
+
+    expect(await processed).toMatchObject({
+      claimed: true,
+      outcome: "stale",
+    });
+    expect(
+      await prisma.knowledgeSource.findUniqueOrThrow({
+        where: { id: uploaded.source.id },
+      }),
+    ).toMatchObject({ archivedAt: expect.any(Date) });
+    expect(
+      (
+        await prisma.knowledgeVersion.findUniqueOrThrow({
+          where: { id: uploaded.version.id },
+        })
+      ).state,
+    ).toBe("ARCHIVED");
+    expect(
+      await prisma.knowledgeDocument.findUniqueOrThrow({
+        where: { id: uploaded.document.id },
+      }),
+    ).toMatchObject({
+      processingState: "SCANNING",
+      leaseOwner: "worker-archive-first",
+    });
+    expect(
+      await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+        where: { id: uploaded.job.id },
+      }),
+    ).toMatchObject({
+      state: "RUNNING",
+      leaseOwner: "worker-archive-first",
+    });
+    expect(
+      await prisma.organizationAuditEvent.count({
+        where: {
+          organizationId: ctx.organizationId,
+          action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        },
+      }),
+    ).toBe(0);
+  });
+
+  it("does not let a stale worker overwrite a newer lease, attempt, or owner", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-stale-fail-claim");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadQueued(ctx, storage);
+    const replacementLease = new Date("2026-08-15T13:00:00.000Z");
+
+    let workerBeforeLocks = 0;
+    const beforeFailMutation = createGate();
+    const processed = processFailingDocumentJob(storage, "worker-stale-fail", {
+      testBeforeKnowledgeLock: async () => {
+        workerBeforeLocks += 1;
+        if (workerBeforeLocks === 2) {
+          beforeFailMutation.markReached();
+          await beforeFailMutation.waitForRelease();
+        }
+      },
+    });
+    await beforeFailMutation.waitUntilReached();
+
+    await prisma.knowledgeDocumentJob.update({
       where: { id: uploaded.job.id },
+      data: {
+        attempts: 2,
+        leaseOwner: "worker-replacement",
+        leaseExpiresAt: replacementLease,
+        lastSafeErrorCode: null,
+      },
     });
-    expect(["RETRY", "FAILED"]).toContain(job.state);
+    await prisma.knowledgeDocument.update({
+      where: { id: uploaded.document.id },
+      data: {
+        processingState: "SCANNING",
+        leaseOwner: "worker-replacement",
+        leaseExpiresAt: replacementLease,
+        lastSafeErrorCode: null,
+      },
+    });
+    beforeFailMutation.release();
+
+    expect(await processed).toMatchObject({
+      claimed: true,
+      outcome: "stale",
+    });
+    expect(
+      await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+        where: { id: uploaded.job.id },
+      }),
+    ).toMatchObject({
+      state: "RUNNING",
+      attempts: 2,
+      leaseOwner: "worker-replacement",
+      leaseExpiresAt: replacementLease,
+      lastSafeErrorCode: null,
+    });
+    expect(
+      await prisma.knowledgeDocument.findUniqueOrThrow({
+        where: { id: uploaded.document.id },
+      }),
+    ).toMatchObject({
+      processingState: "SCANNING",
+      leaseOwner: "worker-replacement",
+      lastSafeErrorCode: null,
+    });
+    expect(
+      (
+        await prisma.knowledgeVersion.findUniqueOrThrow({
+          where: { id: uploaded.version.id },
+        })
+      ).state,
+    ).toBe("PROCESSING");
+    expect(
+      await prisma.organizationAuditEvent.count({
+        where: {
+          organizationId: ctx.organizationId,
+          action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        },
+      }),
+    ).toBe(0);
   });
 
   it("keeps exhausted-lease terminalization tenant-scoped", async () => {
@@ -402,6 +583,26 @@ describe("Phase 4B document worker concurrency", () => {
     });
   });
 });
+
+function processFailingDocumentJob(
+  storage: MemoryPrivateStorage,
+  workerId: string,
+  hooks: KnowledgeMutationTestHooks = {},
+) {
+  return processNextKnowledgeDocumentJob(
+    {
+      workerId,
+      dependencies: {
+        storage,
+        scanner: new UnavailableScanner(),
+        scannerName: "test-unavailable",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    },
+    hooks,
+  );
+}
 
 async function uploadQueued(
   ctx: Awaited<ReturnType<typeof createOrgWithOwner>>,

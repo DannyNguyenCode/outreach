@@ -95,6 +95,7 @@ Worker protocol (two-stage; never invert lock order):
    - locks source → version → document → job
    - revalidates job state, lease owner/expiry, attempt count, document state, version state, and tenant identifiers
    - applies a conditional, idempotent update so a stale worker cannot overwrite a newer retry, publication, archive, restore, or other lifecycle transition
+   - a stale retry/failure result is a no-op: it does not requeue work, change source/version/document lifecycle, or write a processing-failure audit. Leftover claims are left to the bounded lease/recovery protocol
 4. Concurrent exhausted-lease sweepers produce at most one terminal job/document/version result and one failure audit
 
 This is intentionally not Phase 12’s general-purpose job platform.
