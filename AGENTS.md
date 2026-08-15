@@ -18,8 +18,8 @@ phase: "Phase 4D — XLSX OOXML structural validation corrective task"
 active_branch: feature/phase-04d-ooxml-structural-validation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
-last_reviewed_sha: 6c668e44fae2da694e00478f15e431c9d96b2642
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+last_reviewed_sha: 7ce15baa5c55cfa772dee33f2a5405828af9c2ed
+status: APPROVED_TO_MERGE
 previous_task_status: BLOCKED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -58,13 +58,15 @@ cursor_report: |
   Remaining risks: worksheet markup after non-element stripping is still tag-scanned rather than a full OOXML DOM; later mapping/persistence must consume this preview rather than re-parsing with a second library. PR #11 still points at cursor/outreach-automation-process-9003; ChatGPT owns replacing that PR from this named branch.
   Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
 review_findings: |
-  BLOCKING 1 — The documented 2,000 ms XML parse/validation bound is not enforced for documents with fewer than 256 parser events or for time spent in the declaration pre-scan. lib/orgs/tabular-xml.ts calls rejectProhibitedXmlDeclarations without deadline checks, checks the SAX parser only every 256 events, and performs no mandatory final deadline check. A minimal or few-event document can start or finish after the deadline and still be accepted; a large single text/attribute token has the same gap.
-  BLOCKING 2 — Parent-scoped extraction is incomplete. lib/orgs/tabular-xlsx.ts accepts every SpreadsheetML <t> descendant of the current <si> or <c> except rPh, even when the text is nested under an invalid wrapper rather than a legal shared-string or inline-string path. Such incorrectly nested markup can still create normalized preview values, contrary to the corrective task and phase contract.
-  WORKFLOW — PR #11 targets develop but its head is cursor/outreach-automation-process-9003 at cf45e228edca651ac64b2f064572c0d80ac45d94, not this authoritative feature branch. ChatGPT will replace or supersede that PR after the named branch passes; Cursor must not move work to the PR branch.
+  PASS — Attempt 2 closes both blocking defects. Deadline checks now run at XML entry, across declaration/tag scanning, after pre-scan, during SAX events, and after parser completion; expired/few-event/large-token regressions return the safe timeout code.
+  PASS — Shared-string and inline-string text is consumed only from the legal si/t, si/r/t, c/is/t, and c/is/r/t paths, with invalid wrapper/direct-cell regressions failing malformed and valid direct/rich/prefixed/rPh cases preserved.
+  PASS — The implementation SHA f49e3a54847a5317cde2fc1187b301da78636b0e is an ancestor of review handoff 7ce15baa5c55cfa772dee33f2a5405828af9c2ed; both later commits modify AGENTS.md only. The branch is 0 commits behind develop d446ca52c1c8397d8b24bf7c2dc009b14800808d.
+  PASS — GitHub Actions run 31886878705 succeeded on the exact implementation SHA with migration validation, format, lint, typecheck, unit/component, integration, production build, and E2E. Cursor also reported focused 100/100, unit 232/232, integration 477/477, E2E 16/16, npm audit 0 vulnerabilities, and clean diff.
+  WORKFLOW — PR #11 is superseded because it points to cursor/outreach-automation-process-9003 at cf45e228edca651ac64b2f064572c0d80ac45d94. ChatGPT will close it and open the merge PR from the authoritative named branch.
 required_tests: |
   Add deterministic regression tests that fail on attempt 1 and pass after the fix: (1) deadline already expired at XML parser entry; (2) deadline crossed during a valid document with fewer than 256 SAX events; (3) bounded declaration pre-scan/final enforcement for a large or simulated long-running token; (4) sharedStrings <t> under an invalid wrapper inside <si>; (5) worksheet <t> outside legal <is>/<r> inline-string structure. Prove valid direct and rich-text shared strings and inline strings still parse, and preserve all root/namespace/DTD/entity/CDATA/PI regressions.
   Run npm ci; focused tabular structural/security tests; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "ChatGPT owns the branch and must complete the full develop merge-gate review. Cursor must not modify or push until ChatGPT returns the branch."
+next_action: "ChatGPT must close superseded PR #11, open the authoritative PR to develop, require exact final-head CI and no unresolved threads, then squash-merge with the expected-head guard."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -109,8 +111,8 @@ Regression tests and acceptance:
 - Run and report every command in `required_tests`. Missing, skipped, pending, or failed required checks are not a pass.
 - When claiming this task, increment `cursor_attempt_count` exactly once from 1 to 2 and set `CURSOR_WORKING`. On completion, set `READY_FOR_REVIEW`, set `cursor_implementation_sha` to the implementation commit, summarize changed files and behavior, and report exact test/CI evidence. Do not push while a ChatGPT-owned status is active.
 
-## ChatGPT review in progress
+## Approved for guarded develop merge
 
-Cursor must not modify code, update this file, push commits, merge, or begin another task while `status: CHATGPT_REVIEWING_FOR_DEVELOP`.
+Cursor must not modify code, update this file, push commits, merge, or begin another task while `status: APPROVED_TO_MERGE`.
 
 <!-- END:outreach-automation -->
