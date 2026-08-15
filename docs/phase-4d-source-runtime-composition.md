@@ -120,8 +120,8 @@ Offering values remain structured evidence items rather than flattened
 document passages:
 
 - offering summary — offering ID and version ID;
-- current price — price ID, amount string, currency, billing frequency, and
-  optional variant ID;
+- current price — price ID, amount string, currency, billing frequency,
+  canonical offering name, and optional variant ID;
 - active variant — variant ID and bounded attributes;
 - feature — feature ID and stable feature key;
 - eligibility — eligibility ID and structured constraints;
@@ -142,7 +142,13 @@ bounded limit.
 - Existing deterministic substring retrieval is used.
 - Current source adapters execute in parallel.
 - Results are organization-checked again, ordered by authority guidance,
-  source-child kind, title, and stable evidence ID, then bounded.
+  source-child kind, title, and stable evidence ID.
+- Conflicts are detected over that bounded candidate pool before final
+  truncation. Conflict-aware selection keeps both cited evidence items
+  whenever `CONFLICT` is emitted, never exceeds the requested `limit`, and
+  cannot be converted to `SUPPORTED` by higher-priority child volume. A
+  limit too small to carry a pair (`limit < 2`) returns the ordinary
+  truncated slice without emitting `CONFLICT`.
 - Unsupported future source adapters return no fabricated data and are listed
   in `unavailableSourceClasses`.
 - Empty support returns `supportState: UNKNOWN`.
@@ -159,10 +165,17 @@ neither source is overwritten or silently discarded.
 This slice implements one deliberately narrow deterministic detector:
 
 1. the structured item is a current base offering price;
-2. a current customer-confirmed passage explicitly names the offering;
-3. the passage contains an explicit money amount for the relevant currency
-   marker;
+2. the price carries the canonical offering name, which is matched as an
+   explicit normalized token/phrase in the passage (short names such as
+   `Pro` do not match inside unrelated words such as `improve`);
+3. the passage contains an explicit money amount using the structured
+   currency code or a reviewed compatible marker for that code only
+   (`CAD`/`C$`/`CA$`, `USD`/`US$`, `EUR`/`€`, `GBP`/`£`);
 4. that amount differs from the structured price.
+
+Bare `$` is never treated as a relevant marker because it cannot prove USD
+versus CAD versus AUD. Prefer no conflict over a false conflict when currency
+cannot be proven. Euro, pound, and dollar symbols are not interchangeable.
 
 The result is `supportState: CONFLICT`. Variant-specific and semantic conflict
 resolution are deferred; no AI arbitration occurs.
@@ -177,10 +190,18 @@ the gap.
 ## Prompt-safety boundary
 
 `renderRuntimeSourceText` strips null characters, normalizes line endings, and
-bounds each item to 1,600 characters. Prompt-facing text is wrapped in explicit
-`[SOURCE CONTENT — …]` / `[END SOURCE CONTENT]` boundaries. Instruction-like
-source text remains visible as data and is never executed or interpreted as
-application code.
+bounds each item to 1,600 characters. Inspector `safeText` keeps that bounded
+customer content, including any reserved marker text the customer wrote.
+
+Prompt-facing text uses a three-line encoding:
+
+1. `[SOURCE CONTENT — <class>]`
+2. a JSON string of `safeText` (single line, reserved markers escaped)
+3. `[END SOURCE CONTENT]`
+
+A source that contains the exact end marker plus a forged header cannot
+create a second real boundary. Instruction-like source text remains visible
+as data and is never executed or interpreted as application code.
 
 This is a source boundary, not a complete prompt-injection defense. Future
 prompt builders must place these values in a source-data channel and must not

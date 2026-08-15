@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   compareRuntimeEvidence,
   detectDeterministicConflicts,
+  selectConflictAwareEvidence,
 } from "@/lib/orgs/runtime-composition-logic";
 import {
   PHASE_4D_COMPOSABLE_SOURCE_CLASSES,
@@ -54,6 +55,31 @@ function knowledgeItem(
     authority: runtimeAuthorityFor("CUSTOMER_CONFIRMED_KNOWLEDGE"),
     visibility,
     ...overrides,
+  };
+}
+
+function featureItem(evidenceId: string, title: string): RuntimeEvidenceItem {
+  return {
+    organizationId: "org_1",
+    sourceClass: "STRUCTURED_OFFERING",
+    claimScope: "ORGANIZATION",
+    title,
+    safeText: `${title} feature`,
+    promptSafeText: `[SOURCE CONTENT — STRUCTURED_OFFERING]\n${title} feature\n[END SOURCE CONTENT]`,
+    evidenceId,
+    sourceEntityId: "off_1",
+    sourceVersionId: "offver_1",
+    sourceChildId: evidenceId,
+    provenance: {
+      kind: "FEATURE",
+      offeringId: "off_1",
+      versionId: "offver_1",
+      featureId: evidenceId,
+    },
+    freshness,
+    authority: runtimeAuthorityFor("STRUCTURED_OFFERING"),
+    visibility,
+    structuredValue: { kind: "feature", name: title },
   };
 }
 
@@ -151,6 +177,7 @@ describe("KNOW-004 runtime composition helpers", () => {
         amount: "59.00",
         currencyCode: "CAD",
         variantId: null,
+        offeringName: "Premium plan",
       },
     });
     const matching = priceItem({
@@ -161,6 +188,7 @@ describe("KNOW-004 runtime composition helpers", () => {
         amount: "49.00",
         currencyCode: "CAD",
         variantId: null,
+        offeringName: "Other plan",
       },
     });
     const variant = priceItem({
@@ -170,6 +198,7 @@ describe("KNOW-004 runtime composition helpers", () => {
         amount: "79.00",
         currencyCode: "CAD",
         variantId: "var_1",
+        offeringName: "Premium plan",
       },
     });
 
@@ -193,5 +222,204 @@ describe("KNOW-004 runtime composition helpers", () => {
         mismatch,
       ]),
     ).toEqual([]);
+  });
+
+  it("does not treat a short offering name embedded in an unrelated word as explicit", () => {
+    const conflicts = detectDeterministicConflicts([
+      knowledgeItem({
+        evidenceId: "knowledge-passage:improve",
+        title: "Process notes — Body",
+        safeText: "We improve CAD 10 workflows every quarter.",
+      }),
+      priceItem({
+        evidenceId: "offering-price:pro",
+        title: "Pro — Current price",
+        structuredValue: {
+          kind: "price",
+          amount: "20.00",
+          currencyCode: "CAD",
+          variantId: null,
+          offeringName: "Pro",
+        },
+      }),
+    ]);
+    expect(conflicts).toEqual([]);
+  });
+
+  it("does not treat unrelated currency symbols or foreign codes as relevant", () => {
+    const cadPrice = priceItem({
+      evidenceId: "offering-price:cad",
+      structuredValue: {
+        kind: "price",
+        amount: "59.00",
+        currencyCode: "CAD",
+        variantId: null,
+        offeringName: "Premium plan",
+      },
+    });
+    const eurPrice = priceItem({
+      evidenceId: "offering-price:eur",
+      structuredValue: {
+        kind: "price",
+        amount: "59.00",
+        currencyCode: "EUR",
+        variantId: null,
+        offeringName: "Premium plan",
+      },
+    });
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:euro",
+          safeText: "Premium plan is €49 per month.",
+        }),
+        cadPrice,
+      ]),
+    ).toEqual([]);
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:pound",
+          safeText: "Premium plan is £49 per month.",
+        }),
+        cadPrice,
+      ]),
+    ).toEqual([]);
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:dollar",
+          safeText: "Premium plan is $49 per month.",
+        }),
+        cadPrice,
+      ]),
+    ).toEqual([]);
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:gbp-code",
+          safeText: "Premium plan is GBP 49 per month.",
+        }),
+        eurPrice,
+      ]),
+    ).toEqual([]);
+  });
+
+  it("still detects a mismatch when the passage names the offering and uses a compatible marker", () => {
+    const cadPrice = priceItem({
+      evidenceId: "offering-price:base",
+      structuredValue: {
+        kind: "price",
+        amount: "59.00",
+        currencyCode: "CAD",
+        variantId: null,
+        offeringName: "Premium plan",
+      },
+    });
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:cad",
+          safeText: "The Premium plan is CAD 49 per month.",
+        }),
+        cadPrice,
+      ]),
+    ).toHaveLength(1);
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:csign",
+          safeText: "Premium plan costs C$49 each month.",
+        }),
+        cadPrice,
+      ]),
+    ).toHaveLength(1);
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: "knowledge-passage:eur",
+          safeText: "Premium plan is €40 per month.",
+        }),
+        priceItem({
+          evidenceId: "offering-price:eur-base",
+          structuredValue: {
+            kind: "price",
+            amount: "59.00",
+            currencyCode: "EUR",
+            variantId: null,
+            offeringName: "Premium plan",
+          },
+        }),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("cannot hide a genuine conflict behind higher-priority structured children", () => {
+    const passage = knowledgeItem({ evidenceId: "knowledge-passage:pas" });
+    const price = priceItem({
+      evidenceId: "offering-price:base",
+      structuredValue: {
+        kind: "price",
+        amount: "59.00",
+        currencyCode: "CAD",
+        variantId: null,
+        offeringName: "Premium plan",
+      },
+    });
+    const fillers = Array.from({ length: 8 }, (_, index) =>
+      featureItem(
+        `offering-feature:${String(index).padStart(2, "0")}`,
+        `Premium plan — Extra ${index}`,
+      ),
+    );
+    const selected = selectConflictAwareEvidence(
+      [passage, price, ...fillers],
+      5,
+    );
+    expect(selected.items).toHaveLength(5);
+    expect(selected.conflicts).toHaveLength(1);
+    expect(selected.items.map((item) => item.evidenceId)).toEqual(
+      expect.arrayContaining([passage.evidenceId, price.evidenceId]),
+    );
+    expect(selected.conflicts[0]?.evidenceIds).toEqual(
+      [passage.evidenceId, price.evidenceId].sort(),
+    );
+  });
+
+  it("keeps conflict-safe selection deterministic, bounded, and pair-complete", () => {
+    const passage = knowledgeItem({ evidenceId: "knowledge-passage:pas" });
+    const price = priceItem({
+      evidenceId: "offering-price:base",
+      structuredValue: {
+        kind: "price",
+        amount: "59.00",
+        currencyCode: "CAD",
+        variantId: null,
+        offeringName: "Premium plan",
+      },
+    });
+    const fillers = Array.from({ length: 6 }, (_, index) =>
+      featureItem(
+        `offering-feature:${String(index).padStart(2, "0")}`,
+        `Premium plan — Extra ${index}`,
+      ),
+    );
+    const candidates = [passage, price, ...fillers];
+    const limited = selectConflictAwareEvidence(candidates, 4);
+    expect(limited.items).toHaveLength(4);
+    expect(limited.conflicts).toHaveLength(1);
+    for (const conflict of limited.conflicts) {
+      expect(limited.items.map((item) => item.evidenceId)).toEqual(
+        expect.arrayContaining([...conflict.evidenceIds]),
+      );
+    }
+    expect(selectConflictAwareEvidence(candidates, 4).items).toEqual(
+      limited.items,
+    );
+
+    const tooSmall = selectConflictAwareEvidence(candidates, 1);
+    expect(tooSmall.items).toHaveLength(1);
+    expect(tooSmall.conflicts).toEqual([]);
+    expect(tooSmall.items[0]?.evidenceId).toBe(price.evidenceId);
   });
 });

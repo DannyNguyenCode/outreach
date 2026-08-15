@@ -463,6 +463,63 @@ describe("Phase 4D runtime composition", () => {
     );
   });
 
+  it("cannot hide a genuine price conflict behind enough structured children", async () => {
+    const ctx = await createOrgWithOwner(prisma, "runtime-conflict-limit");
+    const knowledge = await createSampleDraft(ctx.owner, ctx.organizationId, {
+      title: "Premium plan pricing",
+      sections: [
+        {
+          title: "Price",
+          passages: [{ body: "Premium plan is CAD 49 per month." }],
+        },
+      ],
+    });
+    await confirmSample(
+      ctx.owner,
+      ctx.organizationId,
+      knowledge.source.id,
+      knowledge.version.id,
+      knowledge.version.draftRevision,
+      knowledge.version.contentChecksum,
+    );
+    const offering = await createSampleOfferingDraft(
+      ctx.owner,
+      ctx.organizationId,
+      {
+        name: "Premium plan",
+        prices: [
+          {
+            amount: "59.00",
+            currencyCode: "CAD",
+            billingFrequency: "MONTHLY",
+            clientKey: "monthly",
+          },
+        ],
+        features: Array.from({ length: 8 }, (_, index) => ({
+          featureKey: `extra_${index}`,
+          name: `Extra ${index}`,
+          value: String(index),
+        })),
+      },
+    );
+    await confirmSampleOffering(ctx.owner, ctx.organizationId, offering);
+
+    const result = await composeRuntimeContext({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      query: "Premium plan",
+      limit: 5,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.message);
+    expect(result.items.length).toBeLessThanOrEqual(5);
+    expect(result.supportState).toBe("CONFLICT");
+    expect(result.conflicts).toHaveLength(1);
+    expect(result.items.map((item) => item.evidenceId)).toEqual(
+      expect.arrayContaining([...result.conflicts[0]!.evidenceIds]),
+    );
+  });
+
   it("treats instruction-like source text as bounded data and never fabricates future sources", async () => {
     const ctx = await createOrgWithOwner(prisma, "runtime-prompt");
     const injected = await createSampleDraft(ctx.owner, ctx.organizationId, {

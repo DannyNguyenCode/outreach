@@ -410,9 +410,11 @@ export function parseRuntimeLimit(value: unknown): number {
 }
 
 /**
- * Bounded source rendering for prompts and UI. Boundaries make source text
- * data, not application instructions; consumers must not concatenate it into
- * a system-instruction channel.
+ * Bounded source rendering for prompts and UI. `safeText` keeps the original
+ * bounded customer content for the inspector. `promptSafeText` JSON-encodes
+ * that body onto a single line between reserved header/footer markers so a
+ * source containing those markers cannot forge or duplicate the boundary.
+ * Future prompt builders must place this value in a source-data channel.
  */
 export function renderRuntimeSourceText(
   sourceClass: RuntimeSourceClass,
@@ -441,7 +443,7 @@ export function renderRuntimeSourceText(
     safeText,
     promptSafeText: [
       `[SOURCE CONTENT — ${sourceClass}]`,
-      safeText,
+      JSON.stringify(safeText),
       "[END SOURCE CONTENT]",
     ].join("\n"),
     truncated,

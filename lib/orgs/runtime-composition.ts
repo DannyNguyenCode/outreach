@@ -5,10 +5,7 @@ import { requireOrganizationPermission } from "@/lib/orgs/authorization";
 import { mapAuthError, type AuthFailure } from "@/lib/orgs/business-access";
 import { retrieveActiveKnowledge } from "@/lib/orgs/knowledge-retrieval";
 import { retrieveActiveOfferings } from "@/lib/orgs/offering-retrieval";
-import {
-  compareRuntimeEvidence,
-  detectDeterministicConflicts,
-} from "@/lib/orgs/runtime-composition-logic";
+import { selectConflictAwareEvidence } from "@/lib/orgs/runtime-composition-logic";
 import {
   parseRequestedSourceClasses,
   parseRuntimeLimit,
@@ -128,9 +125,7 @@ export async function composeRuntimeContext(input: {
     const tenantSafe = adapted.filter(
       (item) => item.organizationId === input.organizationId,
     );
-    const ordered = [...tenantSafe].sort(compareRuntimeEvidence);
-    const items = ordered.slice(0, limit);
-    const conflicts = detectDeterministicConflicts(items);
+    const { items, conflicts } = selectConflictAwareEvidence(tenantSafe, limit);
     const supportState: RuntimeSupportState =
       conflicts.length > 0
         ? "CONFLICT"
@@ -264,6 +259,7 @@ function validateSourceContext(
 export {
   compareRuntimeEvidence,
   detectDeterministicConflicts,
+  selectConflictAwareEvidence,
 } from "@/lib/orgs/runtime-composition-logic";
 
 export function assertRuntimeAdapterRegistryIsExhaustive(): void {

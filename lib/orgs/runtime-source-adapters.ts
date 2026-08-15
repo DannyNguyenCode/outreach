@@ -312,6 +312,7 @@ function priceEvidence(input: {
       intervalCount: input.price.intervalCount,
       priceId: input.price.id,
       variantId: input.variantId ?? null,
+      offeringName: input.offering.name,
     },
     provenance: offeringProvenance(input.offering, "PRICE", {
       priceId: input.price.id,
