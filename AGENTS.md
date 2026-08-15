@@ -18,17 +18,26 @@ phase: "Phase 4D — CSV mapping foundation"
 active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_implementation_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
-last_reviewed_sha: null
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+last_reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
+status: READY_FOR_CURSOR
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_attempt_count: 1
 cursor_attempt_count_legacy: true
-blocker_set_revision: 0
-blocker_set_signature: []
-blocker_attempt_count: 0
-blocker_history: []
+blocker_set_revision: 1
+blocker_set_signature: [P4D-CSV-MAPPING-RUNTIME-001]
+blocker_attempt_count: 1
+blocker_history:
+  - revision: 1
+    reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
+    implementation_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
+    previous_signature: []
+    resulting_signature: [P4D-CSV-MAPPING-RUNTIME-001]
+    verified_resolved_ids: []
+    new_ids: [P4D-CSV-MAPPING-RUNTIME-001]
+    attempt: 1
+    evidence: "The public runtime validator dereferences mapping.family and column.sourceColumn before validating that the mapping and column entries are objects; malformed JSON can throw raw TypeError instead of a static CsvMappingError."
 consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
 stop_reason: null
@@ -40,7 +49,7 @@ cursor_lease_id: null
 cursor_lease_expires_at: null
 cursor_heartbeat_at: "2026-08-15T17:38:00Z"
 cursor_checkpoint_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
-cursor_checkpoint_summary: "Implementation committed, full verification complete, and handed off as READY_FOR_REVIEW."
+cursor_checkpoint_summary: "Base implementation is committed and verified; resume from this SHA to fix P4D-CSV-MAPPING-RUNTIME-001."
 cursor_resume_count: 0
 cursor_report: |
   Attempt 1 completed at implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b (claim 5e9842267369dcba18fbf8ee220061e2b5b5deba). Objective: add a server-only CSV column-mapping and bounded dry-run mapped-preview foundation on top of the existing tabular validator without persisting, activating, or importing records.
@@ -69,10 +78,11 @@ cursor_report: |
   Assumptions: unmapped quoteRequired on a QUOTE_REQUIRED row defaults to true using existing Phase 4C semantics. Effective dates are strict YYYY-MM-DD calendar dates; timezone/DST conversion remains deferred. Completely blank means every header column is empty after trim.
   Remaining risks: the mapper is deliberately non-semantic and does not validate the complete file beyond previewRows. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
   Deferred work: complete-file row validation, mapping UI, saved templates, persistence, confirmation, activation, retrieval, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate.
-review_findings: null
+review_findings: |
+  P4D-CSV-MAPPING-RUNTIME-001: The mapping contract is not structurally runtime-safe. validateCsvMapping() reads mapping.family before proving mapping is a non-null object, and iterates columns while reading column.sourceColumn before proving each entry is a non-null object. mapCsvPreview() inherits the same failure. Malformed JSON such as a null mapping, columns containing null, or sparse entries can therefore throw raw TypeError instead of the promised static, payload-free CsvMappingError. Existing tests cover semantic mapping errors only and do not exercise malformed runtime shapes.
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "ChatGPT owns the branch while reviewing implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b and the full remote head."
+next_action: "Cursor must claim the focused runtime-structure correction, preserve the blocker epoch, implement and verify it, then return READY_FOR_REVIEW."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -142,103 +152,66 @@ A run must not end with an uncommitted implementation, an unpushed commit, a mis
 ChatGPT must not review or merge a checkpoint. It reviews only `READY_FOR_REVIEW`. A checkpoint or recovery claim is genuine Cursor activity and resets `consecutive_unchanged_checks` without changing the blocker-attempt epoch.
 
 
-## Cursor implementation prompt — CSV mapping foundation
+## Cursor corrective prompt — runtime-safe CSV mapping contract
 
 ### Objective
 
-Build the next small Phase 4D slice: a server-only, deterministic CSV column-mapping and mapped-preview foundation on top of the existing normalized tabular validator.
+Fix blocker `P4D-CSV-MAPPING-RUNTIME-001` on the existing branch. Preserve the completed CSV-only mapping behavior, scope boundaries, recovery rules, and OPEN `MR-4D-OOXML-001` flag.
 
-This task defines and validates customer-reviewed mapping data and produces a bounded dry-run preview. It must not upload, store, persist, confirm, activate, retrieve, or import any record.
+The branch already implements semantic mapping validation and a bounded dry-run preview. The remaining defect is structural runtime validation of the mapping input.
 
-### Mandatory scope boundary
+### Root cause and evidence
 
-- Accept only a `TabularNormalizedPreview` whose `kind` is exactly `csv` and whose parser outcome is safe for mapping.
-- Reject every XLSX preview. Do not import or call XLSX helpers, consume XLSX rows, add an XLSX mapping path, or weaken `MR-4D-OOXML-001`.
-- Keep this module `server-only`.
-- Do not add routes, server actions, forms, UI, storage, Prisma models, migrations, jobs, saved templates, activation, confirmation, or runtime retrieval.
-- Do not change Phase 4A–4C persistence or the existing CSV/XLSX validation semantics.
-- Do not start Phase 5.
+`validateCsvMapping(preview, mapping: CsvMappingInput)` dereferences `mapping.family` before proving that `mapping` is a non-null object. It then iterates `mapping.columns` and dereferences `column.sourceColumn` before proving that every entry is a non-null object.
 
-### Mapping contract
+Consequently, untrusted JSON shapes such as these can throw raw `TypeError` instead of a static `CsvMappingError`:
 
-Inspect `requirements.md`, `outreach-implementation-phases.md`, the Phase 4A/4C models and validators, and `docs/phase-4d-tabular-import-hardening.md`. Reuse established enums, normalization helpers, validation limits, and field semantics rather than creating a competing offering or knowledge schema.
+- `null` or `undefined` mapping input
+- primitive or array mapping input
+- missing, null, primitive, or non-array `columns`
+- `columns: [null]`
+- sparse arrays or undefined entries
+- column entries that are primitives or arrays
+- missing or wrong-typed `sourceColumn` and `target`
 
-Create a typed, runtime-validated mapping contract for two explicit target families:
+This violates the assigned requirement for a typed, runtime-validated mapping contract and would turn malformed later server-action input into an uncontrolled 500.
 
-1. customer-confirmed business knowledge draft rows;
-2. structured offering draft rows.
+### Required fix
 
-The mapping must:
+- Add one focused structural parser/validator for the mapping input before any property dereference or semantic mapping work.
+- Prefer an existing validation dependency or a small explicit validator; do not add a new dependency for this fix.
+- Accept `unknown` at the actual runtime-validation boundary, or export a schema/parser that accepts `unknown` and require `mapCsvPreview` and `validateCsvMapping` to use its parsed result.
+- Reject malformed mapping containers and malformed column entries with a stable `CsvMappingError` code and static message. Add `invalid_mapping` if needed; do not echo input values.
+- Bound the mapping array using the existing tabular column limit before iterating it.
+- Preserve the current semantic codes and precedence for validly shaped mappings: invalid/unknown source column, unknown target, duplicates, unmapped columns, missing required targets, and incompatible families.
+- Preserve CSV-only parser gating, sourceColumn identity, output shape, pricing/date rules, suggestions, immutability, server-only behavior, and XLSX rejection.
+- Do not add routes, UI, persistence, jobs, migrations, activation, XLSX consumption, or Phase 5 work.
+- Keep the implementation focused and reduce duplicate checks by reusing the parsed canonical mapping.
 
-- identify source columns by the parser's stable one-based `sourceColumn`, never only by header text;
-- permit an explicit ignored/unmapped source column;
-- reject unknown source columns, duplicate source assignments, duplicate target assignments, unknown targets, missing required targets, and mappings incompatible with the selected target family;
-- keep knowledge and offering targets distinct;
-- expose a stable target-field registry with user-facing labels, required/optional state, data type, and accepted values derived from existing Phase 4 contracts;
-- require explicit mapping for the minimum fields needed to form a useful draft row;
-- validate cross-field requirements such as price amount/currency pairs, pricing model, billing frequency, quote-required behavior, offering type, and effective-date ordering using existing Phase 4C semantics where applicable;
-- never silently guess a target from a header name. Deterministic suggestions may be returned separately only when exact normalized aliases are unique and must still require customer confirmation.
+### Required regression tests
 
-If existing domain validation cannot safely support a field without persistence context, leave that field out of this bounded foundation and document the deferral instead of inventing behavior.
+Add deterministic unit/security tests covering at least:
 
-### Dry-run mapped preview
+- null, undefined, primitive, and array mapping roots
+- missing/null/primitive/non-array `columns`
+- null, undefined, sparse, primitive, and array column entries
+- missing or wrong-typed `sourceColumn` and `target`
+- zero, negative, fractional, non-finite, and string source columns
+- oversized mapping arrays rejected before semantic iteration
+- malformed targets containing a secret, URL, or formula never appearing in the thrown error or serialized error
+- every malformed case throws `CsvMappingError`, never raw `TypeError`
+- existing valid mappings produce byte-for-byte equivalent mapped previews
+- existing semantic error-code tests remain unchanged and passing
+- no network, filesystem, database, storage, or formula-evaluation side effects
 
-Add a pure mapping function that consumes the validated CSV preview plus the validated mapping and returns only the bounded preview rows already present in `previewRows`.
+Use JSON-representable cases where applicable and include sparse-array/undefined cases as direct JavaScript boundary regressions.
 
-Requirements:
+### Verification and completion
 
-- preserve `sourceRowNumber`;
-- skip only completely blank rows and report the skipped count;
-- normalize whitespace deterministically;
-- parse booleans, strict ISO dates, enum values, decimal amounts, ISO currency codes, and billing frequencies without locale guessing;
-- reject exponent notation, non-finite numbers, invalid calendar dates, unknown enum values, malformed currency codes, and incomplete paired fields;
-- distinguish missing required values from invalid values;
-- return stable machine-readable row issues containing row number, source column, target field, and issue code;
-- error messages and issue objects must not echo cell contents, formulas, URLs, file bytes, or secrets;
-- keep mapped customer data only in the explicit bounded mapped-preview values intended for the later authorized UI;
-- report `hasMoreRows` whenever `totalRowCount` exceeds the bounded preview rows and never imply that the complete file has been validated against the mapping;
-- never mutate the parser preview or mapping input;
-- remain deterministically bounded by existing preview row/column/cell limits.
-
-A parser result with unresolved error-level or security-relevant attention issues must fail closed for this task. Do not add acknowledgment or override behavior yet.
-
-### Security and correctness tests
-
-Add direct regressions for at least:
-
-- XLSX preview rejection;
-- `needs_attention` and parser-issue gating;
-- unknown, missing, duplicate, and cross-family mappings;
-- stable one-based source-column identity with renamed or similar headers;
-- blank-row handling and preservation of original source row numbers;
-- required-field, enum, boolean, decimal, currency, billing-frequency, and strict-date parsing;
-- incomplete price/currency pairs and invalid effective-date order;
-- exact-alias suggestions that remain non-authoritative;
-- duplicate/ambiguous aliases producing no suggestion;
-- bounded output and `hasMoreRows`;
-- immutability and deterministic repeated output;
-- row issues that do not expose malicious cell text, formulas, URLs, or secrets;
-- no database, storage, network, file-system, formula-evaluation, or external-resource side effects;
-- existing Phase 4A knowledge, Phase 4B document, Phase 4C offering, runtime-composition, CSV validation, and XLSX security tests remaining unchanged and passing.
-
-### Documentation
-
-Create a focused Phase 4D CSV-mapping document, or add a clearly bounded task-2 section to the existing tabular hardening document. State:
-
-- this is a dry-run preview foundation only;
-- XLSX mapping remains prohibited by the open flag;
-- only preview rows are mapped;
-- complete-file row validation, authorization/upload UI, persistence, saved templates, idempotent jobs, confirmation, activation, and retrieval are deferred;
-- no imported customer data is persisted by this task.
-
-Do not claim Phase 4D or KNOW-002/003 complete.
-
-### Verification
-
-Run and report exact results for:
+Run and report:
 
 - `npm ci`
-- focused mapping and tabular security tests
+- focused mapping and mapping-security tests
 - `npm run format:check`
 - `npm run lint`
 - `npm run typecheck`
@@ -252,14 +225,7 @@ Run and report exact results for:
 - `git diff --check`
 - successful exact-head GitHub Actions
 
-Missing, skipped, cancelled, unavailable, flaky, or failing checks are not passing.
-
-### Completion
-
-Commit implementation and tests before the completion report. Push only to this active branch. Set `READY_FOR_REVIEW`, record `cursor_implementation_sha`, and provide the files changed, mapping decisions, tests, exact command results, security/privacy evidence, assumptions, remaining risks, and deferred work.
-
-The legacy `cursor_attempt_count` is not the retry budget. ChatGPT owns blocker-set counting. Cursor must preserve `blocker_set_revision`, `blocker_set_signature`, `blocker_attempt_count`, and `blocker_history`.
+Follow the lease/checkpoint rules above. Commit and push the correction and tests before the completion report. Preserve the blocker-set fields exactly; ChatGPT owns their counters. Set `READY_FOR_REVIEW` only after all required verification and exact-head CI pass. Record the new `cursor_implementation_sha`, exact results, files changed, security evidence, and remaining risks.
 
 Do not open or merge a pull request.
-
 <!-- END:outreach-automation -->
