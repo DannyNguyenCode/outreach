@@ -62,7 +62,9 @@ export function parseOoxmlDocument(options: {
   ) => void;
   onClose?: (name: OoxmlName, text: string, path: readonly OoxmlName[]) => void;
 }): void {
-  rejectProhibitedXmlDeclarations(options.xml);
+  enforceTabularDeadline(options.started);
+  rejectProhibitedXmlDeclarations(options.xml, options.started);
+  enforceTabularDeadline(options.started);
   const parser = new SaxesParser({
     xmlns: true,
     fragment: false,
@@ -75,13 +77,9 @@ export function parseOoxmlDocument(options: {
   const stack: Array<OoxmlName & { text: string }> = [];
   let sawRoot = false;
   let closedRoot = false;
-  let events = 0;
 
   const bump = (): void => {
-    events += 1;
-    if (events % 256 === 0) {
-      enforceTabularDeadline(options.started);
-    }
+    enforceTabularDeadline(options.started);
   };
 
   parser.on("error", () => {
@@ -155,6 +153,8 @@ export function parseOoxmlDocument(options: {
     throw malformedXml();
   }
 
+  enforceTabularDeadline(options.started);
+
   if (!sawRoot || !closedRoot || stack.length !== 0) {
     throw malformedXml();
   }
@@ -192,14 +192,18 @@ function stripBom(xml: string): string {
   return xml.charCodeAt(0) === 0xfeff ? xml.slice(1) : xml;
 }
 
-function rejectProhibitedXmlDeclarations(xml: string): void {
+function rejectProhibitedXmlDeclarations(xml: string, started: number): void {
   let index = 0;
   while (index < xml.length) {
+    if (index % 4096 === 0) {
+      enforceTabularDeadline(started);
+    }
     if (xml.startsWith("<!--", index)) {
       const end = xml.indexOf("-->", index + 4);
       if (end < 0 || xml.slice(index + 4, end).includes("--")) {
         throw malformedXml();
       }
+      enforceDeadlineAcross(started, index, end + 3);
       index = end + 3;
       continue;
     }
@@ -208,6 +212,7 @@ function rejectProhibitedXmlDeclarations(xml: string): void {
       if (end < 0) {
         throw malformedXml();
       }
+      enforceDeadlineAcross(started, index, end + 3);
       index = end + 3;
       continue;
     }
@@ -216,6 +221,7 @@ function rejectProhibitedXmlDeclarations(xml: string): void {
       if (end < 0) {
         throw malformedXml();
       }
+      enforceDeadlineAcross(started, index, end + 2);
       index = end + 2;
       continue;
     }
@@ -223,17 +229,21 @@ function rejectProhibitedXmlDeclarations(xml: string): void {
       throw prohibitedXml();
     }
     if (xml[index] === "<") {
-      index = skipXmlTag(xml, index);
+      index = skipXmlTag(xml, index, started);
       continue;
     }
     index += 1;
   }
+  enforceTabularDeadline(started);
 }
 
-function skipXmlTag(xml: string, start: number): number {
+function skipXmlTag(xml: string, start: number, started: number): number {
   let index = start + 1;
   let quote: '"' | "'" | null = null;
   while (index < xml.length) {
+    if (index % 4096 === 0) {
+      enforceTabularDeadline(started);
+    }
     const character = xml[index] ?? "";
     if (quote) {
       if (character === quote) {
@@ -248,11 +258,23 @@ function skipXmlTag(xml: string, start: number): number {
       continue;
     }
     if (character === ">") {
+      enforceTabularDeadline(started);
       return index + 1;
     }
     index += 1;
   }
   throw malformedXml();
+}
+
+function enforceDeadlineAcross(
+  started: number,
+  from: number,
+  to: number,
+): void {
+  for (let cursor = from; cursor < to; cursor += 4096) {
+    enforceTabularDeadline(started);
+  }
+  enforceTabularDeadline(started);
 }
 
 function malformedXml(): Error {

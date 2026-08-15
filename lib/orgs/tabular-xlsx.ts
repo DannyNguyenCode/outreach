@@ -399,12 +399,9 @@ function parseSharedStrings(xml: string, started: number): string[] {
       current = [];
     },
     onClose(name, text, path) {
-      if (
-        isOoxmlName(name, "t", OOXML_NS.spreadsheetml) &&
-        current &&
-        !hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)
-      ) {
-        current.push(text);
+      if (isOoxmlName(name, "t", OOXML_NS.spreadsheetml)) {
+        consumeSharedStringText(text, path, current);
+        return;
       }
       if (isOoxmlName(name, "si", OOXML_NS.spreadsheetml) && current) {
         values.push(current.join(""));
@@ -520,12 +517,8 @@ function parseWorksheet(
         currentCell.value = text;
         return;
       }
-      if (
-        currentCell &&
-        isOoxmlName(name, "t", OOXML_NS.spreadsheetml) &&
-        !hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)
-      ) {
-        currentCell.texts.push(text);
+      if (isOoxmlName(name, "t", OOXML_NS.spreadsheetml)) {
+        consumeInlineStringText(text, path, currentCell);
         return;
       }
       if (!currentCell || !isOoxmlName(name, "c", OOXML_NS.spreadsheetml)) {
@@ -746,6 +739,70 @@ function worksheetPath(target: string): string {
 
 function isLiteralStringCell(type: string, inline: boolean): boolean {
   return type === "s" || type === "str" || type === "inlinestr" || inline;
+}
+
+function consumeSharedStringText(
+  text: string,
+  path: readonly OoxmlName[],
+  current: string[] | null,
+): void {
+  if (hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)) {
+    return;
+  }
+  if (!current || !isLegalSharedStringTextPath(path)) {
+    throw malformedXml();
+  }
+  current.push(text);
+}
+
+function consumeInlineStringText(
+  text: string,
+  path: readonly OoxmlName[],
+  currentCell: { texts: string[] } | null,
+): void {
+  if (hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)) {
+    return;
+  }
+  if (!currentCell || !isLegalInlineStringTextPath(path)) {
+    throw malformedXml();
+  }
+  currentCell.texts.push(text);
+}
+
+function isLegalSharedStringTextPath(path: readonly OoxmlName[]): boolean {
+  const parent = path[path.length - 2];
+  if (parent && isOoxmlName(parent, "si", OOXML_NS.spreadsheetml)) {
+    return true;
+  }
+  const grandparent = path[path.length - 3];
+  return (
+    !!parent &&
+    isOoxmlName(parent, "r", OOXML_NS.spreadsheetml) &&
+    !!grandparent &&
+    isOoxmlName(grandparent, "si", OOXML_NS.spreadsheetml)
+  );
+}
+
+function isLegalInlineStringTextPath(path: readonly OoxmlName[]): boolean {
+  const parent = path[path.length - 2];
+  const grandparent = path[path.length - 3];
+  if (
+    parent &&
+    isOoxmlName(parent, "is", OOXML_NS.spreadsheetml) &&
+    grandparent &&
+    isOoxmlName(grandparent, "c", OOXML_NS.spreadsheetml)
+  ) {
+    return true;
+  }
+  const greatGrandparent = path[path.length - 4];
+  return (
+    !!parent &&
+    isOoxmlName(parent, "r", OOXML_NS.spreadsheetml) &&
+    !!grandparent &&
+    isOoxmlName(grandparent, "is", OOXML_NS.spreadsheetml) &&
+    !!greatGrandparent &&
+    isOoxmlName(greatGrandparent, "c", OOXML_NS.spreadsheetml)
+  );
 }
 
 function isOoxmlName(

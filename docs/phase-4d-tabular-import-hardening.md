@@ -122,6 +122,7 @@ CSV still has no extra parser dependency. XLSX adds one runtime XML parser: `sax
 - Consumed OOXML parts are then parsed with `saxes` in namespace-aware, non-fragment mode. `saxes` is a strict well-formedness parser (not an OOXML schema validator). It does not evaluate formulas, fetch URLs, or provide HTML/tag-soup recovery.
 - Before `saxes` runs, a comment/PI/CDATA-aware scan rejects `<!DOCTYPE`, `<!ENTITY`, and other markup declarations so DTDs never reach the parser. The parser's entity table is frozen to the five predefined XML entities (`amp`, `lt`, `gt`, `quot`, `apos`). External entities and external resources are never resolved.
 - After the document is proven to be one well-formed tree with the required root local name and namespace, data is read only from the structural locations below. There is no regex fallback that scans a whole part when the expected parent is missing.
+- The 2,000 ms parse/validation deadline is enforced before and after each OOXML declaration pre-scan and SAX parse, periodically during character and tag scans (including large comments, CDATA, PIs, and quoted attributes), on SAX events, and after parser completion. A document with fewer than 256 parser events, or a single large token, cannot bypass the bound. Timeout errors stay `timeout` and do not expose XML or parser causes.
 
 Required roots:
 
@@ -133,7 +134,7 @@ Required roots:
 | consumed worksheets | `worksheet` | `http://schemas.openxmlformats.org/spreadsheetml/2006/main` |
 | `xl/sharedStrings.xml` (when present) | `sst` | `http://schemas.openxmlformats.org/spreadsheetml/2006/main` |
 
-Extraction locations: `Override` under `Types`; `sheets` under `workbook` and `sheet` under `workbook/sheets`; `Relationship` under `Relationships`; `sheetData` under `worksheet` and cells under `sheetData/row`; `si` under `sst`. Duplicate required containers and expected elements under the wrong parent fail as `malformed`. A structurally valid content-types document whose `/xl/workbook.xml` override is not the canonical XLSX workbook main type fails as `type_mismatch`.
+Extraction locations: `Override` under `Types`; `sheets` under `workbook` and `sheet` under `workbook/sheets`; `Relationship` under `Relationships`; `sheetData` under `worksheet` and cells under `sheetData/row`; `si` under `sst`. Shared-string text is consumed only from `si/t` and `si/r/t`. Inline-string text is consumed only from `c/is/t` and `c/is/r/t`. Phonetic `rPh` text is ignored and is not preview evidence. Same-namespace `<t>` under any other parent inside those consumed structures fails as `malformed`. Duplicate required containers and expected elements under the wrong parent fail as `malformed`. A structurally valid content-types document whose `/xl/workbook.xml` override is not the canonical XLSX workbook main type fails as `type_mismatch`.
 
 Comments and processing instructions are ignored as markup. CDATA is character data and cannot create elements. Adding SheetJS, ExcelJS, or a second CSV library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface.
 

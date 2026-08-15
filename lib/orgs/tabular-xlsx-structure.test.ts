@@ -9,9 +9,11 @@ import {
 } from "@/lib/orgs/document-validation";
 import { offeringDraftContentSchema } from "@/lib/orgs/offering-validation";
 import {
+  TABULAR_MAX_PARSE_MS,
   TabularValidationError,
   validateTabularImport,
 } from "@/lib/orgs/tabular-validation";
+import { OOXML_NS, parseOoxmlDocument } from "@/lib/orgs/tabular-xml";
 import {
   CSV_MIME,
   XLSX_MIME,
@@ -325,6 +327,228 @@ describe("XLSX OOXML structural validation", () => {
   });
 });
 
+describe("XLSX OOXML deadline and parent-scoped text", () => {
+  it("rejects XML parsing when the deadline already expired at parser entry", () => {
+    const now = vi
+      .spyOn(performance, "now")
+      .mockReturnValue(TABULAR_MAX_PARSE_MS + 1);
+    try {
+      parseOoxmlDocument({
+        xml: `<Types xmlns="${CT_NS}"/>`,
+        rootLocalName: "Types",
+        rootNamespace: OOXML_NS.contentTypes,
+        started: 0,
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expectTimeout(caught);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("rejects a valid document with fewer than 256 SAX events once the deadline is crossed", () => {
+    const now = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValue(TABULAR_MAX_PARSE_MS + 1);
+    try {
+      parseOoxmlDocument({
+        xml: `<Types xmlns="${CT_NS}"></Types>`,
+        rootLocalName: "Types",
+        rootNamespace: OOXML_NS.contentTypes,
+        started: 0,
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expectTimeout(caught);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("enforces the deadline during declaration pre-scan of a large comment token", () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => {
+      clock += 300;
+      return clock;
+    });
+    try {
+      parseOoxmlDocument({
+        xml: `<!--${"x".repeat(32_768)}--><Types xmlns="${CT_NS}"></Types>`,
+        rootLocalName: "Types",
+        rootNamespace: OOXML_NS.contentTypes,
+        started: 0,
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expectTimeout(caught);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("enforces the deadline after a large text token with few SAX events", () => {
+    const now = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValue(TABULAR_MAX_PARSE_MS + 1);
+    try {
+      parseOoxmlDocument({
+        xml: `<Types xmlns="${CT_NS}">${"x".repeat(8_192)}</Types>`,
+        rootLocalName: "Types",
+        rootNamespace: OOXML_NS.contentTypes,
+        started: 0,
+      });
+      expect.unreachable();
+    } catch (caught) {
+      expectTimeout(caught);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("rejects shared-string text nested under an invalid wrapper inside si", async () => {
+    await expectMalformed(
+      await xlsxWithPart(
+        "sharedStrings",
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="${SML_NS}" count="2" uniqueCount="2">
+  <si><wrapper><t>Name</t></wrapper></si>
+  <si><t>Widget</t></si>
+</sst>`,
+      ),
+      "wrapped-shared-string.xlsx",
+    );
+  });
+
+  it("rejects worksheet text outside the legal inline-string is/r structure", async () => {
+    await expectMalformed(
+      await xlsxWithPart(
+        "worksheet",
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="${SML_NS}">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><wrapper><t>Name</t></wrapper></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>Widget</t></is></c></row>
+  </sheetData>
+</worksheet>`,
+      ),
+      "wrapped-inline-string.xlsx",
+    );
+
+    await expectMalformed(
+      await xlsxWithPart(
+        "worksheet",
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="${SML_NS}">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><t>Name</t></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>Widget</t></is></c></row>
+  </sheetData>
+</worksheet>`,
+      ),
+      "cell-direct-t.xlsx",
+    );
+  });
+
+  it("still parses direct and rich-text shared strings and inline strings, including prefixes", async () => {
+    const richShared = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        extras: {
+          "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="${SML_NS}" count="2" uniqueCount="2">
+  <si><t>Name</t></si>
+  <si>
+    <r><rPr><b/></rPr><t>Wid</t></r>
+    <r><t>get</t></r>
+    <rPh><t>${SECRET}</t></rPh>
+  </si>
+</sst>`,
+        },
+      }),
+      filename: "rich-shared.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(richShared.outcome).toBe("ready");
+    expect(richShared.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["Widget"] },
+    ]);
+    expect(JSON.stringify(richShared)).not.toContain(SECRET);
+
+    const richInline = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        extras: {
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="${SML_NS}">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row>
+    <row r="2">
+      <c r="A2" t="inlineStr">
+        <is>
+          <r><t>Wid</t></r>
+          <r><t>get</t></r>
+          <rPh><t>${SECRET}</t></rPh>
+        </is>
+      </c>
+    </row>
+  </sheetData>
+</worksheet>`,
+        },
+      }),
+      filename: "rich-inline.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(richInline.outcome).toBe("ready");
+    expect(richInline.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["Widget"] },
+    ]);
+    expect(JSON.stringify(richInline)).not.toContain(SECRET);
+
+    const prefixed = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        contentTypesXml: prefixedWorkbookContentTypesXml(),
+        extras: {
+          "xl/workbook.xml": prefixedWorkbook(),
+          "xl/_rels/workbook.xml.rels": prefixedRels(),
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<x:worksheet xmlns:x="${SML_NS}">
+  <x:sheetData>
+    <x:row r="1"><x:c r="A1" t="inlineStr"><x:is><x:t>Name</x:t></x:is></x:c></x:row>
+    <x:row r="2">
+      <x:c r="A2" t="inlineStr">
+        <x:is>
+          <x:r><x:t>Wid</x:t></x:r>
+          <x:r><x:t>get</x:t></x:r>
+        </x:is>
+      </x:c>
+    </x:row>
+  </x:sheetData>
+</x:worksheet>`,
+          "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<x:sst xmlns:x="${SML_NS}" count="2" uniqueCount="2">
+  <x:si><x:t>Name</x:t></x:si>
+  <x:si>
+    <x:r><x:t>Wid</x:t></x:r>
+    <x:r><x:t>get</x:t></x:r>
+  </x:si>
+</x:sst>`,
+        },
+      }),
+      filename: "prefixed-rich-ooxml.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(prefixed.outcome).toBe("ready");
+    expect(prefixed.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["Widget"] },
+    ]);
+  });
+});
+
 function structuralCases(): Array<{
   title: string;
   part: ConsumedPart;
@@ -579,6 +803,15 @@ function structuralCases(): Array<{
     }
   }
   return cases;
+}
+
+function expectTimeout(caught: unknown): void {
+  expect(caught).toBeInstanceOf(TabularValidationError);
+  expect(caught).toMatchObject({ code: "timeout" });
+  const text = `${(caught as Error).message}\n${String(caught)}\n${JSON.stringify(caught)}`;
+  expect(text).not.toContain("saxes");
+  expect(text).not.toContain("<Types");
+  expect(text).not.toContain(SECRET);
 }
 
 async function expectMalformed(
