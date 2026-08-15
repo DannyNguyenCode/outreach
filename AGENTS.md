@@ -17,9 +17,9 @@ task_id: phase-04d-csv-complete-file-validation-001
 phase: "Phase 4D — CSV complete-file mapped validation"
 active_branch: feature/phase-04d-csv-complete-file-validation
 base_develop_sha: a10489131522e79cf6bec9983ff520171254a7df
-cursor_implementation_sha: null
+cursor_implementation_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 last_reviewed_sha: null
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 14
 previous_develop_merge_sha: a10489131522e79cf6bec9983ff520171254a7df
@@ -34,19 +34,45 @@ last_cursor_activity_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T20:06:35Z"
-cursor_completed_at: null
+cursor_completed_at: "2026-08-15T20:19:05Z"
 cursor_claim_sha: babbea38a8df7432744ef7b4169aa67581e9055d
-cursor_lease_id: c00d4cf1-fa8e-4e8f-be66-295e74dc2bf6
-cursor_lease_expires_at: "2026-08-15T21:08:10Z"
-cursor_heartbeat_at: "2026-08-15T20:13:10Z"
+cursor_lease_id: null
+cursor_lease_expires_at: null
+cursor_heartbeat_at: "2026-08-15T20:19:05Z"
 cursor_checkpoint_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 cursor_checkpoint_summary: "CSV complete-file mapped validation is committed. validateMappedCsvFile revalidates original CSV bytes, reuses parseCsvMappingInput/mapCsvRows, maps every nonblank row past the 50-row preview, caps flattened issues at CSV_MAPPED_FILE_MAX_ISSUES, and rejects XLSX without workbook helpers. Focused complete-file+mapping+validation+security tests: 6 files, 106 passed. Next: npm run format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
-cursor_report: null
+cursor_report: |
+  Complete-file CSV mapped-validation foundation completed at implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 (claim babbea38a8df7432744ef7b4169aa67581e9055d). Objective: prove every accepted CSV data row is structurally and semantically validated against a customer-reviewed mapping before later persistence work, without trusting a caller-supplied preview and without persisting, activating, or mapping XLSX.
+  Requirements/acceptance: validateMappedCsvFile accepts original bytes, filename, declared MIME, and untrusted mapping. CSV bytes are revalidated through the shared inspect/preview path. parseCsvMappingInput and existing semantic mapping validation run before complete-row mapping. Every nonblank data row is mapped in source order, including rows after the 50-row preview, with original one-based sourceRowNumber. Knowledge and offering cell parsers and cross-field rules are reused. The result includes canonical family/mapping identity, source SHA-256 checksum, total/nonblank/valid/invalid/skipped counts, complete mapped drafts, flattened row issues, and hasMoreIssues when the issue list is capped at CSV_MAPPED_FILE_MAX_ISSUES. Trailing blanks follow the shared parser strip; internal blanks are skipped. XLSX is rejected with unsupported_kind before workbook helpers run. Byte/limit failures keep TabularValidationError codes. Mapping-contract failures keep CsvMappingError codes and precedence. MR-4D-OOXML-001 remains OPEN.
+  Files changed: lib/orgs/tabular-csv-file.ts; lib/orgs/tabular-csv-file.test.ts; lib/orgs/tabular-csv-file-security.test.ts; lib/orgs/tabular-preview.ts; lib/orgs/tabular-validation.ts; lib/orgs/tabular-mapping.ts; lib/orgs/tabular-types.ts; docs/phase-4d-csv-complete-file-validation.md; docs/phase-4d-csv-mapping-foundation.md; docs/phase-4d-tabular-import-hardening.md. No migrations added or changed. No new npm dependencies.
+  Tests added/updated: complete-file unit coverage for more-than-50-row source order, invalid values only after preview row 50, first/last source rows, internal and all-blank data rows, knowledge and offering families, malformed bytes/mappings/headers/formulas/limits, XLSX rejection, accepted and rejected row-limit boundaries, issue-list truncation with preserved invalid counts, determinism/checksum/immutability, byte-for-byte mapped-preview stability, and no XLSX imports. Security coverage for payload-free issues/errors, formula-like parser-gate failure, URL values confined to mapped-row values, and no fetch/database side effects. Existing Phase 4A-4D mapping, tabular-validation, and security tests were not rewritten and passed.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - focused complete-file, mapping, validation, and security tests: 6 files, 106 passed
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid with DATABASE_URL/DIRECT_URL set
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C; outreach_test migrated the same way
+  - npm test: 32 files, 352 passed
+  - npm run test:integration: 41 files, 488 passed
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (30.7s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  - GitHub Actions run 31906095982 success on checkpoint HEAD 65bc33b82065d83844ca27a314b8c158e9c019bf immediately after implementation 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 (application tree differs only in AGENTS.md). Verify job: format, lint, typecheck, unit/component, integration, production build, E2E all success. Combined push meant GitHub cancelled the in-progress run on 8b2a6e0 itself.
+  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. This module remains pure validation and does not query the database.
+  Security/privacy: complete-file validation is server-only and does not import XLSX ZIP/XML helpers. Structural and semantic errors use static codes/messages only. Secrets, URLs, and formulas in mapping JSON or cells are not echoed in thrown errors or row issues. Mapped customer values appear only on explicit server-only row values. Suggestions remain unused here and are never auto-applied.
+  Failure/recovery: malformed bytes throw TabularValidationError; unready CSV or XLSX throw CsvMappingError. Invalid mapped rows remain in the complete result with machine-readable issues and are not persisted. Truncated issue lists still count every invalid row. No jobs or storage objects are created.
+  Manual configuration still required: none for this foundation.
+  Assumptions: trailing blank records are stripped by the shared CSV parser, matching task 1; internal blank data rows are skipped and counted. A validly shaped mapping whose family is not knowledge or offering still fails with incompatible_target_family before row mapping.
+  Remaining risks: complete-file validation still does not persist, confirm, or activate drafts, and does not detect duplicates against existing records. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
+  Deferred work: mapping UI, saved templates, persistence, confirmation, activation, retrieval, duplicate/existing-record conflicts, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Blocker-set revision, signature, attempt count, and history were preserved exactly.
 review_findings: null
 required_tests: |
   Add focused deterministic unit/security tests proving complete-file CSV row validation beyond the 50-row preview, source-row preservation, blank-row behavior, full-file bounds, static payload-free failures, immutability, deterministic output, and no database/storage/network/formula side effects. Preserve all existing Phase 4A–4D and mapping regressions. Run the complete repository verification suite and successful exact-head GitHub Actions.
-next_action: "Cursor must claim this task, implement only the server-only CSV complete-file mapped-validation foundation, checkpoint durably, verify it completely, and return READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
