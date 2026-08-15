@@ -100,7 +100,8 @@ The parser does **not** silently choose among multiple visible worksheets or inv
 - Hidden and very-hidden sheets are listed and flagged; they are never auto-selected when a visible candidate exists.
 - Merged cells are flagged and not expanded.
 - Blank or duplicate headers (case-insensitive, whitespace-normalized) yield `needs_attention`.
-- XML comments, CDATA, and processing instructions are ignored as markup. CDATA character data is preserved as ordinary text after escaping, so embedded `<sheet>`, `<Relationship>`, `<c>`, `<f>`, `<hyperlink>`, or `<mergeCell>` payloads cannot create workbook evidence. Only real OOXML elements in the required workbook, relationship, and worksheet locations are consumed. Duplicate cell coordinates fail closed as `malformed`.
+- Each consumed XML part must be one complete, well-formed document with the required root. Rootless fragments, extra roots, mismatched or truncated tags, and trailing element content fail closed as `malformed` and cannot produce a `ready` preview.
+- XML comments, CDATA, and processing instructions are ignored as markup. CDATA character data is preserved as ordinary text, so embedded `<sheet>`, `<Relationship>`, `<c>`, `<f>`, `<hyperlink>`, or `<mergeCell>` payloads cannot create workbook evidence. Only real OOXML elements in the required workbook, relationship, worksheet, content-types, and shared-string locations are consumed. Duplicate cell coordinates fail closed as `malformed`.
 - Aggregate character limits count every populated CSV field and XLSX cell once, including extra columns and hidden sheets, without widening the header-derived preview.
 - `[Content_Types].xml` must bind the non-macro workbook main content type to the canonical `/xl/workbook.xml` part, including namespace-prefixed `Override` elements.
 
@@ -114,12 +115,27 @@ Parseable-but-attention results stay in the preview model. Neither thrown errors
 
 ## Dependency choice
 
-No new runtime parser dependency is added.
+CSV still has no extra parser dependency. XLSX adds one runtime XML parser: `saxes`.
 
 - CSV is parsed by a bounded RFC 4180-style state machine in this repository (UTF-8 BOM, CRLF/LF/CR, quoted commas/newlines, escaped quotes, trailing blank rows). Bytes after a closing quote other than a delimiter, CR/LF, or end-of-input fail closed as `malformed`.
-- XLSX reuses the existing `jszip` dependency already required for DOCX ZIP inspection, with the same class of entry/expansion/ratio/nesting/time guards. Worksheet XML comments, processing instructions, and CDATA wrappers are stripped with a bounded scanner that preserves quoted attributes; CDATA payloads are reinserted as escaped character data so later tag scans cannot see non-element markup. Markup is then read only from the required OOXML elements. There is no general XML tree, DTD/entity expansion, or formula evaluation.
+- XLSX reuses the existing `jszip` dependency already required for DOCX ZIP inspection, with the same class of entry/expansion/ratio/nesting/time guards.
+- Consumed OOXML parts are then parsed with `saxes` in namespace-aware, non-fragment mode. `saxes` is a strict well-formedness parser (not an OOXML schema validator). It does not evaluate formulas, fetch URLs, or provide HTML/tag-soup recovery.
+- Before `saxes` runs, a comment/PI/CDATA-aware scan rejects `<!DOCTYPE`, `<!ENTITY`, and other markup declarations so DTDs never reach the parser. The parser's entity table is frozen to the five predefined XML entities (`amp`, `lt`, `gt`, `quot`, `apos`). External entities and external resources are never resolved.
+- After the document is proven to be one well-formed tree with the required root local name and namespace, data is read only from the structural locations below. There is no regex fallback that scans a whole part when the expected parent is missing.
 
-Adding SheetJS, ExcelJS, or a second CSV library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface. `package-lock.json` is unchanged.
+Required roots:
+
+| Part | Root local name | Namespace |
+|---|---|---|
+| `[Content_Types].xml` | `Types` | `http://schemas.openxmlformats.org/package/2006/content-types` |
+| `xl/workbook.xml` | `workbook` | `http://schemas.openxmlformats.org/spreadsheetml/2006/main` |
+| `xl/_rels/workbook.xml.rels` | `Relationships` | `http://schemas.openxmlformats.org/package/2006/relationships` |
+| consumed worksheets | `worksheet` | `http://schemas.openxmlformats.org/spreadsheetml/2006/main` |
+| `xl/sharedStrings.xml` (when present) | `sst` | `http://schemas.openxmlformats.org/spreadsheetml/2006/main` |
+
+Extraction locations: `Override` under `Types`; `sheets` under `workbook` and `sheet` under `workbook/sheets`; `Relationship` under `Relationships`; `sheetData` under `worksheet` and cells under `sheetData/row`; `si` under `sst`. Duplicate required containers and expected elements under the wrong parent fail as `malformed`. A structurally valid content-types document whose `/xl/workbook.xml` override is not the canonical XLSX workbook main type fails as `type_mismatch`.
+
+Comments and processing instructions are ignored as markup. CDATA is character data and cannot create elements. Adding SheetJS, ExcelJS, or a second CSV library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface.
 
 ## Recovery expectations
 

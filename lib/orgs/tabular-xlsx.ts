@@ -22,9 +22,14 @@ import {
   issue,
   parseCellRef,
 } from "@/lib/orgs/tabular-helpers";
+import {
+  OOXML_NS,
+  ooxmlAttr,
+  parseOoxmlDocument,
+  type OoxmlName,
+} from "@/lib/orgs/tabular-xml";
 import { inspectTabularZipDirectory } from "@/lib/orgs/tabular-zip";
 
-const TAG = "(?:[\\w.-]+:)?";
 const WORKSHEET_REL =
   "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
 const WORKBOOK_MAIN_TYPE =
@@ -117,17 +122,14 @@ export async function parseXlsxWorkbook(
     workbookRels.async("string"),
   ]);
   enforceTabularDeadline(started);
-  const safeContentTypes = prepareOoxmlXml(contentTypes);
-  const safeWorkbook = prepareOoxmlXml(workbook);
-  const safeRels = prepareOoxmlXml(rels);
-
-  if (/macroEnabled|vbaProject|application\/vnd\.ms-/i.test(safeContentTypes)) {
+  const parsedTypes = parseContentTypes(contentTypes, started);
+  if (parsedTypes.macros) {
     throw invalid("macros", "Macro-enabled spreadsheets are not supported.");
   }
-  if (/encrypted/i.test(safeContentTypes)) {
+  if (parsedTypes.encrypted) {
     throw invalid("encrypted", "Encrypted spreadsheets are not supported.");
   }
-  if (!hasCanonicalWorkbookMainType(safeContentTypes)) {
+  if (!parsedTypes.canonicalWorkbook) {
     throw invalid("type_mismatch", "The ZIP is not a standard XLSX workbook.");
   }
 
@@ -143,8 +145,8 @@ export async function parseXlsxWorkbook(
     issues.push(issue("external_link", "warning"));
   }
 
-  const sheetTargets = parseWorkbookRelationships(safeRels);
-  const sheetRefs = parseWorkbookSheets(safeWorkbook, sheetTargets);
+  const sheetTargets = parseWorkbookRelationships(rels, started);
+  const sheetRefs = parseWorkbookSheets(workbook, sheetTargets, started);
   if (sheetRefs.length > TABULAR_MAX_SHEETS) {
     throw invalid(
       "too_many_sheets",
@@ -173,12 +175,7 @@ export async function parseXlsxWorkbook(
     }
     const sheetXml = await sheetFile.async("string");
     enforceTabularDeadline(started);
-    const parsed = parseWorksheet(
-      prepareOoxmlXml(sheetXml),
-      info,
-      sharedStrings,
-      started,
-    );
+    const parsed = parseWorksheet(sheetXml, info, sharedStrings, started);
     aggregateChars += parsed.aggregateChars;
     if (aggregateChars > TABULAR_MAX_AGGREGATE_CHARS) {
       throw invalid(
@@ -200,22 +197,102 @@ export async function parseXlsxWorkbook(
   return { sheets: sheetInfos, parsedSheets, issues };
 }
 
-function parseWorkbookRelationships(relsXml: string): Map<string, string> {
-  const byId = new Map<string, string>();
-  const inner = extractElementInner(relsXml, "Relationships") ?? relsXml;
-  const pattern = new RegExp(`<${TAG}Relationship\\b([^>]*)/?>`, "gi");
-  for (const match of inner.matchAll(pattern)) {
-    const attrs = parseAttrs(match[1] ?? "");
-    const type = attrs.Type ?? attrs.type ?? "";
-    const id = attrs.Id ?? attrs.ID ?? "";
-    const target = attrs.Target ?? attrs.target ?? "";
-    if (!id || !target) {
-      continue;
+function parseContentTypes(
+  xml: string,
+  started: number,
+): { canonicalWorkbook: boolean; macros: boolean; encrypted: boolean } {
+  const workbookTypes: string[] = [];
+  let macros = false;
+  let encrypted = false;
+  const noteContentType = (contentType: string): void => {
+    if (/macroEnabled|vbaProject|application\/vnd\.ms-/i.test(contentType)) {
+      macros = true;
     }
-    if (type === WORKSHEET_REL || type.endsWith("/worksheet")) {
-      byId.set(id, target);
+    if (/encrypted/i.test(contentType)) {
+      encrypted = true;
     }
+  };
+  parseOoxmlDocument({
+    xml,
+    rootLocalName: "Types",
+    rootNamespace: OOXML_NS.contentTypes,
+    started,
+    onOpen(name, attrs, path) {
+      if (isOoxmlName(name, "Types", OOXML_NS.contentTypes)) {
+        if (path.length !== 1) {
+          throw duplicateContainer();
+        }
+        return;
+      }
+      if (isOoxmlName(name, "Default", OOXML_NS.contentTypes)) {
+        requireDirectChild(path, "Types", OOXML_NS.contentTypes);
+        noteContentType(
+          ooxmlAttr(attrs, "ContentType") || ooxmlAttr(attrs, "contentType"),
+        );
+        return;
+      }
+      if (!isOoxmlName(name, "Override", OOXML_NS.contentTypes)) {
+        return;
+      }
+      requireDirectChild(path, "Types", OOXML_NS.contentTypes);
+      const contentType =
+        ooxmlAttr(attrs, "ContentType") || ooxmlAttr(attrs, "contentType");
+      noteContentType(contentType);
+      const partName = (
+        ooxmlAttr(attrs, "PartName") || ooxmlAttr(attrs, "partName")
+      )
+        .replaceAll("\\", "/")
+        .toLowerCase();
+      if (partName === "/xl/workbook.xml") {
+        workbookTypes.push(contentType);
+      }
+    },
+  });
+  if (workbookTypes.length > 1) {
+    throw duplicateContainer();
   }
+  return {
+    canonicalWorkbook:
+      workbookTypes.length === 1 &&
+      (workbookTypes[0] ?? "").toLowerCase() ===
+        WORKBOOK_MAIN_TYPE.toLowerCase(),
+    macros,
+    encrypted,
+  };
+}
+
+function parseWorkbookRelationships(
+  relsXml: string,
+  started: number,
+): Map<string, string> {
+  const byId = new Map<string, string>();
+  parseOoxmlDocument({
+    xml: relsXml,
+    rootLocalName: "Relationships",
+    rootNamespace: OOXML_NS.relationships,
+    started,
+    onOpen(name, attrs, path) {
+      if (isOoxmlName(name, "Relationships", OOXML_NS.relationships)) {
+        if (path.length !== 1) {
+          throw duplicateContainer();
+        }
+        return;
+      }
+      if (!isOoxmlName(name, "Relationship", OOXML_NS.relationships)) {
+        return;
+      }
+      requireDirectChild(path, "Relationships", OOXML_NS.relationships);
+      const type = ooxmlAttr(attrs, "Type") || ooxmlAttr(attrs, "type");
+      const id = ooxmlAttr(attrs, "Id") || ooxmlAttr(attrs, "ID");
+      const target = ooxmlAttr(attrs, "Target") || ooxmlAttr(attrs, "target");
+      if (!id || !target) {
+        return;
+      }
+      if (type === WORKSHEET_REL || type.endsWith("/worksheet")) {
+        byId.set(id, target);
+      }
+    },
+  });
   if (byId.size === 0) {
     throw invalid(
       "malformed",
@@ -228,35 +305,62 @@ function parseWorkbookRelationships(relsXml: string): Map<string, string> {
 function parseWorkbookSheets(
   workbookXml: string,
   rels: Map<string, string>,
+  started: number,
 ): Array<TabularSheetInfo & { path: string }> {
   const sheets: Array<TabularSheetInfo & { path: string }> = [];
-  const inner = extractElementInner(workbookXml, "sheets");
-  if (inner === null) {
-    return sheets;
-  }
-  const pattern = new RegExp(`<${TAG}sheet\\b([^>]*)/?>`, "gi");
-  for (const match of inner.matchAll(pattern)) {
-    const attrs = parseAttrs(match[1] ?? "");
-    const name = (attrs.name ?? "").trim();
-    const rId = attrs["r:id"] ?? attrs.rId ?? attrs.id ?? "";
-    const target = rId ? rels.get(rId) : undefined;
-    if (!name || !target) {
-      continue;
-    }
-    const state = (attrs.state ?? "visible").toLowerCase();
-    const visibility: TabularSheetVisibility =
-      state === "veryhidden"
-        ? "veryHidden"
-        : state === "hidden"
-          ? "hidden"
-          : "visible";
-    sheets.push({
-      name,
-      index: sheets.length,
-      visibility,
-      path: worksheetPath(target),
-    });
-  }
+  let sawSheets = false;
+  parseOoxmlDocument({
+    xml: workbookXml,
+    rootLocalName: "workbook",
+    rootNamespace: OOXML_NS.spreadsheetml,
+    started,
+    onOpen(name, attrs, path) {
+      if (isOoxmlName(name, "workbook", OOXML_NS.spreadsheetml)) {
+        if (path.length !== 1) {
+          throw duplicateContainer();
+        }
+        return;
+      }
+      if (isOoxmlName(name, "sheets", OOXML_NS.spreadsheetml)) {
+        requireDirectChild(path, "workbook", OOXML_NS.spreadsheetml);
+        if (sawSheets) {
+          throw duplicateContainer();
+        }
+        sawSheets = true;
+        return;
+      }
+      if (!isOoxmlName(name, "sheet", OOXML_NS.spreadsheetml)) {
+        return;
+      }
+      requireDirectChild(path, "sheets", OOXML_NS.spreadsheetml);
+      if (
+        path[0]?.localName !== "workbook" ||
+        path[0]?.namespace !== OOXML_NS.spreadsheetml
+      ) {
+        throw malformedXml();
+      }
+      const sheetName = ooxmlAttr(attrs, "name").trim();
+      const rId =
+        ooxmlAttr(attrs, "id", OOXML_NS.officeRel) || ooxmlAttr(attrs, "id");
+      const target = rId ? rels.get(rId) : undefined;
+      if (!sheetName || !target) {
+        return;
+      }
+      const state = ooxmlAttr(attrs, "state").toLowerCase();
+      const visibility: TabularSheetVisibility =
+        state === "veryhidden"
+          ? "veryHidden"
+          : state === "hidden"
+            ? "hidden"
+            : "visible";
+      sheets.push({
+        name: sheetName,
+        index: sheets.length,
+        visibility,
+        path: worksheetPath(target),
+      });
+    },
+  });
   return sheets;
 }
 
@@ -270,20 +374,44 @@ async function readSharedStrings(
   }
   const xml = await file.async("string");
   enforceTabularDeadline(started);
-  const safeXml = prepareOoxmlXml(xml);
+  return parseSharedStrings(xml, started);
+}
+
+function parseSharedStrings(xml: string, started: number): string[] {
   const values: string[] = [];
-  const siPattern = new RegExp(
-    `<${TAG}si\\b[^>]*>([\\s\\S]*?)</${TAG}si>`,
-    "gi",
-  );
-  for (const match of safeXml.matchAll(siPattern)) {
-    enforceTabularDeadline(started);
-    const body = (match[1] ?? "").replace(
-      new RegExp(`<${TAG}rPh\\b[\\s\\S]*?</${TAG}rPh>`, "gi"),
-      "",
-    );
-    values.push(extractTextNodes(body));
-  }
+  let current: string[] | null = null;
+  parseOoxmlDocument({
+    xml,
+    rootLocalName: "sst",
+    rootNamespace: OOXML_NS.spreadsheetml,
+    started,
+    onOpen(name, _attrs, path) {
+      if (isOoxmlName(name, "sst", OOXML_NS.spreadsheetml)) {
+        if (path.length !== 1) {
+          throw duplicateContainer();
+        }
+        return;
+      }
+      if (!isOoxmlName(name, "si", OOXML_NS.spreadsheetml)) {
+        return;
+      }
+      requireDirectChild(path, "sst", OOXML_NS.spreadsheetml);
+      current = [];
+    },
+    onClose(name, text, path) {
+      if (
+        isOoxmlName(name, "t", OOXML_NS.spreadsheetml) &&
+        current &&
+        !hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)
+      ) {
+        current.push(text);
+      }
+      if (isOoxmlName(name, "si", OOXML_NS.spreadsheetml) && current) {
+        values.push(current.join(""));
+        current = null;
+      }
+    },
+  });
   return values;
 }
 
@@ -294,44 +422,136 @@ function parseWorksheet(
   started: number,
 ): ParsedTabularSheet {
   const issues: TabularIssue[] = [];
-  if (new RegExp(`<${TAG}hyperlink\\b`, "i").test(sheetXml)) {
-    issues.push(
-      issue("hyperlink", "warning", {
-        sheetIndex: info.index,
-        sheetName: info.name,
-      }),
-    );
-  }
-  if (new RegExp(`<${TAG}mergeCell\\b`, "i").test(sheetXml)) {
-    issues.push(
-      issue("merged_cells", "warning", {
-        sheetIndex: info.index,
-        sheetName: info.name,
-      }),
-    );
-  }
-
   const cells = new Map<string, string>();
   let maxRow = 0;
   let headerColumnCount = 0;
   let minRow = Number.POSITIVE_INFINITY;
-  const cellXml = extractElementInner(sheetXml, "sheetData") ?? "";
-  const cellPattern = new RegExp(
-    `<${TAG}c\\b([^>]*)(?:/>|>([\\s\\S]*?)</${TAG}c>)`,
-    "gi",
-  );
+  let sawSheetData = false;
+  let currentCell: {
+    ref: string;
+    type: string;
+    formula: boolean;
+    inline: boolean;
+    value: string | null;
+    texts: string[];
+  } | null = null;
   let scanned = 0;
-  for (const match of cellXml.matchAll(cellPattern)) {
-    scanned += 1;
-    if (scanned % 256 === 0) {
-      enforceTabularDeadline(started);
+
+  parseOoxmlDocument({
+    xml: sheetXml,
+    rootLocalName: "worksheet",
+    rootNamespace: OOXML_NS.spreadsheetml,
+    started,
+    onOpen(name, attrs, path) {
+      if (isOoxmlName(name, "worksheet", OOXML_NS.spreadsheetml)) {
+        if (path.length !== 1) {
+          throw duplicateContainer();
+        }
+        return;
+      }
+      if (isOoxmlName(name, "sheetData", OOXML_NS.spreadsheetml)) {
+        requireDirectChild(path, "worksheet", OOXML_NS.spreadsheetml);
+        if (sawSheetData) {
+          throw duplicateContainer();
+        }
+        sawSheetData = true;
+        return;
+      }
+      if (isOoxmlName(name, "row", OOXML_NS.spreadsheetml)) {
+        requireDirectChild(path, "sheetData", OOXML_NS.spreadsheetml);
+        return;
+      }
+      if (isOoxmlName(name, "c", OOXML_NS.spreadsheetml)) {
+        requireDirectChild(path, "row", OOXML_NS.spreadsheetml);
+        if (!hasAncestor(path, "sheetData", OOXML_NS.spreadsheetml)) {
+          throw malformedXml();
+        }
+        currentCell = {
+          ref: ooxmlAttr(attrs, "r"),
+          type: ooxmlAttr(attrs, "t").toLowerCase(),
+          formula: false,
+          inline: false,
+          value: null,
+          texts: [],
+        };
+        return;
+      }
+      if (
+        currentCell &&
+        isOoxmlName(name, "f", OOXML_NS.spreadsheetml) &&
+        parentIs(path, "c", OOXML_NS.spreadsheetml)
+      ) {
+        currentCell.formula = true;
+        return;
+      }
+      if (
+        currentCell &&
+        isOoxmlName(name, "is", OOXML_NS.spreadsheetml) &&
+        parentIs(path, "c", OOXML_NS.spreadsheetml)
+      ) {
+        currentCell.inline = true;
+        return;
+      }
+      if (isOoxmlName(name, "hyperlink", OOXML_NS.spreadsheetml)) {
+        issues.push(
+          issue("hyperlink", "warning", {
+            sheetIndex: info.index,
+            sheetName: info.name,
+          }),
+        );
+        return;
+      }
+      if (isOoxmlName(name, "mergeCell", OOXML_NS.spreadsheetml)) {
+        issues.push(
+          issue("merged_cells", "warning", {
+            sheetIndex: info.index,
+            sheetName: info.name,
+          }),
+        );
+      }
+    },
+    onClose(name, text, path) {
+      if (
+        currentCell &&
+        isOoxmlName(name, "v", OOXML_NS.spreadsheetml) &&
+        parentIs(path, "c", OOXML_NS.spreadsheetml) &&
+        currentCell.value === null
+      ) {
+        currentCell.value = text;
+        return;
+      }
+      if (
+        currentCell &&
+        isOoxmlName(name, "t", OOXML_NS.spreadsheetml) &&
+        !hasAncestor(path, "rPh", OOXML_NS.spreadsheetml)
+      ) {
+        currentCell.texts.push(text);
+        return;
+      }
+      if (!currentCell || !isOoxmlName(name, "c", OOXML_NS.spreadsheetml)) {
+        return;
+      }
+      scanned += 1;
+      if (scanned % 256 === 0) {
+        enforceTabularDeadline(started);
+      }
+      finishCell(currentCell);
+      currentCell = null;
+    },
+  });
+
+  function finishCell(cell: {
+    ref: string;
+    type: string;
+    formula: boolean;
+    inline: boolean;
+    value: string | null;
+    texts: string[];
+  }): void {
+    if (!cell.ref) {
+      return;
     }
-    const attrs = parseAttrs(match[1] ?? "");
-    const ref = attrs.r;
-    if (!ref) {
-      continue;
-    }
-    const { column, row } = parseCellRef(ref);
+    const { column, row } = parseCellRef(cell.ref);
     if (column > TABULAR_MAX_COLUMNS) {
       throw invalid(
         "too_many_columns",
@@ -341,11 +561,14 @@ function parseWorksheet(
     if (row > TABULAR_MAX_ROWS) {
       throw invalid("too_many_rows", "The spreadsheet has too many rows.");
     }
-    const inner = match[2] ?? "";
-    const formula = new RegExp(`<${TAG}f\\b`, "i").test(inner);
-    const type = (attrs.t ?? "").toLowerCase();
-    const rawValue = extractCachedValue(inner, type, sharedStrings);
-    if (formula) {
+    const rawValue = extractCachedValue(
+      cell.type,
+      cell.inline,
+      cell.value ?? "",
+      cell.texts,
+      sharedStrings,
+    );
+    if (cell.formula) {
       issues.push(
         issue(
           rawValue.trim() !== "" ? "cached_formula" : "formula",
@@ -358,7 +581,10 @@ function parseWorksheet(
           },
         ),
       );
-    } else if (isLiteralStringCell(type, inner) && isFormulaLike(rawValue)) {
+    } else if (
+      isLiteralStringCell(cell.type, cell.inline) &&
+      isFormulaLike(rawValue)
+    ) {
       issues.push(
         issue("formula_like", "warning", {
           sheetIndex: info.index,
@@ -477,20 +703,17 @@ function parseWorksheet(
 }
 
 function extractCachedValue(
-  inner: string,
   type: string,
+  inline: boolean,
+  value: string,
+  texts: string[],
   sharedStrings: string[],
 ): string {
-  if (type === "inlineStr" || new RegExp(`<${TAG}is\\b`, "i").test(inner)) {
-    return extractTextNodes(inner);
+  if (type === "inlinestr" || inline) {
+    return texts.join("");
   }
-  const valueMatch = new RegExp(
-    `<${TAG}v\\b[^>]*>([\\s\\S]*?)</${TAG}v>`,
-    "i",
-  ).exec(inner);
-  const raw = decodeXmlText(valueMatch?.[1] ?? "");
   if (type === "s") {
-    const index = Number.parseInt(raw.trim(), 10);
+    const index = Number.parseInt(value.trim(), 10);
     if (
       !Number.isInteger(index) ||
       index < 0 ||
@@ -504,19 +727,10 @@ function extractCachedValue(
     return sharedStrings[index] ?? "";
   }
   if (type === "b") {
-    const flag = raw.trim();
+    const flag = value.trim();
     return flag === "1" || flag.toLowerCase() === "true" ? "TRUE" : "FALSE";
   }
-  return raw;
-}
-
-function extractTextNodes(xml: string): string {
-  const pattern = new RegExp(`<${TAG}t\\b[^>]*>([\\s\\S]*?)</${TAG}t>`, "gi");
-  const parts: string[] = [];
-  for (const match of xml.matchAll(pattern)) {
-    parts.push(decodeXmlText(match[1] ?? ""));
-  }
-  return parts.join("");
+  return value;
 }
 
 function worksheetPath(target: string): string {
@@ -530,200 +744,59 @@ function worksheetPath(target: string): string {
   return `xl/${normalized.replace(/^\.\//, "")}`;
 }
 
-function parseAttrs(raw: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  const pattern = /([:\w.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
-  for (const match of raw.matchAll(pattern)) {
-    attrs[match[1] ?? ""] = decodeXmlText(match[2] ?? match[3] ?? "");
-  }
-  return attrs;
+function isLiteralStringCell(type: string, inline: boolean): boolean {
+  return type === "s" || type === "str" || type === "inlinestr" || inline;
 }
 
-function decodeXmlText(value: string): string {
-  if (
-    /<!ENTITY|&[a-zA-Z][a-zA-Z0-9]+;/.test(value) &&
-    !isSafeEntityOnly(value)
-  ) {
-    const unsafe = value.replace(
-      /&(lt|gt|amp|quot|apos|#(?:x[0-9a-fA-F]+|\d+));/g,
-      "",
-    );
-    if (/&[a-zA-Z]/.test(unsafe)) {
-      throw invalid(
-        "malformed",
-        "The spreadsheet XML contains unsupported entities.",
-      );
-    }
-  }
-  return value
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) => {
-      const code = Number.parseInt(hex, 16);
-      return safeXmlChar(code);
-    })
-    .replace(/&#(\d+);/g, (_, dec: string) => {
-      const code = Number.parseInt(dec, 10);
-      return safeXmlChar(code);
-    })
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+function isOoxmlName(
+  name: OoxmlName,
+  localName: string,
+  namespace: string,
+): boolean {
+  return name.localName === localName && name.namespace === namespace;
 }
 
-function isSafeEntityOnly(value: string): boolean {
-  return !/&(?!(lt|gt|amp|quot|apos|#(?:x[0-9a-fA-F]+|\d+));)/.test(value);
+function parentIs(
+  path: readonly OoxmlName[],
+  localName: string,
+  namespace: string,
+): boolean {
+  const parent = path[path.length - 2];
+  return parent?.localName === localName && parent.namespace === namespace;
 }
 
-function safeXmlChar(code: number): string {
-  if (
-    !Number.isInteger(code) ||
-    code < 9 ||
-    code === 11 ||
-    code === 12 ||
-    code > 0x10ffff
-  ) {
-    throw invalid(
-      "malformed",
-      "The spreadsheet XML contains an invalid character.",
-    );
-  }
-  if (code === 0) {
-    throw invalid(
-      "binary_text",
-      "Spreadsheet cells may not contain NUL bytes.",
-    );
-  }
-  return String.fromCodePoint(code);
-}
-
-function extractElementInner(xml: string, localName: string): string | null {
-  const pattern = new RegExp(
-    `<${TAG}${localName}\\b[^>]*>([\\s\\S]*?)</${TAG}${localName}>`,
-    "i",
-  );
-  const match = pattern.exec(xml);
-  if (!match) {
-    return null;
-  }
-  return match[1] ?? "";
-}
-
-function isLiteralStringCell(type: string, inner: string): boolean {
-  return (
-    type === "s" ||
-    type === "str" ||
-    type === "inlinestr" ||
-    new RegExp(`<${TAG}is\\b`, "i").test(inner)
+function hasAncestor(
+  path: readonly OoxmlName[],
+  localName: string,
+  namespace: string,
+): boolean {
+  return path.some(
+    (item, index) =>
+      index < path.length - 1 &&
+      item.localName === localName &&
+      item.namespace === namespace,
   );
 }
 
-function hasCanonicalWorkbookMainType(contentTypes: string): boolean {
-  const pattern = new RegExp(`<${TAG}Override\\b([^>]*)/?>`, "gi");
-  for (const match of contentTypes.matchAll(pattern)) {
-    const attrs = parseAttrs(match[1] ?? "");
-    const partName = (attrs.PartName ?? attrs.partName ?? "")
-      .replaceAll("\\", "/")
-      .toLowerCase();
-    if (partName !== "/xl/workbook.xml") {
-      continue;
-    }
-    const contentType = attrs.ContentType ?? attrs.contentType ?? "";
-    return contentType.toLowerCase() === WORKBOOK_MAIN_TYPE.toLowerCase();
+function requireDirectChild(
+  path: readonly OoxmlName[],
+  parentLocalName: string,
+  parentNamespace: string,
+): void {
+  if (!parentIs(path, parentLocalName, parentNamespace)) {
+    throw malformedXml();
   }
-  return false;
 }
 
-function prepareOoxmlXml(xml: string): string {
-  const stripped = stripIgnorableXml(xml);
-  rejectUnsafeXml(stripped);
-  return stripped;
+function duplicateContainer(): Error {
+  return invalid(
+    "malformed",
+    "The spreadsheet XML contains duplicate structural containers.",
+  );
 }
 
-function stripIgnorableXml(xml: string): string {
-  let output = "";
-  let index = 0;
-  while (index < xml.length) {
-    if (xml.startsWith("<!--", index)) {
-      const end = xml.indexOf("-->", index + 4);
-      if (end < 0) {
-        throw invalid("malformed", "The spreadsheet XML is malformed.");
-      }
-      const inner = xml.slice(index + 4, end);
-      if (inner.includes("--")) {
-        throw invalid("malformed", "The spreadsheet XML is malformed.");
-      }
-      index = end + 3;
-      continue;
-    }
-    if (xml.startsWith("<![CDATA[", index)) {
-      const end = xml.indexOf("]]>", index + 9);
-      if (end < 0) {
-        throw invalid("malformed", "The spreadsheet XML is malformed.");
-      }
-      output += escapeXmlCharacterData(xml.slice(index + 9, end));
-      index = end + 3;
-      continue;
-    }
-    if (xml.startsWith("<?", index)) {
-      const end = xml.indexOf("?>", index + 2);
-      if (end < 0) {
-        throw invalid("malformed", "The spreadsheet XML is malformed.");
-      }
-      index = end + 2;
-      continue;
-    }
-    if (xml[index] === "<") {
-      const quoted = readXmlTag(xml, index);
-      output += quoted.text;
-      index = quoted.end;
-      continue;
-    }
-    output += xml[index] ?? "";
-    index += 1;
-  }
-  return output;
-}
-
-function readXmlTag(xml: string, start: number): { text: string; end: number } {
-  let index = start + 1;
-  let quote: '"' | "'" | null = null;
-  while (index < xml.length) {
-    const character = xml[index] ?? "";
-    if (quote) {
-      if (character === quote) {
-        quote = null;
-      }
-      index += 1;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-      index += 1;
-      continue;
-    }
-    if (character === ">") {
-      return { text: xml.slice(start, index + 1), end: index + 1 };
-    }
-    index += 1;
-  }
-  throw invalid("malformed", "The spreadsheet XML is malformed.");
-}
-
-function escapeXmlCharacterData(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function rejectUnsafeXml(xml: string): void {
-  if (/<!DOCTYPE|<!ENTITY|SYSTEM\s+["']/i.test(xml)) {
-    throw invalid(
-      "malformed",
-      "The spreadsheet XML contains prohibited declarations.",
-    );
-  }
+function malformedXml(): Error {
+  return invalid("malformed", "The spreadsheet XML is malformed.");
 }
 
 function addAggregate(current: number, cell: string): number {
