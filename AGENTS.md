@@ -23,6 +23,11 @@ status: READY_FOR_CURSOR
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
+cursor_attempt_count: 0
+consecutive_unchanged_checks: 1
+last_cursor_activity_sha: null
+stop_reason: null
+unchanged_check_times: ["2026-08-14T22:30:00-04:00"]
 next_action: "Cursor must merge origin/develop into this branch without rebasing, verify the combined Phase 4B corrective work with the already-merged Phase 4C code, push the same branch, and report READY_FOR_REVIEW."
 ```
 
