@@ -115,9 +115,10 @@ Parseable-but-attention results stay in the preview model. Neither thrown errors
 
 ## Dependency choice
 
-CSV still has no extra parser dependency. XLSX adds one runtime XML parser: `saxes`.
+CSV uses the official Adaltas `csv-parse` 7.0.2 stream parser as the shared grammar for preview and complete-file validation. XLSX adds one runtime XML parser: `saxes`.
 
-- CSV is parsed by a bounded RFC 4180-style state machine in this repository (UTF-8 BOM, CRLF/LF/CR, quoted commas/newlines, escaped quotes, trailing blank rows). Bytes after a closing quote other than a delimiter, CR/LF, or end-of-input fail closed as `malformed`.
+- CSV is parsed by `csv-parse` (MIT, Node 22 compatible, no extra runtime dependency of its own) through one repository adapter. Configuration is fail-closed: UTF-8 with fatal decode and BOM stripping before parse, RFC 4180 quoting, escaped quotes, multiline fields, CR/LF/CRLF records, no comment skipping, no permissive quote recovery, and a bounded `max_record_size` consistent with cell/column/aggregate limits. Bytes after a closing quote other than a delimiter, CR/LF, or end-of-input fail closed as `malformed`. Trailing blank records are stripped. Inconsistent or extra columns remain attention issues rather than silent acceptance. `csv-parse` does not evaluate formulas, fetch URLs, or validate Outreach business semantics.
+- Preview and complete-file validation must use this adapter so they cannot disagree about whether the same CSV is structurally valid.
 - XLSX reuses the existing `jszip` dependency already required for DOCX ZIP inspection, with the same class of entry/expansion/ratio/nesting/time guards.
 - Consumed OOXML parts are then parsed with `saxes` in namespace-aware, non-fragment mode. `saxes` is a strict well-formedness parser (not an OOXML schema validator). It does not evaluate formulas, fetch URLs, or provide HTML/tag-soup recovery.
 - Before `saxes` runs, a comment/PI/CDATA-aware scan rejects `<!DOCTYPE`, `<!ENTITY`, and other markup declarations so DTDs never reach the parser. The parser's entity table is frozen to the five predefined XML entities (`amp`, `lt`, `gt`, `quot`, `apos`). External entities and external resources are never resolved.
@@ -136,7 +137,7 @@ Required roots:
 
 Extraction locations: `Override` under `Types`; `sheets` under `workbook` and `sheet` under `workbook/sheets`; `Relationship` under `Relationships`; `sheetData` under `worksheet` and cells under `sheetData/row`; `si` under `sst`. Shared-string text is consumed only from `si/t` and `si/r/t`. Inline-string text is consumed only from `c/is/t` and `c/is/r/t`. Phonetic `rPh` text is ignored and is not preview evidence. Same-namespace `<t>` under any other parent inside those consumed structures fails as `malformed`. Duplicate required containers and expected elements under the wrong parent fail as `malformed`. A structurally valid content-types document whose `/xl/workbook.xml` override is not the canonical XLSX workbook main type fails as `type_mismatch`.
 
-Comments and processing instructions are ignored as markup. CDATA is character data and cannot create elements. Adding SheetJS, ExcelJS, or a second CSV library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface.
+Comments and processing instructions are ignored as markup. CDATA is character data and cannot create elements. Adding SheetJS, ExcelJS, or a second XLSX library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface. CSV grammar is provided only by the shared `csv-parse` adapter.
 
 ## Recovery expectations
 
@@ -150,5 +151,5 @@ Comments and processing instructions are ignored as markup. CDATA is character d
 - Phase 4A remains the manual knowledge editor.
 - Phase 4B remains the only PDF/DOCX/TXT upload and extraction path. CSV/XLSX still fail document validation.
 - Phase 4C remains the structured offering catalog. This task does not create offerings.
-- Later Phase 4D tasks must consume this normalized preview rather than re-parsing untrusted bytes with a second library.
+- Later Phase 4D tasks must consume this normalized preview rather than re-parsing untrusted bytes with a second library. CSV complete-file mapped validation (task 3) reuses the same CSV inspect path and still does not persist imports or map XLSX. See `docs/phase-4d-csv-complete-file-validation.md`.
 - CSV column mapping (task 2) is a separate dry-run preview foundation. See `docs/phase-4d-csv-mapping-foundation.md`. It does not persist imports and does not map XLSX.

@@ -25,8 +25,13 @@ export function invalid(
   return new TabularValidationError(code, message);
 }
 
-export function enforceTabularDeadline(started: number): void {
-  if (performance.now() - started > TABULAR_MAX_PARSE_MS) {
+export type TabularNow = () => number;
+
+export function enforceTabularDeadline(
+  started: number,
+  now: TabularNow = () => performance.now(),
+): void {
+  if (now() - started > TABULAR_MAX_PARSE_MS) {
     throw invalid("timeout", "Tabular validation exceeded its time limit.");
   }
 }

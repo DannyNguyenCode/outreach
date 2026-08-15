@@ -20,7 +20,7 @@ Explicitly deferred:
 
 - Authorized upload routes, browser forms, server actions, and mapping UI
 - Saved mapping templates
-- Complete-file row validation beyond the bounded preview
+- Complete-file row validation beyond the bounded preview (see `docs/phase-4d-csv-complete-file-validation.md`)
 - Acknowledgment or override of parser attention issues
 - Import records, background jobs, progress, retry, and idempotent persistence
 - Offering/knowledge creation, confirmation, activation, and retrieval
@@ -34,6 +34,7 @@ No imported customer data is persisted by this task.
 ## Trust boundaries
 
 - Mapping identity is the parser's stable one-based `sourceColumn`, never header text alone.
+- Canonical mapping identity sorts mapping entries by numeric `sourceColumn`, with `target` as a defensive tie-breaker, and rebuilds objects with a fixed property order. Equivalent mappings that differ only in incoming array order produce identical `mappingIdentity`, mapped value insertion order, and mapped rows.
 - Header names may inform non-authoritative suggestions only when an exact normalized alias is unique. Suggestions are never applied unless the customer maps that source column explicitly.
 - Spreadsheet content remains untrusted data. Formulas are not evaluated. URLs, file bytes, and secrets are not fetched or echoed in error objects.
 - Row issues expose machine codes plus row/column/target locations. They must not include cell contents, formulas, URLs, or secrets.

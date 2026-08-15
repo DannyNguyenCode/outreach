@@ -12,6 +12,7 @@ import {
   type TabularNormalizedPreview,
 } from "@/lib/orgs/tabular-types";
 import {
+  canonicalizeCsvMapping,
   CsvMappingError,
   CSV_MAPPING_TARGET_REGISTRY,
   getCsvMappingRegistry,
@@ -407,6 +408,37 @@ describe("CSV mapping runtime structure", () => {
         hasMoreRows: false,
         totalRowCount: 1,
         mappedPreviewRowCount: 1,
+      }),
+    );
+  });
+
+  it("canonicalizes equivalent mappings with permuted column arrays", () => {
+    const reversed = {
+      family: "knowledge" as const,
+      columns: [...validMapping.columns].reverse(),
+    };
+    const swapped = {
+      family: "knowledge" as const,
+      columns: [
+        validMapping.columns[2]!,
+        validMapping.columns[0]!,
+        validMapping.columns[1]!,
+      ],
+    };
+    const first = canonicalizeCsvMapping(reversed);
+    const second = canonicalizeCsvMapping(swapped);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(JSON.stringify(first)).toBe(
+      JSON.stringify(parseCsvMappingInput(reversed)),
+    );
+    const mappedFirst = mapCsvPreview(preview, reversed);
+    const mappedSecond = mapCsvPreview(preview, swapped);
+    expect(JSON.stringify(mappedFirst)).toBe(JSON.stringify(mappedSecond));
+    expect(JSON.stringify(mappedFirst.rows[0]?.values)).toBe(
+      JSON.stringify({
+        "knowledge.title": { kind: "text", value: "Policy" },
+        "knowledge.sectionTitle": { kind: "text", value: "Overview" },
+        "knowledge.passageBody": { kind: "text", value: "Returns" },
       }),
     );
   });

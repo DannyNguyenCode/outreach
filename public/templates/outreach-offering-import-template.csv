@@ -1,0 +1,2 @@
+Name,Description,Offering type,Pricing model,Quote required,Effective from,Effective until,Price amount,Price currency,Billing frequency
+Weekday desk,A reserved weekday desk,PRODUCT,FIXED_ONE_TIME,false,2026-01-15,,25.00,USD,ONE_TIME

@@ -461,7 +461,29 @@ export function parseCsvMappingInput(input: unknown): CsvMappingInput {
     });
   }
 
-  return { family, columns };
+  return canonicalizeCsvMapping({ family, columns });
+}
+
+/**
+ * Rebuilds a mapping with a fixed property set and sourceColumn order so
+ * equivalent mappings are byte-for-byte identical. Does not mutate input.
+ */
+export function canonicalizeCsvMapping(
+  mapping: CsvMappingInput,
+): CsvMappingInput {
+  const columns = mapping.columns.map((column) => ({
+    sourceColumn: column.sourceColumn,
+    target: column.target,
+  }));
+  columns.sort(
+    (left, right) =>
+      left.sourceColumn - right.sourceColumn ||
+      left.target.localeCompare(right.target),
+  );
+  return {
+    family: mapping.family,
+    columns,
+  };
 }
 
 export function mapCsvPreview(
@@ -472,25 +494,42 @@ export function mapCsvPreview(
   const assignments = validateParsedCsvMapping(preview, parsed);
   const columnCount = preview.headers.length;
   const boundedRows = preview.previewRows.slice(0, TABULAR_PREVIEW_ROWS);
+  const mapped = mapCsvRows(
+    boundedRows,
+    columnCount,
+    assignments,
+    parsed.family,
+  );
 
+  return {
+    family: parsed.family,
+    rows: mapped.rows,
+    skippedBlankRowCount: mapped.skippedBlankRowCount,
+    hasMoreRows: preview.totalRowCount > boundedRows.length,
+    totalRowCount: preview.totalRowCount,
+    mappedPreviewRowCount: mapped.rows.length,
+  };
+}
+
+export function mapCsvRows(
+  rows: readonly TabularPreviewRow[],
+  columnCount: number,
+  assignments: ReadonlyMap<
+    number,
+    CsvMappingTargetFieldId | CsvMappingIgnoredTarget
+  >,
+  family: CsvMappingTargetFamily,
+): { rows: CsvMappedPreviewRow[]; skippedBlankRowCount: number } {
   let skippedBlankRowCount = 0;
-  const rows: CsvMappedPreviewRow[] = [];
-  for (const row of boundedRows) {
+  const mappedRows: CsvMappedPreviewRow[] = [];
+  for (const row of rows) {
     if (isCompletelyBlankRow(row, columnCount)) {
       skippedBlankRowCount += 1;
       continue;
     }
-    rows.push(mapPreviewRow(row, columnCount, assignments, parsed.family));
+    mappedRows.push(mapPreviewRow(row, columnCount, assignments, family));
   }
-
-  return {
-    family: parsed.family,
-    rows,
-    skippedBlankRowCount,
-    hasMoreRows: preview.totalRowCount > boundedRows.length,
-    totalRowCount: preview.totalRowCount,
-    mappedPreviewRowCount: rows.length,
-  };
+  return { rows: mappedRows, skippedBlankRowCount };
 }
 
 export function validateCsvMapping(
@@ -584,7 +623,12 @@ function mapPreviewRow(
   >();
   const columnByField = new Map<CsvMappingTargetFieldId, number>();
 
-  for (const [sourceColumn, target] of assignments) {
+  const orderedAssignments = [...assignments.entries()].sort(
+    (left, right) =>
+      left[0] - right[0] || String(left[1]).localeCompare(String(right[1])),
+  );
+
+  for (const [sourceColumn, target] of orderedAssignments) {
     if (target === CSV_MAPPING_IGNORED_TARGET) continue;
     const field = REGISTRY_BY_ID.get(target);
     if (!field) continue;
