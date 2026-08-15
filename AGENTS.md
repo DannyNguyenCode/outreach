@@ -17,21 +17,45 @@ task_id: phase-04b-corrective-sync-001
 phase: "Phase 4B corrective integration — attempt 3 requested"
 active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
-cursor_implementation_sha: ae60e7ca682652d5c4846ba7324b104cd4380dd6
+cursor_implementation_sha: 42429a482b65c72ebf6106d44f2968bfb4a9ad18
 last_reviewed_sha: a2ab9520d5499cb96afdf5f2e6a809c88cdb2fbf
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
 cursor_attempt_count: 3
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: ae60e7ca682652d5c4846ba7324b104cd4380dd6
+last_cursor_activity_sha: 42429a482b65c72ebf6106d44f2968bfb4a9ad18
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T05:06:00Z"
-cursor_completed_at: "2026-08-15T04:20:00Z"
+cursor_completed_at: "2026-08-15T05:14:00Z"
 cursor_report: |
-  Attempt 2 completed at implementation SHA ae60e7ca682652d5c4846ba7324b104cd4380dd6, followed by the report-only commit and ChatGPT review handoff. Cursor reported: npm ci; format; lint; typecheck; Prisma validate and fresh migration deploy through Phase 4C; 132 unit tests; 475 integration tests across 40 files; focused 21 document/route/concurrency tests; build; 16 E2E tests; npm audit with 0 vulnerabilities; and git diff --check all successful. Exact report-head CI run 31864198595 passed. CI run 31864658525 for ChatGPT review head a2ab9520 was still running when the blocking code review finding was recorded.
+  Attempt 3 of 3 completed at implementation SHA 42429a482b65c72ebf6106d44f2968bfb4a9ad18 (claim 94881a9e9d12164553e6d9aa35730d990644d569). Objective: reject stale failOrRetryDocumentJob results after a newer archive or claim identity has won.
+  Requirements/acceptance: after organization → source → version → document → job locks, failOrRetryDocumentJob now revalidates unarchived DOCUMENT source, PROCESSING version, live RUNNING job lease/owner/attempt identity, and worker-owned SCANNING/EXTRACTING document state. Stale results return outcome "stale" with no job/document/version overwrite, no runnable RETRY/QUEUED requeue, and no KNOWLEDGE_DOCUMENT_PROCESSING_FAILED audit. Leftover claims remain for bounded lease/recovery.
+  Files changed: lib/orgs/knowledge-documents.ts; tests/integration/knowledge.documents.concurrency.test.ts; docs/phase-4b-private-document-processing.md (stale no-op sentence). No migrations added or changed.
+  Tests added/updated: archive-first stale failure/retry race; worker-first/archive-second precise RETRY+ARCHIVED assertion; stale lease/attempt/owner replacement. Existing sweeper, claim/archive, tenant isolation, and retry tests preserved.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
+  - npm test: 23 files, 132 passed
+  - npm run test:integration: 40 files, 477 passed
+  - focused tests/integration/knowledge.documents.concurrency.test.ts: 8 passed (3 new/rewritten cases failed before the fix: archive-first returned retry; replaced claim threw ConflictError; worker-first error-code assertion then passed after using processing_remote)
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (29.5s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  Authorization/tenant isolation: no permission or tenant-scope changes. Existing tenant-scoped exhausted-lease test still passed. Archive and failure/retry remain organization-lock serialized.
+  Security/privacy: no credentials, tokens, or customer data exposed. Stale workers can no longer requeue archived document work or write a misleading terminal failure audit.
+  Failure/recovery: stale no-op leaves RUNNING/SCANNING claim in place; later lease expiry/recovery can release or terminalize it. Worker HTTP route records outcome "stale" instead of 503.
+  Manual configuration still required: none for this defect.
+  Assumptions: MalwareScanUnavailableError remains retryable as processing_remote; archive still locks documents/jobs without changing their processing/job states.
+  Remaining risks: adjacent scan/publish/terminalize paths were audited and left unchanged because they already reject archived/non-PROCESSING graphs or are outside this defect. Attempt 3 is the final Cursor attempt.
+  Deferred work: none for this task. Phase 4D remains untouched.
 review_findings: |
   BLOCKING attempt-2 defect: failOrRetryDocumentJob acquires the documented organization → source → version → document → job locks, but after locking it revalidates only the job state/owner/IDs. It does not reject an archived source, a non-PROCESSING version, a document no longer in the worker-owned in-flight state, an expired/replaced lease, or a changed attempt count. It can therefore update the job to RETRY and the document to QUEUED after a newer archive/lifecycle transition has already won.
   Evidence: lib/orgs/knowledge-documents.ts failOrRetryDocumentJob checks graph.job only, then updates the job and updates the document when leaseOwner matches OR the document is merely in any in-flight state. docs/phase-4b-private-document-processing.md explicitly requires retry/failure graph mutation to revalidate lease expiry, attempt count, document state, version state, and tenant identifiers, and forbids stale workers from overwriting archive/restore transitions.
@@ -42,7 +66,7 @@ required_tests: |
   Add focused coverage for failOrRetryDocumentJob revalidation of job lease ownership/expiry and attempt identity plus source, version, and worker-owned document state after all graph locks are held.
   Preserve and rerun the existing concurrent sweeper, claim/archive, tenant isolation, upload pre-parse authorization, checksum mismatch, successful processing, retry, compensation, archive/restore, and Phase 4C tests.
   Run the full required format, lint, typecheck, Prisma validation/fresh migration deploy, unit, integration, build, E2E, audit, and diff checks.
-next_action: "Cursor may claim the final attempt on this same branch, increment cursor_attempt_count to 3 exactly once, fix only the stale failure/retry revalidation defect and its regression coverage, run the full suite, report READY_FOR_REVIEW, push, and stop."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 ```
 
 ## Cursor corrective implementation prompt — final attempt
