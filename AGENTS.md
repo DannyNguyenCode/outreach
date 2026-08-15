@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_implementation_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 last_reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
@@ -82,7 +82,7 @@ review_findings: |
   P4D-CSV-MAPPING-RUNTIME-001: The mapping contract is not structurally runtime-safe. validateCsvMapping() reads mapping.family before proving mapping is a non-null object, and iterates columns while reading column.sourceColumn before proving each entry is a non-null object. mapCsvPreview() inherits the same failure. Malformed JSON such as a null mapping, columns containing null, or sparse entries can therefore throw raw TypeError instead of the promised static, payload-free CsvMappingError. Existing tests cover semantic mapping errors only and do not exercise malformed runtime shapes.
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT owns the branch while reviewing implementation SHA 50bb35a02ebd92edd6816e695a3d309c4ce6090e and the complete remote head."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
