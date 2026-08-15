@@ -17,23 +17,46 @@ task_id: phase-04d-tabular-validation-001
 phase: "Phase 4D — tabular import validation foundation"
 active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
-cursor_implementation_sha: null
+cursor_implementation_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
 last_reviewed_sha: null
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_attempt_count: 1
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: null
+last_cursor_activity_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T06:06:00Z"
-cursor_completed_at: null
+cursor_completed_at: "2026-08-15T06:16:46Z"
 cursor_report: |
-  Phase 4B was squash-merged through PR #10 into develop at d446ca52c1c8397d8b24bf7c2dc009b14800808d after exact-head push CI and PR CI passed. Post-merge develop CI run 31867499078 passed.
-  A fresh Phase 4C audit against the merged develop tree found no blocking compatibility, authorization, migration, pricing, lifecycle, retrieval, or tenant-isolation issue. The complete 477-test integration suite and 16 E2E tests passed with Phase 4B and 4C combined.
-  README project-status wording is stale and should be corrected in this Phase 4D task.
+  Attempt 1 of 3 completed at implementation SHA b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 (claim 8c0539315eda7172d0a52d033552c57a15bf882e). Objective: server-only bounded CSV/XLSX validation and deterministic normalized preview for later mapping; fail closed on unsafe or over-limit input.
+  Requirements/acceptance: validateTabularImport accepts bytes + filename + declared MIME and returns kind, size, sha256, sheet metadata, selected sheet or explicit ambiguity, headers with source columns, bounded preview rows with source row numbers, totals, and safe issue codes/locations. Hard failures throw TabularValidationError without file bytes, formulas, URLs, or secrets. Formulas, cached values, hyperlinks, external links, macros, hidden sheets, merged cells, and blank/duplicate headers are treated explicitly and never executed or fetched.
+  Files changed: lib/orgs/tabular-types.ts; lib/orgs/tabular-helpers.ts; lib/orgs/tabular-zip.ts; lib/orgs/tabular-csv.ts; lib/orgs/tabular-xlsx.ts; lib/orgs/tabular-validation.ts; lib/orgs/tabular-validation.test.ts; lib/orgs/tabular-security.test.ts; tests/helpers/tabular-fixtures.ts; docs/phase-4d-tabular-import-hardening.md; README.md (project status, next step, Phase 4C/4D doc lists). No migrations added or changed. No new npm dependencies; CSV is parsed in-repo and XLSX reuses existing jszip.
+  Accepted formats/limits: .csv text/csv UTF-8 and non-macro .xlsx spreadsheet MIME with PK signature; 5 MiB, 16 sheets, 10,000 rows, 100 columns, 4,000 cell chars, 1,000,000 aggregate chars, 50 preview rows, 2,000 ms, ZIP entry/expansion/ratio/nesting guards matching the DOCX class of checks.
+  Tests added/updated: equivalent CSV/XLSX preview; BOM/CRLF/quoted commas/newlines/escaped quotes/trailing blanks; checksum/order stability; extension/MIME/signature mismatch and .xls/.xlsm/zip rejection; malformed/encoding/NUL/encrypted/polyglot/traversal/nested/zip-bomb; byte/sheet/row/column/cell/aggregate/time limits at boundary and one past; blank/duplicate headers, hidden sheets, multi-sheet ambiguity; formulas/cached formulas/hyperlinks/external links/merged cells without fetch; bounded preview row numbers; document PDF/DOCX/TXT and Phase 4C offering schema regression; security tests for macros, formula-like CSV, and secret/URL-free issues/logs/errors.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
+  - focused lib/orgs/tabular-validation.test.ts lib/orgs/tabular-security.test.ts lib/orgs/document-validation.test.ts lib/orgs/offering-validation.test.ts: 4 files, 27 passed
+  - npm test: 25 files, 145 passed
+  - npm run test:integration: 40 files, 477 passed
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (28.0s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. Existing Phase 4A–4C integration and E2E suites passed unchanged.
+  Security/privacy: no credentials, tokens, or customer data exposed. Macros/encryption/polyglots/zip bombs fail closed. Formulas and links remain inert. Safe errors and console spies contain codes/locations only.
+  Failure/recovery: over-limit and unsafe files throw terminal parse errors for this attempt. Ambiguous or formula-bearing files return needs_attention without selecting a sheet silently. No jobs or storage objects are created.
+  Manual configuration still required: none for this foundation.
+  Assumptions: comma is the only CSV delimiter; header row is the first non-empty record/row; ZIP comments and CSV trailing whitespace may pad to the byte limit without changing table content.
+  Remaining risks: later mapping/persistence must consume this preview rather than re-parsing with a second library; worksheet XML scanning is tag-based, not a full OOXML DOM.
+  Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched.
 review_findings: |
   No blocking Phase 4C audit findings.
   Phase 4D begins with a bounded validation/preview foundation so later mapping and persistence work can consume one safe normalized tabular representation.
@@ -42,7 +65,7 @@ required_tests: |
   Deterministic normalization tests for BOM, CRLF, quoted fields/newlines, whitespace, stable sheet/header/row ordering, and bounded safe error output.
   Security tests proving no formulas/macros/external links execute and no file content or sensitive row values enter logs/errors.
   Full format, lint, typecheck, unit, integration, Prisma validation, build, E2E, audit, and diff checks.
-next_action: "Cursor has claimed Phase 4D task 1 (attempt 1 of 3) and is implementing the bounded tabular validation/preview foundation."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 ```
 
 ## Cursor implementation prompt — Phase 4D task 1
