@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  assertRuntimeAdapterRegistryIsExhaustive,
   compareRuntimeEvidence,
   detectDeterministicConflicts,
-  RUNTIME_SOURCE_ADAPTERS,
-} from "@/lib/orgs/runtime-composition";
+} from "@/lib/orgs/runtime-composition-logic";
 import {
+  PHASE_4D_COMPOSABLE_SOURCE_CLASSES,
   RUNTIME_SOURCE_CLASSES,
+  RUNTIME_SOURCE_REGISTRY,
   runtimeAuthorityFor,
   type RuntimeEvidenceItem,
 } from "@/lib/orgs/runtime-evidence";
@@ -88,16 +88,27 @@ function priceItem(
 }
 
 describe("KNOW-004 runtime composition helpers", () => {
-  it("requires an exhaustive adapter declaration for every source class", () => {
-    assertRuntimeAdapterRegistryIsExhaustive();
-    expect(Object.keys(RUNTIME_SOURCE_ADAPTERS).sort()).toEqual(
+  it("requires live adapters only for current Phase 4D organization sources", () => {
+    expect([...PHASE_4D_COMPOSABLE_SOURCE_CLASSES]).toEqual([
+      "CUSTOMER_CONFIRMED_KNOWLEDGE",
+      "STRUCTURED_OFFERING",
+    ]);
+    expect(Object.keys(RUNTIME_SOURCE_REGISTRY).sort()).toEqual(
       [...RUNTIME_SOURCE_CLASSES].sort(),
     );
-    expect(RUNTIME_SOURCE_ADAPTERS.PROSPECT_EVIDENCE).toBeNull();
-    expect(RUNTIME_SOURCE_ADAPTERS.CRM_FACT).toBeNull();
-    expect(RUNTIME_SOURCE_ADAPTERS.CALLER_STATEMENT).toBeNull();
-    expect(RUNTIME_SOURCE_ADAPTERS.CUSTOMER_CONFIRMED_KNOWLEDGE).not.toBeNull();
-    expect(RUNTIME_SOURCE_ADAPTERS.STRUCTURED_OFFERING).not.toBeNull();
+    expect(RUNTIME_SOURCE_REGISTRY.PROSPECT_EVIDENCE.implementedInPhase4D).toBe(
+      false,
+    );
+    expect(RUNTIME_SOURCE_REGISTRY.CRM_FACT.implementedInPhase4D).toBe(false);
+    expect(RUNTIME_SOURCE_REGISTRY.CALLER_STATEMENT.implementedInPhase4D).toBe(
+      false,
+    );
+    expect(
+      RUNTIME_SOURCE_REGISTRY.CUSTOMER_CONFIRMED_KNOWLEDGE.implementedInPhase4D,
+    ).toBe(true);
+    expect(
+      RUNTIME_SOURCE_REGISTRY.STRUCTURED_OFFERING.implementedInPhase4D,
+    ).toBe(true);
   });
 
   it("orders structured prices before offerings and knowledge", () => {
