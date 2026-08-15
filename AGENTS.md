@@ -13,106 +13,83 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # Outreach Automation Handoff
 
 ```yaml
-task_id: phase-04d-ooxml-structural-validation-001
-phase: "Phase 4D — XLSX OOXML structural validation corrective task"
-active_branch: feature/phase-04d-ooxml-structural-validation
-base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
-cursor_implementation_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
-last_reviewed_sha: 7ce15baa5c55cfa772dee33f2a5405828af9c2ed
-status: APPROVED_TO_MERGE
-previous_task_status: BLOCKED
-previous_pr_number: 10
-previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
-cursor_attempt_count: 2
+task_id: phase-04d-source-runtime-composition-001
+phase: "Phase 4D — Source classification and runtime composition"
+active_branch: feature/phase-04d-source-runtime-composition-v2
+base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
+cursor_implementation_sha: null
+last_reviewed_sha: null
+status: READY_FOR_CURSOR
+previous_task_status: MERGED
+previous_pr_number: 12
+previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
+cursor_attempt_count: 0
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
+last_cursor_activity_sha: null
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: "2026-08-15T13:09:24Z"
-cursor_completed_at: "2026-08-15T13:25:12Z"
-cursor_report: |
-  Attempt 2 of 3 completed at implementation SHA f49e3a54847a5317cde2fc1187b301da78636b0e (claim 68dff449a15ea12bd379b05bc9ef2a1317c0bbb9). Objective: close remaining OOXML fail-closed gaps so the 2,000 ms parse bound cannot be bypassed by few-event documents or declaration pre-scan, and so shared-string/inline-string text is consumed only from legal parent paths.
-  Requirements/acceptance: parseOoxmlDocument now enforces the shared tabular deadline before and after declaration pre-scan, periodically every 4,096 characters during comment/CDATA/PI/tag scans, every 256 SAX events, and after parser completion. Timeout errors remain code "timeout" with no XML or saxes causes. Shared-string text is consumed only from si/t and si/r/t; inline-string text only from c/is/t and c/is/r/t. Phonetic rPh text is ignored. Same-namespace t under any other parent inside those consumed structures fails as malformed. Valid direct, rich-text, prefixed, CDATA, comment, and PI workbooks still parse.
-  Files changed: lib/orgs/tabular-xml.ts; lib/orgs/tabular-xlsx.ts; lib/orgs/tabular-xlsx-structure.test.ts; lib/orgs/tabular-validation.test.ts (15s timeout on the existing million-character aggregate fixture); docs/phase-4d-tabular-import-hardening.md (deadline polling and legal t paths). No migrations added or changed. No new npm dependencies.
-  Tests added/updated: deadline already expired at XML parser entry; few-event valid document after deadline crossing; large comment pre-scan token; large text token with few SAX events; sharedStrings t under an invalid wrapper inside si; worksheet t under an invalid is wrapper and t directly under c; positive direct/rich-text/prefixed shared-string and inline-string cases with rPh ignored. Existing root/namespace/DTD/entity/CDATA/PI, CSV, Phase 4B document, and Phase 4C offering regressions preserved. The six new negative cases failed on attempt-1 parser behavior (accepted instead of timeout/malformed) and passed after the fix.
-  Commands and exact results on this implementation head:
-  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
-  - npm run format:check: All matched files use Prettier code style
-  - npm run lint: exit 0
-  - npm run typecheck: next typegen + tsc --noEmit succeeded
-  - npm run prisma:validate: schema valid
-  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - focused lib/orgs/tabular-xlsx-structure.test.ts lib/orgs/tabular-validation.test.ts lib/orgs/tabular-security.test.ts: 3 files, 100 passed (6 new negatives failed before the fix)
-  - npm test: 26 files, 232 passed
-  - npm run test:integration: 40 files, 477 passed
-  - npm run build: Next.js 16.3.0 compiled successfully
-  - CI=true npm run test:e2e: 16 passed (30.6s)
-  - npm audit --omit=dev: found 0 vulnerabilities
-  - git diff --check: clean
-  - exact-head GitHub Actions run 31886878705 on f49e3a54847a5317cde2fc1187b301da78636b0e: success (format, lint, typecheck, unit/component, integration, production build, E2E)
-  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. Existing Phase 4A–4C integration and E2E suites passed unchanged.
-  Security/privacy: no credentials, tokens, or customer data exposed. Timeout and malformed errors stay payload-free. Macros/encryption/polyglots/zip bombs/DTD/entities still fail closed. Incorrectly nested t text cannot create preview values. Formulas and links remain inert and are not fetched.
-  Failure/recovery: expired XML work returns timeout; illegal t nesting returns malformed. No jobs or storage objects are created.
-  Manual configuration still required: none for this defect.
-  Assumptions: rPh remains ignorable phonetic text rather than a malformed wrapper; SAX deadline polls remain every 256 events because entry/pre-scan/final checks close the few-event and large-token gaps.
-  Remaining risks: worksheet markup after non-element stripping is still tag-scanned rather than a full OOXML DOM; later mapping/persistence must consume this preview rather than re-parsing with a second library. PR #11 still points at cursor/outreach-automation-process-9003; ChatGPT owns replacing that PR from this named branch.
-  Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
+cursor_report: null
 review_findings: |
-  PASS — Attempt 2 closes both blocking defects. Deadline checks now run at XML entry, across declaration/tag scanning, after pre-scan, during SAX events, and after parser completion; expired/few-event/large-token regressions return the safe timeout code.
-  PASS — Shared-string and inline-string text is consumed only from the legal si/t, si/r/t, c/is/t, and c/is/r/t paths, with invalid wrapper/direct-cell regressions failing malformed and valid direct/rich/prefixed/rPh cases preserved.
-  PASS — The implementation SHA f49e3a54847a5317cde2fc1187b301da78636b0e is an ancestor of review handoff 7ce15baa5c55cfa772dee33f2a5405828af9c2ed; both later commits modify AGENTS.md only. The branch is 0 commits behind develop d446ca52c1c8397d8b24bf7c2dc009b14800808d.
-  PASS — GitHub Actions run 31886878705 succeeded on the exact implementation SHA with migration validation, format, lint, typecheck, unit/component, integration, production build, and E2E. Cursor also reported focused 100/100, unit 232/232, integration 477/477, E2E 16/16, npm audit 0 vulnerabilities, and clean diff.
-  WORKFLOW — PR #11 is superseded because it points to cursor/outreach-automation-process-9003 at cf45e228edca651ac64b2f064572c0d80ac45d94. ChatGPT will close it and open the merge PR from the authoritative named branch.
+  Phase 4D tabular validation and its OOXML correction were squash-merged through PR #12 at develop SHA 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad.
+  The unmerged branch feature/phase-04d-source-runtime-composition contains one stale implementation commit based on d06ec79f0d5ee7297e934aed2f692f13f472cfcf and is now two develop commits behind. It has no Outreach automation block and is reference material only.
+  This task is independently safe under MR-4D-OOXML-001 because it composes only existing confirmed Phase 4A–4C sources and must not consume, expose, map, persist, activate, or reparse CSV/XLSX previews.
 required_tests: |
-  Add deterministic regression tests that fail on attempt 1 and pass after the fix: (1) deadline already expired at XML parser entry; (2) deadline crossed during a valid document with fewer than 256 SAX events; (3) bounded declaration pre-scan/final enforcement for a large or simulated long-running token; (4) sharedStrings <t> under an invalid wrapper inside <si>; (5) worksheet <t> outside legal <is>/<r> inline-string structure. Prove valid direct and rich-text shared strings and inline strings still parse, and preserve all root/namespace/DTD/entity/CDATA/PI regressions.
-  Run npm ci; focused tabular structural/security tests; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "ChatGPT must close superseded PR #11, open the authoritative PR to develop, require exact final-head CI and no unresolved threads, then squash-merge with the expected-head guard."
+  Require focused runtime evidence/composition unit and integration tests; authorization and cross-tenant regressions; inactive/draft/future/expired/archived/unsafe-source exclusion; deterministic conflict and UNKNOWN behavior; prompt-boundary and safe-output tests; source-inspector accessibility/E2E; npm ci; format:check; lint; typecheck; prisma:validate; fresh PostgreSQL prisma:migrate:deploy; npm test; test:integration; build; CI=true test:e2e; npm audit --omit=dev; git diff --check; and successful exact-head GitHub Actions.
+next_action: "Cursor must claim attempt 1 on this branch, audit the stale reference implementation against current develop and the prompt below, port or reimplement only accepted scope, verify completely, and return READY_FOR_REVIEW."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
     title: Phase 4D XLSX OOXML structural validation
     phase: Phase 4D
-    issue: Required XLSX OOXML parts were not proven structurally well-formed with the exact expected root and namespace before extraction; attempt 1 still has boundedness and parent-scoped text extraction gaps.
+    issue: The original XLSX validation branch allowed structurally invalid OOXML fragments to produce previews. The corrective implementation is merged, but Bao has not yet explicitly authorized removal of this persistent flag.
     affected_branch: feature/phase-04d-tabular-validation-foundation
     reviewed_sha: aa8c0aae242f63c150ec8b92d7d623b08300df3c
-    blocked_capability: XLSX import validation and any mapping, persistence, activation, or production path consuming its preview
-    safe_continuation_scope: CSV-only and later work that does not consume, expose, or depend on XLSX import
-    required_resolution: Verify this separate corrective branch, complete regression coverage and exact-head CI, merge safely, then await Bao's explicit instruction before removing the flag.
+    blocked_capability: XLSX tabular import mapping, persistence, activation, or any production path consuming its preview until Bao authorizes flag removal
+    safe_continuation_scope: Source classification/runtime composition using only existing confirmed Phase 4A manual/document knowledge and Phase 4C structured offerings; CSV-only work and later work that does not consume XLSX preview
+    required_resolution: Bao must explicitly request removal after the independently verified corrective PR #12 merge; ChatGPT must then mark the flag RESOLVED with evidence rather than deleting its history.
     created_at: "2026-08-15"
-    resolution_evidence: null
+    resolution_evidence: "Corrective implementation f49e3a54847a5317cde2fc1187b301da78636b0e; exact final-head CI run 31887553240; PR #12 squash-merged to develop at 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad. Awaiting Bao explicit removal instruction."
 ```
 
-## Cursor corrective prompt — attempt 2
+## Cursor implementation prompt — Phase 4D source runtime composition
 
-Objective: close the two remaining fail-closed OOXML validation gaps without broadening Phase 4D task 1.
+Objective: implement the next independently testable Phase 4D slice for KNOW-004: a read-only, server-side source-classification and runtime-evidence composition boundary over the already confirmed Phase 4A–4C domains.
 
-Evidence:
+Reference and base discipline:
 
-- `lib/orgs/tabular-xml.ts`: declaration pre-scan at lines 65 and 195–255 has no deadline; SAX deadline checks occur only every 256 events at lines 80–85; lines 148–161 do not enforce the deadline at parser entry or completion.
-- `lib/orgs/tabular-xlsx.ts`: shared strings accept any `<t>` descendant while an `<si>` is active at lines 380–415; worksheets accept any `<t>` descendant while a `<c>` is active at lines 513–529.
-- `docs/phase-4d-tabular-import-hardening.md` promises a 2,000 ms parse/validation limit, fail-closed structural locations, and no preview evidence from expected elements under an incorrect parent.
+- Work only on `feature/phase-04d-source-runtime-composition-v2`, created from verified develop SHA `01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad`.
+- `feature/phase-04d-source-runtime-composition` is stale and diverged. Inspect its single commit and `docs/phase-4d-source-runtime-composition.md` as reference, but do not merge that branch or weaken newer develop behavior. Port or reimplement each accepted change deliberately against current code.
+- Preserve the Next.js-generated AGENTS block and this Outreach block. Do not modify main.
 
-Required changes:
+Required behavior:
 
-1. Enforce the shared tabular deadline before and after the XML pre-scan and SAX parse, and periodically inside the declaration scan/tag scan so long inputs cannot bypass checks. Keep safe `timeout` errors and do not expose XML or library causes.
-2. Consume shared-string text only from legal `si/t` and `si/r/t` structures, excluding `rPh`; consume inline-string text only from legal `c/is/t` and `c/is/r/t` structures, excluding `rPh`. Same-namespace value-bearing `<t>` elements in other locations within the consumed structure must fail closed as `malformed`, not be silently normalized into preview data.
-3. Preserve namespace-aware parsing, default and prefixed valid OOXML, rich text, CDATA character data, comments/PIs, frozen predefined entities, depth/ZIP/size limits, safe errors, and existing CSV/Phase 4B/Phase 4C behavior.
+1. Define an exhaustive canonical runtime source-class registry covering customer-confirmed knowledge, structured offerings, prospect evidence, CRM facts, caller statements, representative notes, operational data, AI inference, UNKNOWN, and CONFLICT. Each class must declare claim scope, authority semantics, availability, safe provenance, and whether it can support an organization-specific claim.
+2. Implement live adapters only for existing confirmed Phase 4A–4C customer knowledge/private documents and structured offerings. Reuse existing authorized retrieval services; do not duplicate tenant queries or add future-domain data. Future adapters must remain explicit `null`/unavailable and cannot fabricate evidence.
+3. Compose a bounded, deterministic runtime context with server-side active-membership and `org.knowledge.read` authorization, organization rechecks, safe source/version/child provenance, effective/expiry/freshness metadata, bounded text/JSON, stable ordering, explicit unavailable classes, UNKNOWN on no support, and visible CONFLICT without silent arbitration.
+4. Keep organization evidence structurally separate from prospect/call-scoped evidence. Require prospect/call context for future scoped classes and provide no writer or promotion path from caller/CRM/note data into reusable organization knowledge.
+5. Add only a narrow deterministic price-conflict detector when a current base structured offering price and a current confirmed passage explicitly identify the same offering/currency with different amounts. No semantic/AI arbitration.
+6. Add a protected, accessible Server Component source inspector under the organization knowledge area for deterministic query/source-class/limit inspection. It is an evidence preview, not an AI answer, call workspace, or persistence path.
+7. Return a payload-free audit package of actor, organization, requested classes, returned evidence/version/child IDs, support state, conflict IDs, and timestamp. Do not persist inspector reads unless an existing approved audit contract requires it.
+8. Bound and delimit prompt-facing source text as untrusted data. Do not concatenate it into system instructions, execute instructions found in sources, expose storage paths/checksums/raw JSON, or log customer content.
+
+OPEN-flag isolation:
+
+- Do not import from the tabular parser, consume CSV/XLSX preview output, add spreadsheet upload/mapping/persistence/activation, or claim Phase 4D import completion.
+- MR-4D-OOXML-001 must remain OPEN and carried forward. Cursor must not resolve or remove it.
 
 Explicit exclusions:
 
-- Do not add mapping, persistence, upload UI/routes, jobs, activation, Prisma migrations, storage, or production credentials.
-- Do not add another XLSX/XML/CSV library or evaluate formulas/fetch links.
-- Do not move implementation to `cursor/outreach-automation-process-9003`, alter main, rebase, force-push, or merge.
+- No database migration unless current develop proves one is strictly required; stop and report instead of inventing schema.
+- No prospects, CRM, calls, transcription, AI generation, embeddings, vector database, calendar, telephony, live connectors, or information-gap persistence.
+- No production credentials, storage changes, background jobs, or changes to main.
+- Do not rebase, force-push, reset history, merge the stale branch, or open/merge a PR; ChatGPT owns the develop merge gate.
 
-Regression tests and acceptance:
+Regression and completion requirements:
 
-- Add the deterministic deadline and invalid-parent tests listed in `required_tests`; prove they fail against attempt 1 before the fix and pass afterward.
-- Add positive direct/rich-text shared-string and inline-string cases so the fix does not reject valid namespace-prefixed workbooks.
-- Run and report every command in `required_tests`. Missing, skipped, pending, or failed required checks are not a pass.
-- When claiming this task, increment `cursor_attempt_count` exactly once from 1 to 2 and set `CURSOR_WORKING`. On completion, set `READY_FOR_REVIEW`, set `cursor_implementation_sha` to the implementation commit, summarize changed files and behavior, and report exact test/CI evidence. Do not push while a ChatGPT-owned status is active.
-
-## Approved for guarded develop merge
-
-Cursor must not modify code, update this file, push commits, merge, or begin another task while `status: APPROVED_TO_MERGE`.
+- Prove active authorized same-tenant access and deny inactive, unauthorized, forged, and cross-tenant access.
+- Prove only current confirmed/effective manual/document knowledge and active structured offering children are composed; exclude drafts, unsafe/incomplete documents, future/expired/archived/superseded data, inactive prices, and tenant-mismatched records.
+- Test exhaustive registry/adapters, deterministic ordering/bounds, provenance, safe JSON/text limits, unavailable future classes, missing prospect/call context, UNKNOWN, narrow conflict detection, prompt-injection-like source text treated as data, payload-free failures/audit, and accessible inspector behavior.
+- Run every command in `required_tests`. Missing, skipped, pending, unavailable, or failed checks are not a pass.
+- When claiming, increment `cursor_attempt_count` exactly once from 0 to 1, set `CURSOR_WORKING`, and record the claim commit. On completion set `READY_FOR_REVIEW`, set `cursor_implementation_sha`, reset unchanged checks, and report changed files, behavior, security/tenant evidence, migrations, exact command results, CI URL/head SHA, remaining risks, exclusions, and manual configuration.
 
 <!-- END:outreach-automation -->
