@@ -120,6 +120,59 @@ describe("tabular validation security", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("does not treat CDATA or processing-instruction OOXML payloads as workbook data", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const result = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        extras: {
+          "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <![CDATA[<sheet name="${SECRET}" sheetId="99" r:id="rId99"/>]]>
+    <?pi <sheet name="Pi${SECRET}" sheetId="98" r:id="rId98"/> ?>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`,
+          "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <![CDATA[<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="${EVIL_URL}"/>]]>
+  <?pi <Relationship Id="rId98" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/evil-pi.xml"/> ?>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`,
+          "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><t>Name</t></si>
+  <![CDATA[<si><t>${SECRET}</t></si>]]>
+  <?pi <si><t>${EVIL_URL}</t></si> ?>
+  <si><t>Widget</t></si>
+</sst>`,
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+    <![CDATA[<c r="A2" t="inlineStr"><is><t>${SECRET}</t></is></c>]]>
+    <?pi <c r="B2"><f>HYPERLINK("${EVIL_URL}","1")</f><v>1</v></c> ?>
+    <row r="2"><c r="A2" t="s"><v>1</v></c></row>
+  </sheetData>
+  <![CDATA[<hyperlink ref="A2" r:id="rId9"/>]]>
+  <?pi <mergeCell ref="A1:Z1"/> ?>
+</worksheet>`,
+        },
+      }),
+      filename: "cdata-pi-inject.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(result.outcome).toBe("ready");
+    expect(result.sheets.map((sheet) => sheet.name)).toEqual(["Sheet1"]);
+    expect(result.previewRows[0]?.cells).toEqual(["Widget"]);
+    expect(JSON.stringify(result.issues)).not.toContain(SECRET);
+    expect(JSON.stringify(result.issues)).not.toContain(EVIL_URL);
+    expect(JSON.stringify(result.sheets)).not.toContain(SECRET);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps safe errors and logs free of file bytes, formulas, URLs, and secrets", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);

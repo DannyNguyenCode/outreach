@@ -103,22 +103,55 @@ export async function sampleXlsx(): Promise<Uint8Array> {
 }
 
 export function misboundWorkbookContentTypesXml(sheetCount: number): string {
-  const sheetOverrides = Array.from({ length: sheetCount }, (_, index) => {
-    const part = `/xl/worksheets/sheet${index + 1}.xml`;
-    const type =
-      index === 0
-        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
-        : "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
-    return `<Override PartName="${part}" ContentType="${type}"/>`;
-  }).join("");
+  return workbookContentTypesXml({
+    sheetCount,
+    prefix: "",
+    misbound: true,
+  });
+}
+
+export function prefixedWorkbookContentTypesXml(options?: {
+  sheetCount?: number;
+  misbound?: boolean;
+}): string {
+  return workbookContentTypesXml({
+    sheetCount: options?.sheetCount ?? 1,
+    prefix: "ct",
+    misbound: options?.misbound ?? false,
+  });
+}
+
+function workbookContentTypesXml(options: {
+  sheetCount: number;
+  prefix: string;
+  misbound: boolean;
+}): string {
+  const tag = options.prefix ? `${options.prefix}:` : "";
+  const xmlns = options.prefix
+    ? `xmlns:${options.prefix}="http://schemas.openxmlformats.org/package/2006/content-types"`
+    : `xmlns="http://schemas.openxmlformats.org/package/2006/content-types"`;
+  const workbookType = options.misbound
+    ? "application/xml"
+    : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+  const sheetOverrides = Array.from(
+    { length: options.sheetCount },
+    (_, index) => {
+      const part = `/xl/worksheets/sheet${index + 1}.xml`;
+      const type =
+        options.misbound && index === 0
+          ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+          : "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+      return `<${tag}Override PartName="${part}" ContentType="${type}"/>`;
+    },
+  ).join("");
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/xml"/>
+<${tag}Types ${xmlns}>
+  <${tag}Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <${tag}Default Extension="xml" ContentType="application/xml"/>
+  <${tag}Override PartName="/xl/workbook.xml" ContentType="${workbookType}"/>
   ${sheetOverrides}
-  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
-</Types>`;
+  <${tag}Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</${tag}Types>`;
 }
 
 function contentTypesXml(

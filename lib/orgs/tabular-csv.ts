@@ -92,7 +92,8 @@ export function parseCsvSheet(
       );
     }
     const cells: string[] = [];
-    for (let column = 0; column < headers.length; column += 1) {
+    const fieldCount = Math.max(record.length, headers.length);
+    for (let column = 0; column < fieldCount; column += 1) {
       const raw = record[column] ?? "";
       if (isFormulaLike(raw)) {
         issues.push(
@@ -105,7 +106,9 @@ export function parseCsvSheet(
       }
       const cell = normalizeCell(raw);
       aggregateChars = addAggregate(aggregateChars, cell);
-      cells.push(cell);
+      if (column < headers.length) {
+        cells.push(cell);
+      }
     }
     rows.push({ sourceRowNumber: recordIndex + 1, cells });
   }

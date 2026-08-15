@@ -95,14 +95,14 @@ The parser does **not** silently choose among multiple visible worksheets or inv
 ## Formula, link, and header behavior
 
 - `<f>` formula cells stay inert. Cached `<v>` values may appear in the preview and are flagged as `cached_formula` or `formula`.
-- CSV/XLSX values are classified from the untrimmed source. A leading spreadsheet execution prefix (`=`, `+`, `-`, `@`, tab, CR, or LF) is flagged `formula_like` and left as literal text after ordinary whitespace normalization. Issue objects stay payload-free.
+- CSV fields and literal string-bearing XLSX cells (`t="s"`, `t="inlineStr"`, `t="str"`, or inline `<is>`) are classified from the untrimmed source. A leading spreadsheet execution prefix (`=`, `+`, `-`, `@`, tab, CR, or LF) is flagged `formula_like` and left as literal text after ordinary whitespace normalization. Numeric, boolean, and other non-string XLSX cell types are not flagged merely because a cached number such as `-12.5` is negative. Issue objects stay payload-free.
 - Hyperlinks and `xl/externalLinks/` are flagged and never fetched.
 - Hidden and very-hidden sheets are listed and flagged; they are never auto-selected when a visible candidate exists.
 - Merged cells are flagged and not expanded.
 - Blank or duplicate headers (case-insensitive, whitespace-normalized) yield `needs_attention`.
-- XML comments are ignored. Only real OOXML elements in the required workbook, relationship, and worksheet locations are consumed. Duplicate cell coordinates fail closed as `malformed`.
-- Aggregate character limits count every populated cell once, including extra columns and hidden sheets.
-- `[Content_Types].xml` must bind the non-macro workbook main content type to the canonical `/xl/workbook.xml` part.
+- XML comments, CDATA, and processing instructions are ignored as markup. CDATA character data is preserved as ordinary text after escaping, so embedded `<sheet>`, `<Relationship>`, `<c>`, `<f>`, `<hyperlink>`, or `<mergeCell>` payloads cannot create workbook evidence. Only real OOXML elements in the required workbook, relationship, and worksheet locations are consumed. Duplicate cell coordinates fail closed as `malformed`.
+- Aggregate character limits count every populated CSV field and XLSX cell once, including extra columns and hidden sheets, without widening the header-derived preview.
+- `[Content_Types].xml` must bind the non-macro workbook main content type to the canonical `/xl/workbook.xml` part, including namespace-prefixed `Override` elements.
 
 ## Safe errors
 
@@ -117,7 +117,7 @@ Parseable-but-attention results stay in the preview model. Neither thrown errors
 No new runtime parser dependency is added.
 
 - CSV is parsed by a bounded RFC 4180-style state machine in this repository (UTF-8 BOM, CRLF/LF/CR, quoted commas/newlines, escaped quotes, trailing blank rows). Bytes after a closing quote other than a delimiter, CR/LF, or end-of-input fail closed as `malformed`.
-- XLSX reuses the existing `jszip` dependency already required for DOCX ZIP inspection, with the same class of entry/expansion/ratio/nesting/time guards. Worksheet XML comments are stripped with a bounded scanner that preserves quoted attributes and CDATA; markup is then read only from the required OOXML elements. There is no general XML tree, DTD/entity expansion, or formula evaluation.
+- XLSX reuses the existing `jszip` dependency already required for DOCX ZIP inspection, with the same class of entry/expansion/ratio/nesting/time guards. Worksheet XML comments, processing instructions, and CDATA wrappers are stripped with a bounded scanner that preserves quoted attributes; CDATA payloads are reinserted as escaped character data so later tag scans cannot see non-element markup. Markup is then read only from the required OOXML elements. There is no general XML tree, DTD/entity expansion, or formula evaluation.
 
 Adding SheetJS, ExcelJS, or a second CSV library would overlap this fail-closed ZIP/XML approach and increase the formula-evaluation risk surface. `package-lock.json` is unchanged.
 

