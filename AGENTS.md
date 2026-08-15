@@ -17,22 +17,46 @@ task_id: phase-04d-ooxml-structural-validation-001
 phase: "Phase 4D — XLSX OOXML structural validation corrective task"
 active_branch: feature/phase-04d-ooxml-structural-validation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
-cursor_implementation_sha: ca0c1deef1fb2996be6002c08b4aed8b1664498d
+cursor_implementation_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
 last_reviewed_sha: 6c668e44fae2da694e00478f15e431c9d96b2642
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: BLOCKED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: ca0c1deef1fb2996be6002c08b4aed8b1664498d
+last_cursor_activity_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T13:09:24Z"
+cursor_completed_at: "2026-08-15T13:25:12Z"
 cursor_report: |
-  Cursor attempt 1 implementation is ca0c1deef1fb2996be6002c08b4aed8b1664498d.
-  ChatGPT's review handoff commit is 6c668e44fae2da694e00478f15e431c9d96b2642.
-  Exact-head GitHub Actions run 31884836260 passed migration validation, format, lint, typecheck, unit/component tests, integration tests, production build, and E2E smoke tests.
+  Attempt 2 of 3 completed at implementation SHA f49e3a54847a5317cde2fc1187b301da78636b0e (claim 68dff449a15ea12bd379b05bc9ef2a1317c0bbb9). Objective: close remaining OOXML fail-closed gaps so the 2,000 ms parse bound cannot be bypassed by few-event documents or declaration pre-scan, and so shared-string/inline-string text is consumed only from legal parent paths.
+  Requirements/acceptance: parseOoxmlDocument now enforces the shared tabular deadline before and after declaration pre-scan, periodically every 4,096 characters during comment/CDATA/PI/tag scans, every 256 SAX events, and after parser completion. Timeout errors remain code "timeout" with no XML or saxes causes. Shared-string text is consumed only from si/t and si/r/t; inline-string text only from c/is/t and c/is/r/t. Phonetic rPh text is ignored. Same-namespace t under any other parent inside those consumed structures fails as malformed. Valid direct, rich-text, prefixed, CDATA, comment, and PI workbooks still parse.
+  Files changed: lib/orgs/tabular-xml.ts; lib/orgs/tabular-xlsx.ts; lib/orgs/tabular-xlsx-structure.test.ts; lib/orgs/tabular-validation.test.ts (15s timeout on the existing million-character aggregate fixture); docs/phase-4d-tabular-import-hardening.md (deadline polling and legal t paths). No migrations added or changed. No new npm dependencies.
+  Tests added/updated: deadline already expired at XML parser entry; few-event valid document after deadline crossing; large comment pre-scan token; large text token with few SAX events; sharedStrings t under an invalid wrapper inside si; worksheet t under an invalid is wrapper and t directly under c; positive direct/rich-text/prefixed shared-string and inline-string cases with rPh ignored. Existing root/namespace/DTD/entity/CDATA/PI, CSV, Phase 4B document, and Phase 4C offering regressions preserved. The six new negative cases failed on attempt-1 parser behavior (accepted instead of timeout/malformed) and passed after the fix.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
+  - focused lib/orgs/tabular-xlsx-structure.test.ts lib/orgs/tabular-validation.test.ts lib/orgs/tabular-security.test.ts: 3 files, 100 passed (6 new negatives failed before the fix)
+  - npm test: 26 files, 232 passed
+  - npm run test:integration: 40 files, 477 passed
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (30.6s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  - exact-head GitHub Actions run 31886878705 on f49e3a54847a5317cde2fc1187b301da78636b0e: success (format, lint, typecheck, unit/component, integration, production build, E2E)
+  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. Existing Phase 4A–4C integration and E2E suites passed unchanged.
+  Security/privacy: no credentials, tokens, or customer data exposed. Timeout and malformed errors stay payload-free. Macros/encryption/polyglots/zip bombs/DTD/entities still fail closed. Incorrectly nested t text cannot create preview values. Formulas and links remain inert and are not fetched.
+  Failure/recovery: expired XML work returns timeout; illegal t nesting returns malformed. No jobs or storage objects are created.
+  Manual configuration still required: none for this defect.
+  Assumptions: rPh remains ignorable phonetic text rather than a malformed wrapper; SAX deadline polls remain every 256 events because entry/pre-scan/final checks close the few-event and large-token gaps.
+  Remaining risks: worksheet markup after non-element stripping is still tag-scanned rather than a full OOXML DOM; later mapping/persistence must consume this preview rather than re-parsing with a second library. PR #11 still points at cursor/outreach-automation-process-9003; ChatGPT owns replacing that PR from this named branch.
+  Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
 review_findings: |
   BLOCKING 1 — The documented 2,000 ms XML parse/validation bound is not enforced for documents with fewer than 256 parser events or for time spent in the declaration pre-scan. lib/orgs/tabular-xml.ts calls rejectProhibitedXmlDeclarations without deadline checks, checks the SAX parser only every 256 events, and performs no mandatory final deadline check. A minimal or few-event document can start or finish after the deadline and still be accepted; a large single text/attribute token has the same gap.
   BLOCKING 2 — Parent-scoped extraction is incomplete. lib/orgs/tabular-xlsx.ts accepts every SpreadsheetML <t> descendant of the current <si> or <c> except rPh, even when the text is nested under an invalid wrapper rather than a legal shared-string or inline-string path. Such incorrectly nested markup can still create normalized preview values, contrary to the corrective task and phase contract.
@@ -40,7 +64,7 @@ review_findings: |
 required_tests: |
   Add deterministic regression tests that fail on attempt 1 and pass after the fix: (1) deadline already expired at XML parser entry; (2) deadline crossed during a valid document with fewer than 256 SAX events; (3) bounded declaration pre-scan/final enforcement for a large or simulated long-running token; (4) sharedStrings <t> under an invalid wrapper inside <si>; (5) worksheet <t> outside legal <is>/<r> inline-string structure. Prove valid direct and rich-text shared strings and inline strings still parse, and preserve all root/namespace/DTD/entity/CDATA/PI regressions.
   Run npm ci; focused tabular structural/security tests; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "Cursor must claim attempt 2 on this same named branch, implement only the two blocking fixes and regressions below, then report READY_FOR_REVIEW with the exact implementation SHA and complete command results."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
