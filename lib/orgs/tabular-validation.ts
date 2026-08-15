@@ -25,6 +25,8 @@ export {
 } from "@/lib/orgs/tabular-helpers";
 export {
   CSV_MAPPED_FILE_MAX_ISSUES,
+  CSV_MAX_RECORD_SIZE,
+  CSV_RECORD_BATCH_SIZE,
   TABULAR_MAX_AGGREGATE_CHARS,
   TABULAR_MAX_BYTES,
   TABULAR_MAX_CELL_CHARS,
@@ -55,7 +57,7 @@ export async function validateTabularImport(input: {
   const started = performance.now();
 
   if (prepared.kind === "csv") {
-    return inspectPreparedCsv(prepared, started).preview;
+    return (await inspectPreparedCsv(prepared, started)).preview;
   }
 
   assertXlsxSignature(prepared.bytes);

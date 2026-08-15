@@ -1,8 +1,13 @@
 import "server-only";
 
-import { enforceTabularDeadline } from "@/lib/orgs/tabular-helpers";
+import {
+  parseCsvRecords,
+  type CsvParseDeadlineHooks,
+} from "@/lib/orgs/tabular-csv";
+import { enforceTabularDeadline, invalid } from "@/lib/orgs/tabular-helpers";
 import {
   CsvMappingError,
+  canonicalizeCsvMapping,
   mapCsvRows,
   parseCsvMappingInput,
   validateCsvMapping,
@@ -11,13 +16,15 @@ import {
   type CsvMappingInput,
   type CsvMappingTargetFamily,
 } from "@/lib/orgs/tabular-mapping";
+import { buildPreview, prepareTabularInput } from "@/lib/orgs/tabular-preview";
 import {
-  inspectPreparedCsv,
-  prepareTabularInput,
-} from "@/lib/orgs/tabular-preview";
-import { CSV_MAPPED_FILE_MAX_ISSUES } from "@/lib/orgs/tabular-types";
+  CSV_MAPPED_FILE_MAX_ISSUES,
+  CSV_RECORD_BATCH_SIZE,
+  TABULAR_MIME_BY_KIND,
+  type ParsedTabularSheet,
+} from "@/lib/orgs/tabular-types";
 
-export { CSV_MAPPED_FILE_MAX_ISSUES } from "@/lib/orgs/tabular-types";
+export { CSV_MAPPED_FILE_MAX_ISSUES, CSV_RECORD_BATCH_SIZE };
 
 export type CsvMappedFileResult = {
   family: CsvMappingTargetFamily;
@@ -32,19 +39,33 @@ export type CsvMappedFileResult = {
   validRowCount: number;
   invalidRowCount: number;
   skippedBlankRowCount: number;
+  processedRowCount: number;
+  validationComplete: boolean;
+  persistenceEligible: boolean;
   rows: CsvMappedPreviewRow[];
   issues: CsvMappedRowIssue[];
   issueCount: number;
   hasMoreIssues: boolean;
 };
 
-export function validateMappedCsvFile(input: {
+export type ValidateMappedCsvFileInput = {
   bytes: Uint8Array;
   filename: string;
   declaredMimeType: string;
   mapping: unknown;
-}): CsvMappedFileResult {
-  const started = performance.now();
+  now?: CsvParseDeadlineHooks["now"];
+  shouldTimeout?: CsvParseDeadlineHooks["shouldTimeout"];
+};
+
+export async function validateMappedCsvFile(
+  input: ValidateMappedCsvFileInput,
+): Promise<CsvMappedFileResult> {
+  const now = input.now ?? (() => performance.now());
+  const hooks: CsvParseDeadlineHooks = {
+    now,
+    shouldTimeout: input.shouldTimeout,
+  };
+  const started = now();
   const prepared = prepareTabularInput({
     bytes: input.bytes,
     filename: input.filename,
@@ -57,59 +78,138 @@ export function validateMappedCsvFile(input: {
     );
   }
 
-  const inspection = inspectPreparedCsv(prepared, started);
-  const parsed = parseCsvMappingInput(input.mapping);
-  const assignments = validateCsvMapping(inspection.preview, parsed);
-  enforceTabularDeadline(started);
-  const mapped = mapCsvRows(
-    inspection.rows,
-    inspection.preview.headers.length,
-    assignments,
-    parsed.family,
-  );
-  enforceTabularDeadline(started);
+  let parsed: CsvMappingInput | null = null;
+  let assignments: ReturnType<typeof validateCsvMapping> | null = null;
+  let headerCount = 0;
+  let headerPreview: ReturnType<typeof buildPreview> | null = null;
 
+  const mappedRows: CsvMappedPreviewRow[] = [];
+  const flattenedIssues: CsvMappedRowIssue[] = [];
   let validRowCount = 0;
   let invalidRowCount = 0;
-  const allIssues: CsvMappedRowIssue[] = [];
-  for (const row of mapped.rows) {
-    if (row.issues.length === 0) {
-      validRowCount += 1;
-    } else {
-      invalidRowCount += 1;
-      allIssues.push(...row.issues);
-    }
-  }
+  let skippedBlankRowCount = 0;
+  let observedIssueCount = 0;
+  let hasMoreIssues = false;
+  let validationComplete = true;
 
-  const issueCount = allIssues.length;
-  const mapping = canonicalizeMapping(parsed);
+  const ensureMapping = () => {
+    if (assignments && parsed) {
+      return { parsed, assignments };
+    }
+    if (!headerPreview) {
+      throw new CsvMappingError(
+        "invalid_mapping",
+        "The mapping is not a valid CSV mapping object.",
+      );
+    }
+    parsed = canonicalizeCsvMapping(parseCsvMappingInput(input.mapping));
+    assignments = validateCsvMapping(headerPreview, parsed);
+    return { parsed, assignments };
+  };
+
+  const parsedSheet = await parseCsvRecords(prepared.bytes, started, hooks, {
+    onHeader(headers, headerIssues) {
+      headerCount = headers.length;
+      const sheet: ParsedTabularSheet = {
+        info: { name: "Sheet1", index: 0, visibility: "visible" },
+        headerRowNumber: 1,
+        headers,
+        rows: [],
+        issues: headerIssues,
+        aggregateChars: 0,
+      };
+      headerPreview = buildPreview({
+        kind: "csv",
+        filename: prepared.filename,
+        bytes: prepared.bytes,
+        sha256: prepared.sha256,
+        sheets: [sheet.info],
+        selected: sheet,
+        extraIssues: [],
+      });
+    },
+    onRow(row, rowIssues) {
+      if (rowIssues.length > 0) {
+        throw new CsvMappingError(
+          "parser_not_ready",
+          "The CSV preview is not ready for mapping until parser issues are resolved.",
+        );
+      }
+      const ready = ensureMapping();
+      const mapped = mapCsvRows(
+        [row],
+        headerCount,
+        ready.assignments,
+        ready.parsed.family,
+      );
+      skippedBlankRowCount += mapped.skippedBlankRowCount;
+      for (const mappedRow of mapped.rows) {
+        const accepted = appendMappedRow(
+          mappedRow,
+          flattenedIssues,
+          observedIssueCount,
+        );
+        observedIssueCount = accepted.observedIssueCount;
+        mappedRows.push(mappedRow);
+        if (mappedRow.issues.length === 0) {
+          validRowCount += 1;
+        } else {
+          invalidRowCount += 1;
+        }
+        if (accepted.hasMoreIssues) {
+          hasMoreIssues = true;
+          validationComplete = false;
+          return "stop";
+        }
+      }
+      return "continue";
+    },
+  });
+
+  const ready = ensureMapping();
+
+  if (hooks.shouldTimeout?.("before_return", parsedSheet.processedRowCount)) {
+    throw invalid("timeout", "Tabular validation exceeded its time limit.");
+  }
+  enforceTabularDeadline(started, now);
+
+  const persistenceEligible =
+    validationComplete && invalidRowCount === 0 && !hasMoreIssues;
 
   return {
-    family: parsed.family,
-    mapping,
-    mappingIdentity: JSON.stringify(mapping),
-    filename: inspection.preview.filename,
-    mimeType: inspection.preview.mimeType,
-    byteLength: inspection.preview.byteLength,
-    sourceChecksum: inspection.preview.sha256,
-    totalRowCount: inspection.preview.totalRowCount,
-    nonblankRowCount: mapped.rows.length,
+    family: ready.parsed.family,
+    mapping: ready.parsed,
+    mappingIdentity: JSON.stringify(ready.parsed),
+    filename: prepared.filename,
+    mimeType: TABULAR_MIME_BY_KIND.csv,
+    byteLength: prepared.bytes.byteLength,
+    sourceChecksum: prepared.sha256,
+    totalRowCount: parsedSheet.processedRowCount,
+    nonblankRowCount: mappedRows.length,
     validRowCount,
     invalidRowCount,
-    skippedBlankRowCount: mapped.skippedBlankRowCount,
-    rows: mapped.rows,
-    issues: allIssues.slice(0, CSV_MAPPED_FILE_MAX_ISSUES),
-    issueCount,
-    hasMoreIssues: issueCount > CSV_MAPPED_FILE_MAX_ISSUES,
+    skippedBlankRowCount,
+    processedRowCount: parsedSheet.processedRowCount,
+    validationComplete,
+    persistenceEligible,
+    rows: mappedRows,
+    issues: flattenedIssues,
+    issueCount: flattenedIssues.length,
+    hasMoreIssues,
   };
 }
 
-function canonicalizeMapping(mapping: CsvMappingInput): CsvMappingInput {
-  return {
-    family: mapping.family,
-    columns: mapping.columns.map((column) => ({
-      sourceColumn: column.sourceColumn,
-      target: column.target,
-    })),
-  };
+function appendMappedRow(
+  row: CsvMappedPreviewRow,
+  flattenedIssues: CsvMappedRowIssue[],
+  observedIssueCount: number,
+): { observedIssueCount: number; hasMoreIssues: boolean } {
+  for (const issue of row.issues) {
+    observedIssueCount += 1;
+    if (observedIssueCount > CSV_MAPPED_FILE_MAX_ISSUES) {
+      return { observedIssueCount, hasMoreIssues: true };
+    }
+    flattenedIssues.push(issue);
+  }
+  return { observedIssueCount, hasMoreIssues: false };
 }

@@ -121,10 +121,10 @@ export function prepareTabularInput(input: {
   };
 }
 
-export function inspectPreparedCsv(
+export async function inspectPreparedCsv(
   prepared: PreparedTabularInput,
   started = performance.now(),
-): TabularCsvInspection {
+): Promise<TabularCsvInspection> {
   if (prepared.kind !== "csv") {
     throw invalid(
       "unsupported_type",
@@ -132,7 +132,7 @@ export function inspectPreparedCsv(
     );
   }
   assertCsvSignature(prepared.bytes);
-  const sheet = parseCsvSheet(prepared.bytes, started);
+  const sheet = await parseCsvSheet(prepared.bytes, started);
   return {
     preview: buildPreview({
       kind: "csv",

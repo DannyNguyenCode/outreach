@@ -6,11 +6,14 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { CSV_PARSE_PACKAGE, CSV_PARSE_VERSION } from "@/lib/orgs/tabular-csv";
 import {
   CSV_MAPPED_FILE_MAX_ISSUES,
+  CSV_RECORD_BATCH_SIZE,
   validateMappedCsvFile,
 } from "@/lib/orgs/tabular-csv-file";
 import {
+  canonicalizeCsvMapping,
   mapCsvPreview,
   type CsvMappingInput,
 } from "@/lib/orgs/tabular-mapping";
@@ -18,6 +21,7 @@ import {
   TABULAR_MAX_BYTES,
   TABULAR_MAX_CELL_CHARS,
   TABULAR_MAX_COLUMNS,
+  TABULAR_MAX_PARSE_MS,
   TABULAR_MAX_ROWS,
   TABULAR_PREVIEW_ROWS,
 } from "@/lib/orgs/tabular-types";
@@ -54,7 +58,7 @@ describe("CSV complete-file mapped validation", () => {
       declaredMimeType: CSV_MIME,
     });
     const mappedPreview = mapCsvPreview(preview, mapping);
-    const complete = validateMappedCsvFile({
+    const complete = await validateMappedCsvFile({
       bytes,
       filename: "knowledge.csv",
       declaredMimeType: CSV_MIME,
@@ -82,7 +86,10 @@ describe("CSV complete-file mapped validation", () => {
     expect(complete.invalidRowCount).toBe(0);
     expect(complete.skippedBlankRowCount).toBe(0);
     expect(complete.totalRowCount).toBe(TABULAR_PREVIEW_ROWS + 10);
+    expect(complete.processedRowCount).toBe(TABULAR_PREVIEW_ROWS + 10);
     expect(complete.hasMoreIssues).toBe(false);
+    expect(complete.validationComplete).toBe(true);
+    expect(complete.persistenceEligible).toBe(true);
   });
 
   it("detects an invalid mapped value only after preview row 50", async () => {
@@ -103,7 +110,7 @@ describe("CSV complete-file mapped validation", () => {
       declaredMimeType: CSV_MIME,
     });
     const mappedPreview = mapCsvPreview(preview, mapping);
-    const complete = validateMappedCsvFile({
+    const complete = await validateMappedCsvFile({
       bytes,
       filename: "late-invalid.csv",
       declaredMimeType: CSV_MIME,
@@ -129,18 +136,18 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
-  it("fails closed when a formula-like cell appears only after preview row 50", () => {
+  it("fails closed when a formula-like cell appears only after preview row 50", async () => {
     const valid = Array.from({ length: TABULAR_PREVIEW_ROWS }, (_, index) =>
       knowledgeRow(`item-${index + 1}`),
     );
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(knowledgeCsv([...valid, ["=cmd", "Overview", "Body"]])),
         filename: "late-formula.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "CsvMappingError",
         code: "parser_not_ready",
@@ -148,7 +155,7 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
-  it("preserves first/last source rows and skips internal blank rows", () => {
+  it("preserves first/last source rows and skips internal blank rows", async () => {
     const bytes = csvBytes(
       [
         KNOWLEDGE_HEADERS.join(","),
@@ -160,7 +167,7 @@ describe("CSV complete-file mapped validation", () => {
         "",
       ].join("\n"),
     );
-    const complete = validateMappedCsvFile({
+    const complete = await validateMappedCsvFile({
       bytes,
       filename: "blanks.csv",
       declaredMimeType: CSV_MIME,
@@ -175,8 +182,8 @@ describe("CSV complete-file mapped validation", () => {
     expect(complete.nonblankRowCount).toBe(3);
   });
 
-  it("treats a CSV whose data rows are entirely blank as empty after trailing-strip", () => {
-    const complete = validateMappedCsvFile({
+  it("treats a CSV whose data rows are entirely blank as empty after trailing-strip", async () => {
+    const complete = await validateMappedCsvFile({
       bytes: csvBytes("Title,Section,Body\n,,\n,,\n"),
       filename: "all-blank.csv",
       declaredMimeType: CSV_MIME,
@@ -189,8 +196,8 @@ describe("CSV complete-file mapped validation", () => {
     expect(complete.invalidRowCount).toBe(0);
   });
 
-  it("maps knowledge and offering families with existing cross-field semantics", () => {
-    const knowledge = validateMappedCsvFile({
+  it("maps knowledge and offering families with existing cross-field semantics", async () => {
+    const knowledge = await validateMappedCsvFile({
       bytes: csvBytes(
         knowledgeCsv([
           ["Return policy", "Overview", "30 day returns"],
@@ -208,7 +215,7 @@ describe("CSV complete-file mapped validation", () => {
       "knowledge.passageBody": { kind: "text", value: "30 day returns" },
     });
 
-    const offering = validateMappedCsvFile({
+    const offering = await validateMappedCsvFile({
       bytes: csvBytes(
         [
           OFFERING_HEADERS.join(","),
@@ -235,71 +242,71 @@ describe("CSV complete-file mapped validation", () => {
     ).toBe(true);
   });
 
-  it("fails malformed bytes, mappings, headers, formulas, and limits through existing static errors", () => {
-    expect(() =>
+  it("fails malformed bytes, mappings, headers, formulas, and limits through existing static errors", async () => {
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(""),
         filename: "empty.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "empty",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes("Title,Section,Body\nPolicy,Overview,=HYPERLINK\n"),
         filename: "formula.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "CsvMappingError",
         code: "parser_not_ready",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes("Title,Title,Body\nA,B,C\n"),
         filename: "dup-header.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "CsvMappingError",
         code: "parser_not_ready",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes("Title,Section,Body\nPolicy,Overview,Returns\n"),
         filename: "knowledge.csv",
         declaredMimeType: CSV_MIME,
         mapping: null,
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "CsvMappingError",
         code: "invalid_mapping",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(`H\n${"x".repeat(TABULAR_MAX_CELL_CHARS + 1)}\n`),
         filename: "cell-over.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "cell_too_long",
@@ -310,42 +317,42 @@ describe("CSV complete-file mapped validation", () => {
       { length: TABULAR_MAX_COLUMNS + 1 },
       (_, index) => `C${index}`,
     ).join(",");
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(`${tooManyColumns}\n`),
         filename: "too-many-cols.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "too_many_columns",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: new Uint8Array(TABULAR_MAX_BYTES + 1),
         filename: "huge.csv",
         declaredMimeType: CSV_MIME,
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "too_large",
       }),
     );
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes("Title,Section,Body\nPolicy,Overview,Returns\n"),
         filename: "notes.txt",
         declaredMimeType: "text/plain",
         mapping: knowledgeMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "unsupported_type",
@@ -353,15 +360,15 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
-  it("rejects XLSX before workbook helpers run", () => {
-    expect(() =>
+  it("rejects XLSX before workbook helpers run", async () => {
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes("Name,Type,Pricing model\nWidget,PRODUCT,NONE\n"),
         filename: "offerings.xlsx",
         declaredMimeType: XLSX_MIME,
         mapping: offeringMapping(),
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "CsvMappingError",
         code: "unsupported_kind",
@@ -369,7 +376,7 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
-  it("accepts the CSV row-limit boundary and rejects one past it", () => {
+  it("accepts the CSV row-limit boundary and rejects one past it", async () => {
     const mapping: CsvMappingInput = {
       family: "knowledge",
       columns: [
@@ -378,7 +385,7 @@ describe("CSV complete-file mapped validation", () => {
         { sourceColumn: 3, target: "knowledge.passageBody" },
       ],
     };
-    const accepted = validateMappedCsvFile({
+    const accepted = await validateMappedCsvFile({
       bytes: csvBytes(
         `Title,Section,Body\n${"Item,Overview,Body\n".repeat(TABULAR_MAX_ROWS - 1)}`,
       ),
@@ -390,7 +397,7 @@ describe("CSV complete-file mapped validation", () => {
     expect(accepted.rows).toHaveLength(TABULAR_MAX_ROWS - 1);
     expect(accepted.rows.at(-1)?.sourceRowNumber).toBe(TABULAR_MAX_ROWS);
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(
           `Title,Section,Body\n${"Item,Overview,Body\n".repeat(TABULAR_MAX_ROWS)}`,
@@ -399,7 +406,7 @@ describe("CSV complete-file mapped validation", () => {
         declaredMimeType: CSV_MIME,
         mapping,
       }),
-    ).toThrowError(
+    ).rejects.toMatchObject(
       expect.objectContaining({
         name: "TabularValidationError",
         code: "too_many_rows",
@@ -407,27 +414,58 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
-  it("caps flattened issues without implying omitted invalid rows were valid", () => {
-    const rows = Array.from(
-      { length: CSV_MAPPED_FILE_MAX_ISSUES + 5 },
-      () => ",Overview,Body",
-    );
-    const complete = validateMappedCsvFile({
+  it("stops after the first issue beyond the public cap and marks counts partial", async () => {
+    const sentinel = "SENTINEL-SHOULD-NOT-BE-MAPPED";
+    const rows = [
+      ...Array.from(
+        { length: CSV_MAPPED_FILE_MAX_ISSUES + 1 },
+        () => ",Overview,Body",
+      ),
+      knowledgeRow(sentinel).join(","),
+    ];
+    const complete = await validateMappedCsvFile({
       bytes: csvBytes(`Title,Section,Body\n${rows.join("\n")}\n`),
       filename: "many-invalid.csv",
       declaredMimeType: CSV_MIME,
       mapping: knowledgeMapping(),
     });
-    expect(complete.invalidRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES + 5);
-    expect(complete.validRowCount).toBe(0);
-    expect(complete.issueCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES + 5);
     expect(complete.issues).toHaveLength(CSV_MAPPED_FILE_MAX_ISSUES);
+    expect(complete.issueCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES);
     expect(complete.hasMoreIssues).toBe(true);
-    expect(complete.rows).toHaveLength(CSV_MAPPED_FILE_MAX_ISSUES + 5);
+    expect(complete.validationComplete).toBe(false);
+    expect(complete.persistenceEligible).toBe(false);
+    expect(complete.invalidRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES + 1);
+    expect(complete.validRowCount).toBe(0);
+    expect(complete.rows).toHaveLength(CSV_MAPPED_FILE_MAX_ISSUES + 1);
+    expect(complete.processedRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES + 1);
+    expect(complete.totalRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES + 1);
+    expect(
+      complete.rows.some((row) => JSON.stringify(row).includes(sentinel)),
+    ).toBe(false);
     expect(complete.rows.every((row) => row.issues.length === 1)).toBe(true);
   });
 
-  it("repeats canonical checksum/mapping identity and does not mutate inputs", () => {
+  it("scans invalid files at the issue cap through EOF with exact complete metadata", async () => {
+    const rows = Array.from(
+      { length: CSV_MAPPED_FILE_MAX_ISSUES },
+      () => ",Overview,Body",
+    );
+    const complete = await validateMappedCsvFile({
+      bytes: csvBytes(`Title,Section,Body\n${rows.join("\n")}\n`),
+      filename: "cap-exact.csv",
+      declaredMimeType: CSV_MIME,
+      mapping: knowledgeMapping(),
+    });
+    expect(complete.validationComplete).toBe(true);
+    expect(complete.hasMoreIssues).toBe(false);
+    expect(complete.persistenceEligible).toBe(false);
+    expect(complete.invalidRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES);
+    expect(complete.issueCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES);
+    expect(complete.processedRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES);
+    expect(complete.totalRowCount).toBe(CSV_MAPPED_FILE_MAX_ISSUES);
+  });
+
+  it("repeats canonical checksum/mapping identity and does not mutate inputs", async () => {
     const csv = knowledgeCsv([knowledgeRow("Policy")]);
     const bytes = csvBytes(csv);
     const original = Uint8Array.from(bytes);
@@ -435,13 +473,13 @@ describe("CSV complete-file mapped validation", () => {
     Object.freeze(mapping);
     Object.freeze(mapping.columns);
 
-    const first = validateMappedCsvFile({
+    const first = await validateMappedCsvFile({
       bytes,
       filename: "knowledge.csv",
       declaredMimeType: CSV_MIME,
       mapping,
     });
-    const second = validateMappedCsvFile({
+    const second = await validateMappedCsvFile({
       bytes,
       filename: "knowledge.csv",
       declaredMimeType: CSV_MIME,
@@ -493,6 +531,142 @@ describe("CSV complete-file mapped validation", () => {
     );
   });
 
+  it("produces byte-for-byte identical canonical mappings when column arrays are permuted", async () => {
+    const bytes = csvBytes(
+      knowledgeCsv([
+        ["Return policy", "Overview", "30 day returns"],
+        ["Hours", "Support", "9 to 5"],
+      ]),
+    );
+    const forward = knowledgeMapping();
+    const reversed: CsvMappingInput = {
+      family: "knowledge",
+      columns: [...forward.columns].reverse(),
+    };
+    const swapped: CsvMappingInput = {
+      family: "knowledge",
+      columns: [forward.columns[1]!, forward.columns[2]!, forward.columns[0]!],
+    };
+    const results = await Promise.all(
+      [forward, reversed, swapped].map((mapping) =>
+        validateMappedCsvFile({
+          bytes,
+          filename: "knowledge.csv",
+          declaredMimeType: CSV_MIME,
+          mapping,
+        }),
+      ),
+    );
+    const identities = results.map((result) => result.mappingIdentity);
+    expect(new Set(identities).size).toBe(1);
+    expect(identities[0]).toBe(JSON.stringify(canonicalizeCsvMapping(forward)));
+    expect(JSON.stringify(results[1]?.mapping)).toBe(
+      JSON.stringify(results[0]?.mapping),
+    );
+    expect(JSON.stringify(results[1]?.rows)).toBe(
+      JSON.stringify(results[0]?.rows),
+    );
+    expect(JSON.stringify(results[2]?.rows)).toBe(
+      JSON.stringify(results[0]?.rows),
+    );
+    expect(results[0]?.validRowCount).toBe(2);
+    expect(results.map((result) => result.processedRowCount)).toEqual([
+      2, 2, 2,
+    ]);
+  });
+
+  it("produces identical offering results for equivalent permuted mappings", async () => {
+    const bytes = csvBytes(
+      [
+        OFFERING_HEADERS.join(","),
+        "Widget,PRODUCT,FIXED_ONE_TIME,9.99,USD,ONE_TIME",
+      ].join("\n") + "\n",
+    );
+    const forward = offeringMapping();
+    const reversed: CsvMappingInput = {
+      family: "offering",
+      columns: [...forward.columns].reverse(),
+    };
+    const first = await validateMappedCsvFile({
+      bytes,
+      filename: "offerings.csv",
+      declaredMimeType: CSV_MIME,
+      mapping: forward,
+    });
+    const second = await validateMappedCsvFile({
+      bytes,
+      filename: "offerings.csv",
+      declaredMimeType: CSV_MIME,
+      mapping: reversed,
+    });
+    expect(second.mappingIdentity).toBe(first.mappingIdentity);
+    expect(JSON.stringify(second.mapping)).toBe(JSON.stringify(first.mapping));
+    expect(JSON.stringify(second.rows)).toBe(JSON.stringify(first.rows));
+    expect(second.validRowCount).toBe(first.validRowCount);
+  });
+
+  it("times out at a 100-row batch boundary before completing", async () => {
+    const rows = Array.from(
+      { length: CSV_RECORD_BATCH_SIZE + 20 },
+      (_, index) => knowledgeRow(`item-${index + 1}`).join(","),
+    );
+    await expect(
+      validateMappedCsvFile({
+        bytes: csvBytes(`Title,Section,Body\n${rows.join("\n")}\n`),
+        filename: "batch-timeout.csv",
+        declaredMimeType: CSV_MIME,
+        mapping: knowledgeMapping(),
+        now: () => 0,
+        shouldTimeout: (checkpoint, processedRowCount) =>
+          checkpoint === "batch" && processedRowCount === CSV_RECORD_BATCH_SIZE,
+      }),
+    ).rejects.toMatchObject({
+      name: "TabularValidationError",
+      code: "timeout",
+    });
+  });
+
+  it("times out during final partial-batch aggregation before completing", async () => {
+    const rows = Array.from({ length: 40 }, (_, index) =>
+      knowledgeRow(`item-${index + 1}`).join(","),
+    );
+    await expect(
+      validateMappedCsvFile({
+        bytes: csvBytes(`Title,Section,Body\n${rows.join("\n")}\n`),
+        filename: "partial-timeout.csv",
+        declaredMimeType: CSV_MIME,
+        mapping: knowledgeMapping(),
+        now: () => 0,
+        shouldTimeout: (checkpoint) => checkpoint === "final_partial_batch",
+      }),
+    ).rejects.toMatchObject({
+      name: "TabularValidationError",
+      code: "timeout",
+    });
+    expect(TABULAR_MAX_PARSE_MS).toBe(2_000);
+  });
+
+  it("rejects the same malformed quoting from preview and complete-file paths", async () => {
+    const bytes = csvBytes(
+      'Title,Section,Body\n"safe"attacker,Overview,Body\n',
+    );
+    await expect(
+      validateTabularImport({
+        bytes,
+        filename: "junk.csv",
+        declaredMimeType: CSV_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+    await expect(
+      validateMappedCsvFile({
+        bytes,
+        filename: "junk.csv",
+        declaredMimeType: CSV_MIME,
+        mapping: knowledgeMapping(),
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+  });
+
   it("does not import XLSX helpers", () => {
     const source = readFileSync(
       path.join(process.cwd(), "lib/orgs/tabular-csv-file.ts"),
@@ -502,12 +676,20 @@ describe("CSV complete-file mapped validation", () => {
       path.join(process.cwd(), "lib/orgs/tabular-preview.ts"),
       "utf8",
     );
-    for (const text of [source, previewSource]) {
+    const parserSource = readFileSync(
+      path.join(process.cwd(), "lib/orgs/tabular-csv.ts"),
+      "utf8",
+    );
+    for (const text of [source, previewSource, parserSource]) {
       expect(text).not.toContain("tabular-xlsx");
       expect(text).not.toContain("tabular-xml");
       expect(text).not.toContain("tabular-zip");
       expect(text).not.toContain("parseXlsxWorkbook");
     }
+    expect(parserSource).toContain(`from "${CSV_PARSE_PACKAGE}"`);
+    expect(parserSource).not.toContain("inQuotes");
+    expect(source).not.toContain(`from "${CSV_PARSE_PACKAGE}"`);
+    expect(CSV_PARSE_VERSION).toBe("7.0.2");
   });
 });
 

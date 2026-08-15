@@ -21,8 +21,8 @@ afterEach(() => {
 });
 
 describe("CSV complete-file mapping security", () => {
-  it("keeps secrets, formulas, and URLs out of thrown errors and row issues", () => {
-    const complete = validateMappedCsvFile({
+  it("keeps secrets, formulas, and URLs out of thrown errors and row issues", async () => {
+    const complete = await validateMappedCsvFile({
       bytes: csvBytes(
         `Title,Section,Body,From\nPolicy,Overview,${SECRET},not-a-date\n`,
       ),
@@ -58,7 +58,7 @@ describe("CSV complete-file mapping security", () => {
     expect(serialized).not.toContain("https://");
   });
 
-  it("rejects payload-bearing malformed mappings with static errors", () => {
+  it("rejects payload-bearing malformed mappings with static errors", async () => {
     const bytes = csvBytes("Title,Section,Body\nPolicy,Overview,Returns\n");
     const malformed = [
       JSON.parse("null"),
@@ -75,7 +75,7 @@ describe("CSV complete-file mapping security", () => {
     ];
 
     for (const mapping of malformed) {
-      expectThrownStaticError(() =>
+      await expectThrownStaticError(() =>
         validateMappedCsvFile({
           bytes,
           filename: "knowledge.csv",
@@ -86,9 +86,9 @@ describe("CSV complete-file mapping security", () => {
     }
   });
 
-  it("does not echo XLSX payloads when rejecting workbook files", () => {
+  it("does not echo XLSX payloads when rejecting workbook files", async () => {
     try {
-      validateMappedCsvFile({
+      await validateMappedCsvFile({
         bytes: csvBytes(`${SECRET},${EVIL_URL},${FORMULA}\n`),
         filename: "payload.xlsx",
         declaredMimeType: XLSX_MIME,
@@ -105,13 +105,13 @@ describe("CSV complete-file mapping security", () => {
     }
   });
 
-  it("has no database, storage, network, filesystem, or formula side effects", () => {
+  it("has no database, storage, network, filesystem, or formula side effects", async () => {
     const fetchSpy = vi.fn();
     const prismaSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     vi.stubGlobal("prisma", { offering: { create: prismaSpy } });
 
-    expect(() =>
+    await expect(
       validateMappedCsvFile({
         bytes: csvBytes(`Title,Section,Body\n${FORMULA},Overview,Returns\n`),
         filename: "formula.csv",
@@ -125,9 +125,9 @@ describe("CSV complete-file mapping security", () => {
           ],
         },
       }),
-    ).toThrowError(expect.objectContaining({ code: "parser_not_ready" }));
+    ).rejects.toMatchObject({ code: "parser_not_ready" });
 
-    const complete = validateMappedCsvFile({
+    const complete = await validateMappedCsvFile({
       bytes: csvBytes(`Title,Section,Body\nPolicy,Overview,${EVIL_URL}\n`),
       filename: "url.csv",
       declaredMimeType: CSV_MIME,
@@ -151,10 +151,10 @@ describe("CSV complete-file mapping security", () => {
   });
 });
 
-function expectThrownStaticError(run: () => unknown): void {
+async function expectThrownStaticError(run: () => unknown): Promise<void> {
   let thrown: unknown;
   try {
-    run();
+    await run();
   } catch (error) {
     thrown = error;
   }

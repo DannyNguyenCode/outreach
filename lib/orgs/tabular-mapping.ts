@@ -461,7 +461,29 @@ export function parseCsvMappingInput(input: unknown): CsvMappingInput {
     });
   }
 
-  return { family, columns };
+  return canonicalizeCsvMapping({ family, columns });
+}
+
+/**
+ * Rebuilds a mapping with a fixed property set and sourceColumn order so
+ * equivalent mappings are byte-for-byte identical. Does not mutate input.
+ */
+export function canonicalizeCsvMapping(
+  mapping: CsvMappingInput,
+): CsvMappingInput {
+  const columns = mapping.columns.map((column) => ({
+    sourceColumn: column.sourceColumn,
+    target: column.target,
+  }));
+  columns.sort(
+    (left, right) =>
+      left.sourceColumn - right.sourceColumn ||
+      left.target.localeCompare(right.target),
+  );
+  return {
+    family: mapping.family,
+    columns,
+  };
 }
 
 export function mapCsvPreview(
@@ -601,7 +623,12 @@ function mapPreviewRow(
   >();
   const columnByField = new Map<CsvMappingTargetFieldId, number>();
 
-  for (const [sourceColumn, target] of assignments) {
+  const orderedAssignments = [...assignments.entries()].sort(
+    (left, right) =>
+      left[0] - right[0] || String(left[1]).localeCompare(String(right[1])),
+  );
+
+  for (const [sourceColumn, target] of orderedAssignments) {
     if (target === CSV_MAPPING_IGNORED_TARGET) continue;
     const field = REGISTRY_BY_ID.get(target);
     if (!field) continue;
