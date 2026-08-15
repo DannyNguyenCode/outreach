@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-ooxml-structural-validation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: f49e3a54847a5317cde2fc1187b301da78636b0e
 last_reviewed_sha: 6c668e44fae2da694e00478f15e431c9d96b2642
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: BLOCKED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -64,7 +64,7 @@ review_findings: |
 required_tests: |
   Add deterministic regression tests that fail on attempt 1 and pass after the fix: (1) deadline already expired at XML parser entry; (2) deadline crossed during a valid document with fewer than 256 SAX events; (3) bounded declaration pre-scan/final enforcement for a large or simulated long-running token; (4) sharedStrings <t> under an invalid wrapper inside <si>; (5) worksheet <t> outside legal <is>/<r> inline-string structure. Prove valid direct and rich-text shared strings and inline strings still parse, and preserve all root/namespace/DTD/entity/CDATA/PI regressions.
   Run npm ci; focused tabular structural/security tests; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT owns the branch and must complete the full develop merge-gate review. Cursor must not modify or push until ChatGPT returns the branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -108,5 +108,9 @@ Regression tests and acceptance:
 - Add positive direct/rich-text shared-string and inline-string cases so the fix does not reject valid namespace-prefixed workbooks.
 - Run and report every command in `required_tests`. Missing, skipped, pending, or failed required checks are not a pass.
 - When claiming this task, increment `cursor_attempt_count` exactly once from 1 to 2 and set `CURSOR_WORKING`. On completion, set `READY_FOR_REVIEW`, set `cursor_implementation_sha` to the implementation commit, summarize changed files and behavior, and report exact test/CI evidence. Do not push while a ChatGPT-owned status is active.
+
+## ChatGPT review in progress
+
+Cursor must not modify code, update this file, push commits, merge, or begin another task while `status: CHATGPT_REVIEWING_FOR_DEVELOP`.
 
 <!-- END:outreach-automation -->
