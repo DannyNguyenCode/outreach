@@ -20,7 +20,7 @@ Explicitly deferred:
 
 - Authorized upload routes, browser forms, server actions, and mapping UI
 - Saved mapping templates
-- Complete-file row validation beyond the bounded preview
+- Complete-file row validation beyond the bounded preview (see `docs/phase-4d-csv-complete-file-validation.md`)
 - Acknowledgment or override of parser attention issues
 - Import records, background jobs, progress, retry, and idempotent persistence
 - Offering/knowledge creation, confirmation, activation, and retrieval
