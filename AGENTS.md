@@ -17,26 +17,54 @@ task_id: phase-04d-source-runtime-composition-001
 phase: "Phase 4D — Source classification and runtime composition"
 active_branch: feature/phase-04d-source-runtime-composition-v2
 base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
-cursor_implementation_sha: null
+cursor_implementation_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
 last_reviewed_sha: null
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 12
 previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_attempt_count: 1
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: null
+last_cursor_activity_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T14:07:20Z"
-cursor_report: null
+cursor_completed_at: "2026-08-15T14:20:38Z"
+cursor_report: |
+  Attempt 1 of 3 completed at implementation SHA 2d8bd1983c23b8b461d8a616cc8545a3e81fc373 (claim c4ba8ed2aa90da60e7dd7a640cea066ed2254464). Objective: implement KNOW-004 source classification and runtime composition over existing confirmed Phase 4A–4C domains without consuming CSV/XLSX previews.
+  Requirements/acceptance: exhaustive RUNTIME_SOURCE_REGISTRY and RUNTIME_SOURCE_ADAPTERS (live adapters only for CUSTOMER_CONFIRMED_KNOWLEDGE and STRUCTURED_OFFERING; future classes explicit null). composeRuntimeContext enforces org.knowledge.read, rechecks organization IDs, bounds query/limit, keeps organization evidence separate from prospect/call classes, returns UNKNOWN with no fabricated data, and surfaces a narrow deterministic base-price mismatch as CONFLICT without arbitration. Prompt-facing text is delimited as untrusted source data. Inspector at /app/orgs/[slug]/knowledge/sources is a read-only Server Component evidence preview. Audit package is IDs-only and is not persisted. retrieveActiveKnowledge now exposes source title/inputKind; member-visible DOCUMENT versions require CLEAN+COMPLETE processing.
+  Files changed: lib/orgs/runtime-evidence.ts; lib/orgs/runtime-source-adapters.ts; lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.ts; lib/orgs/knowledge-retrieval.ts; lib/orgs/knowledge-visibility.ts; lib/orgs/offering-confirmation.ts; app/app/orgs/[slug]/knowledge/sources/page.tsx; components/orgs/knowledge/knowledge-nav.tsx; docs/phase-4d-source-runtime-composition.md; README.md. Tests: lib/orgs/runtime-evidence.test.ts; lib/orgs/runtime-composition.test.ts; lib/orgs/knowledge-visibility.test.ts; tests/integration/runtime-composition.test.ts; e2e/knowledge.spec.ts. No migrations added or changed. No new npm dependencies. Tabular parser not imported. MR-4D-OOXML-001 left OPEN.
+  Tests added/updated: exhaustive registry/authority/bounds/prompt-boundary/JSON-bounding unit tests; ordering and narrow price-conflict unit tests; integration coverage for manual/document provenance, offering children, draft/future/expired/archived/failed exclusion, MEMBER/inactive/unverified/forged/cross-tenant denial, invalid input, deterministic audit IDs, CONFLICT without arbitration, prompt-injection treated as data, UNKNOWN future classes, missing prospect/call context; inspector E2E after confirmed knowledge. Existing CSV/XLSX, Phase 4A–4C, and document retrieval regressions preserved.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
+  - focused runtime/visibility unit tests: 3 files, 11 passed
+  - npm test: 28 files, 241 passed
+  - focused tests/integration/runtime-composition.test.ts: 1 file, 10 passed
+  - npm run test:integration: 41 files, 487 passed
+  - npm run build: Next.js 16.3.0 compiled successfully; /app/orgs/[slug]/knowledge/sources present
+  - CI=true npm run test:e2e: 16 passed (29.7s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  - exact-head GitHub Actions run 31889420552 on 2d8bd1983c23b8b461d8a616cc8545a3e81fc373: success (https://github.com/DannyNguyenCode/outreach/actions/runs/31889420552)
+  Authorization/tenant isolation: composition independently requires active membership and org.knowledge.read; adapters reuse existing retrieval services. Inactive, unverified, forged, and cross-tenant actors are denied with payload-free reasons. MEMBERs can compose current confirmed same-tenant evidence.
+  Security/privacy: no credentials, tokens, storage paths, checksums, or customer bodies in audit packages. Inspector reads are not persisted. Instruction-like source text remains labelled data. Formulas/links/tabular parsers are unused. No writer/promotion path from caller/CRM/note data into reusable knowledge.
+  Failure/recovery: invalid source class/query/limit and missing prospect/call context return invalid_input; auth failures stay payload-free; empty support is UNKNOWN; conflicts remain visible. No jobs or storage objects are created.
+  Manual configuration still required: none for this slice.
+  Assumptions: rPh/tabular/XLSX preview remain out of scope; future source classes stay null until their domains exist; inspector audit persistence waits for an approved call/audit contract.
+  Remaining risks: conflict detection is exact/narrow, not semantic; worksheet/CSV import mapping still later; KNOW-005 retrieval ranking is not implemented.
+  Deferred work: CSV/XLSX mapping/persistence/activation, prospects, CRM, calls, transcription, AI generation, embeddings, information-gap persistence, and Phase 5. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
 review_findings: |
   Phase 4D tabular validation and its OOXML correction were squash-merged through PR #12 at develop SHA 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad.
   The unmerged branch feature/phase-04d-source-runtime-composition contains one stale implementation commit based on d06ec79f0d5ee7297e934aed2f692f13f472cfcf and is now two develop commits behind. It has no Outreach automation block and is reference material only.
   This task is independently safe under MR-4D-OOXML-001 because it composes only existing confirmed Phase 4A–4C sources and must not consume, expose, map, persist, activate, or reparse CSV/XLSX previews.
 required_tests: |
   Require focused runtime evidence/composition unit and integration tests; authorization and cross-tenant regressions; inactive/draft/future/expired/archived/unsafe-source exclusion; deterministic conflict and UNKNOWN behavior; prompt-boundary and safe-output tests; source-inspector accessibility/E2E; npm ci; format:check; lint; typecheck; prisma:validate; fresh PostgreSQL prisma:migrate:deploy; npm test; test:integration; build; CI=true test:e2e; npm audit --omit=dev; git diff --check; and successful exact-head GitHub Actions.
-next_action: "Cursor must claim attempt 1 on this branch, audit the stale reference implementation against current develop and the prompt below, port or reimplement only accepted scope, verify completely, and return READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
