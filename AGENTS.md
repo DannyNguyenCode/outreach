@@ -19,11 +19,20 @@ active_branch: feature/phase-04d-source-runtime-composition-v2
 base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_implementation_sha: 404ea8deff482d27416cbd05dfe62e22a5480909
 last_reviewed_sha: b5b213b799e769439f38926941fe1d9d6c938347
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 12
 previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_attempt_count: 3
+cursor_attempt_count_legacy: true
+blocker_set_revision: 2
+blocker_set_signature:
+  - BLK-4D-RUNTIME-CURRENCY-TOKEN-BOUNDARY
+blocker_attempt_count: 1
+blocker_history: |
+  Revision 1 attempt 1 identified offering/currency precision, conflict-safe limiting, and prompt-boundary blockers.
+  Revision 1 attempt 2 verified those blockers resolved and identified one remaining currency-marker token-boundary blocker.
+  Verified progress reduced the set, so revision 2 reset the remaining blocker to attempt 1 under Bao's progress-sensitive policy.
 consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 404ea8deff482d27416cbd05dfe62e22a5480909
 stop_reason: null
@@ -84,7 +93,7 @@ manual_review_flags:
     resolution_evidence: "Corrective implementation f49e3a54847a5317cde2fc1187b301da78636b0e; exact final-head CI run 31887553240; PR #12 squash-merged to develop at 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad. Awaiting Bao explicit removal instruction."
 ```
 
-## Cursor corrective prompt — final attempt 3
+## Cursor corrective prompt — completed currency-boundary correction
 
 Objective: close the remaining false-positive path in the deterministic currency matcher without broadening KNOW-004 conflict semantics.
 
@@ -106,7 +115,7 @@ Regression tests and acceptance:
 - Add the table-driven negative and positive cases listed in `required_tests`. The embedded-marker negatives must fail against attempt 2 before the fix and pass afterward.
 - Do not alter conflict-aware selection, prompt encoding, adapters, authorization, inspector UI, migrations, dependencies, tabular imports, or future source classes.
 - Run and report every command in `required_tests`; missing/skipped/pending evidence is not a pass.
-- When claiming, increment `cursor_attempt_count` exactly once from 2 to 3 and set `CURSOR_WORKING`. On completion set `READY_FOR_REVIEW`, update `cursor_implementation_sha`, reset unchanged checks, and report the exact implementation SHA, changed files, before/after regression proof, full tests/CI, security/tenant evidence, remaining risks, and exclusions.
-- This is attempt 3 of 3. Do not claim or perform a fourth attempt.
+- Legacy Cursor run numbering is non-authoritative. The remaining blocker is revision 2 attempt 1 under Bao's progress-sensitive policy. ChatGPT owns blocker-set counting; Cursor must preserve it.
+- On completion set `READY_FOR_REVIEW`, update `cursor_implementation_sha`, reset unchanged checks, and report the exact implementation SHA, changed files, before/after regression proof, full tests/CI, security/tenant evidence, remaining risks, and exclusions.
 
 <!-- END:outreach-automation -->
