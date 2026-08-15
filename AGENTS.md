@@ -19,7 +19,7 @@ active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
 cursor_implementation_sha: 3f389873a05a7f214ddb57371651129697f16f66
 last_reviewed_sha: 0df214b2975cde3e55b85f67f590a81c16a46284
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
@@ -30,7 +30,7 @@ stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T02:32:00Z"
 cursor_completed_at: "2026-08-15T02:36:30Z"
-next_action: "ChatGPT must review the complete branch against current develop and decide whether a corrective PR may merge into develop."
+next_action: "ChatGPT is reviewing the exact branch head for a guarded squash merge into develop. Cursor must not modify or push."
 ```
 
 ## Why this task is required
