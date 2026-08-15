@@ -39,17 +39,17 @@ blocker_history:
     attempt: 1
     evidence: "Complete-row mapping has no periodic deadline checks and flattened issues are fully accumulated before the 1000-item slice; canonical mapping identity preserves caller column order; base-to-implementation git diff --check fails on trailing whitespace despite the completion report claiming clean."
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
+last_cursor_activity_sha: b4540467323c49cbbe2084998cc7a3374abe8942
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T21:08:18Z"
 cursor_completed_at: "2026-08-15T20:19:05Z"
-cursor_claim_sha: babbea38a8df7432744ef7b4169aa67581e9055d
+cursor_claim_sha: 542c542084a3efc196e588541824f8ddad5b8d06
 cursor_lease_id: 40fedcba-56e3-45ed-b186-25e1fecf2272
-cursor_lease_expires_at: "2026-08-15T22:03:18Z"
-cursor_heartbeat_at: "2026-08-15T21:08:18Z"
-cursor_checkpoint_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
-cursor_checkpoint_summary: "Base implementation is committed and verified; resume from 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 to fix the complete-file bounds, canonical-identity, and verification blockers together."
+cursor_lease_expires_at: "2026-08-15T22:14:35Z"
+cursor_heartbeat_at: "2026-08-15T21:19:35Z"
+cursor_checkpoint_sha: b4540467323c49cbbe2084998cc7a3374abe8942
+cursor_checkpoint_summary: "csv-parse 7.0.2 adapter, canonical sourceColumn identity, 100-row batch/deadline hooks, incremental 1000-issue early-stop, and official templates are committed at b4540467323c49cbbe2084998cc7a3374abe8942. Focused parser/mapping/complete-file/template/security tests: 7 files, 116 passed. Next: npm ci, format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, committed-range git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
 cursor_report: |
   Complete-file CSV mapped-validation foundation completed at implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 (claim babbea38a8df7432744ef7b4169aa67581e9055d). Objective: prove every accepted CSV data row is structurally and semantically validated against a customer-reviewed mapping before later persistence work, without trusting a caller-supplied preview and without persisting, activating, or mapping XLSX.
