@@ -17,20 +17,62 @@ task_id: phase-04b-corrective-sync-001
 phase: "Phase 4B corrective integration — attempt 2 requested"
 active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
-cursor_implementation_sha: 3f389873a05a7f214ddb57371651129697f16f66
+cursor_implementation_sha: ae60e7ca682652d5c4846ba7324b104cd4380dd6
 last_reviewed_sha: 8b63b5dfd68b3f335f449223b87996e5cab5aab9
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
 cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 503949db8ae8b0c34112a6a3c7b31b6d70e7595d
+last_cursor_activity_sha: ae60e7ca682652d5c4846ba7324b104cd4380dd6
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T04:10:00Z"
-cursor_completed_at: null
-cursor_report: "Attempt 2 claimed. Implementing lock-order corrections and missing regression tests from ChatGPT review findings."
+cursor_completed_at: "2026-08-15T04:20:00Z"
+cursor_report: |
+  Attempt 2 of 3 completed. Two-stage worker lock protocol is implemented and verified locally.
+
+  Objective: exhausted-lease terminalization and all related worker graph mutations now follow the documented two-stage protocol (short SKIP LOCKED job reservation/claim, commit/release, then organization-knowledge advisory lock → source → version → document → job, revalidate, conditional mutate). Unauthorized upload is proven to stop before multipart parsing. CLEAN-but-mismatched scan evidence is proven unable to sign or download bytes.
+
+  Requirements / acceptance: documented lock order matches implementation; no graph-mutating path locks a job and then waits for source/version/document; exhausted final-attempt leases reach one durable terminal state with one failure audit; concurrent sweepers and competing archive/retry paths finish without deadlock; tenant-scoped predicates prevent cross-org mutation; existing Phase 4B/4C processing, bounded retry, compensation, archive/restore, and confirmation remain intact. No Phase 4D work added.
+
+  Transaction protocol: failExpiredExhaustedKnowledgeDocumentJobs reserves one eligible job with FOR UPDATE SKIP LOCKED and commits before waiting on the org lock; terminalization then revalidates state/lease/attempts/tenant IDs and applies one conditional FAILED transition plus one audit. claimKnowledgeDocumentJob claims the job row only in stage 1, then attaches the document under the graph lock order; stale claims release the job without overwriting a newer lifecycle state (and that release commits instead of rolling back). Scan completion and failOrRetryDocumentJob use the same graph lock helper and revalidation.
+
+  Files changed this attempt: lib/orgs/knowledge-access.ts, lib/orgs/knowledge-documents.ts, docs/phase-4b-private-document-processing.md, tests/integration/knowledge.documents.test.ts, tests/integration/knowledge.documents.concurrency.test.ts, tests/integration/knowledge.documents.routes.test.ts, AGENTS.md.
+
+  Migrations: none added or changed. Fresh deploy of the existing 11 migrations through Phase 4C succeeded on PostgreSQL 16 (outreach_ci).
+
+  Tests added/updated: concurrent sweeper exactly-once terminalization; stale sweep vs newer retry-equivalent transition; sweeper vs archive lock-order; claim attach vs archive; worker fail/retry vs archive; tenant-scoped exhausted-lease sweep; CLEAN checksum-mismatch download denial (storage never asked to sign/download); MEMBER upload route denial before parseBoundedDocumentFormData; bounded remote-scanner retry; exhausted-lease then authorized retry recovery.
+
+  Commands and exact results:
+  - npm ci: success (553 packages, 0 vulnerabilities; prisma generate ok)
+  - git diff --check: success (no whitespace errors)
+  - npm run prisma:validate: success (schema valid)
+  - npm run prisma:migrate:deploy: success (11 migrations applied through 20260815000000_phase_04c_structured_offerings)
+  - npm run format:check: success after prettier --write on 3 files
+  - npm run lint: success
+  - npm run typecheck: success (next typegen + tsc --noEmit)
+  - npm test: success (23 files, 132 tests)
+  - npm run test:integration: success (40 files, 475 tests)
+  - focused document/route/concurrency tests: success (21 tests)
+  - npm run build: success (Next.js 16.3.0)
+  - CI=true npm run test:e2e: success (16 passed, 28.4s; expected CredentialsSignin logs on negative login cases)
+  - npm audit --omit=dev: success (0 vulnerabilities)
+
+  Authorization / tenant isolation: MEMBER without org.knowledge.manage receives the existing 404 safe denial and parseBoundedDocumentFormData is not invoked. Download authorization still requires CLEAN + finalized + matching checksums. Sweeper/claim/fail paths always re-lock and update with organizationId + source/version/document/job IDs from the reserved row; a second tenant's exhausted job is left untouched when limit=1.
+
+  Security / privacy: no credentials or customer bytes exposed; fake storage adapter only; checksum-mismatch CLEAN evidence cannot create a signed URL or read object bytes. Non-enumeration upload denial unchanged.
+
+  Failure / recovery: exhausted leases terminalize once; stale sweepers no-op after revalidation; bounded retry leaves version PROCESSING and writes no failure audit; authorized retry after terminalization can publish; upload compensation/archive/restore tests still pass.
+
+  Manual configuration still required: none for this corrective task. Staging still needs KNOWLEDGE_WORKER_TOKEN and the internal process cron as previously documented.
+
+  Assumptions: local verification used PostgreSQL 16 with DATABASE_URL postgresql://postgres:postgres@127.0.0.1:5432/outreach_ci?schema=public to match CI. The CLEAN/mismatch download test temporarily drops KnowledgeDocument_clean_checksum_check so the unsafe row can be persisted, then restores PENDING evidence and the constraint.
+
+  Remaining risks: GitHub CI run for this head was not observed in this automation; ChatGPT should confirm CI on the review head. Concurrent sweeper vs archive has two valid serialized outcomes (archive-first or sweep-first) as long as the source ends archived and rows stay tenant-consistent.
+
+  Deferred work: none in scope. Phase 4D remains untouched.
 review_findings: |
   Blocking: expired-lease terminalization locks and updates KnowledgeDocumentJob before dependent document/version rows and without the organization knowledge advisory lock, contrary to the documented writer protocol.
   Scope audit required: claimKnowledgeDocumentJob and failOrRetryDocumentJob also perform multi-row job/document/version transitions in job-first order. Reconcile every worker transition with the documented two-stage claim and organization/source/version/document/job lock protocol.
@@ -42,7 +84,7 @@ required_tests: |
   Route-level test proving unauthorized upload returns the safe denial without consuming/parsing the multipart body.
   Download regression test proving CLEAN but checksum-mismatched scan evidence cannot create a signed URL or download bytes.
   Full unit, integration, E2E, migration, build, formatting, lint, typecheck, audit, and diff checks.
-next_action: "Cursor attempt 2 is in progress. Implement lock-order corrections and missing regression tests, then return READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 ```
 
 ## Cursor corrective implementation prompt
