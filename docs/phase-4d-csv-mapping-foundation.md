@@ -39,6 +39,9 @@ No imported customer data is persisted by this task.
 - Row issues expose machine codes plus row/column/target locations. They must not include cell contents, formulas, URLs, or secrets.
 - Mapped customer values appear only in the explicit bounded preview intended for a later authorized UI.
 - This module is `server-only` and does not import XLSX ZIP/XML helpers.
+- `mapCsvPreview` and `validateCsvMapping` accept untrusted mapping input as `unknown`. A structural parser runs before any property dereference or semantic assignment.
+- Malformed mapping roots, non-array `columns`, oversized mapping arrays (`TABULAR_MAX_COLUMNS`), and non-object column entries fail with static `invalid_mapping`. Validly shaped mappings keep the existing semantic codes (`invalid_source_column`, `unknown_target`, duplicates, unmapped columns, missing required targets, and incompatible families).
+- Mapping errors never echo input values, secrets, URLs, or formulas.
 
 ## Parser gate
 

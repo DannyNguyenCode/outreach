@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CsvMappingError,
   mapCsvPreview,
+  parseCsvMappingInput,
+  validateCsvMapping,
   type CsvMappingInput,
 } from "@/lib/orgs/tabular-mapping";
 import type { TabularNormalizedPreview } from "@/lib/orgs/tabular-types";
@@ -104,6 +106,50 @@ describe("CSV mapping security", () => {
     expect(prismaSpy).not.toHaveBeenCalled();
     expect(mapped.rows[0]?.values["knowledge.title"]?.kind).toBe("text");
   });
+
+  it("rejects malformed mappings with static errors and never echoes secrets", () => {
+    const fetchSpy = vi.fn();
+    const prismaSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("prisma", { offering: { create: prismaSpy } });
+
+    const preview = securityPreview({
+      headers: ["Title", "Section", "Body"],
+      rows: [["Policy", "Overview", "Returns"]],
+    });
+    const malformed = [
+      JSON.parse("null"),
+      JSON.parse(
+        `{"family":"knowledge","columns":[{"sourceColumn":1,"target":"${SECRET}"}]}`,
+      ),
+      JSON.parse(
+        `{"family":"knowledge","columns":[{"sourceColumn":1,"target":"${EVIL_URL}"}]}`,
+      ),
+      JSON.parse(
+        `{"family":"knowledge","columns":[{"sourceColumn":1,"target":${JSON.stringify(FORMULA)}}]}`,
+      ),
+      { family: "knowledge", columns: [null] },
+      {
+        family: "knowledge",
+        columns: [{ sourceColumn: "1", target: SECRET }],
+      },
+    ];
+
+    for (const mapping of malformed) {
+      expectThrownStaticMappingError(() =>
+        validateCsvMapping(preview, mapping),
+      );
+      expectThrownStaticMappingError(() => mapCsvPreview(preview, mapping));
+    }
+
+    expectThrownStaticMappingError(() => parseCsvMappingInput(null));
+    expectThrownStaticMappingError(() =>
+      parseCsvMappingInput({ family: "knowledge", columns: [null] }),
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(prismaSpy).not.toHaveBeenCalled();
+  });
 });
 
 function securityPreview(options: {
@@ -167,4 +213,20 @@ function offeringMapping(preview: TabularNormalizedPreview): CsvMappingInput {
               : "ignored",
     })),
   };
+}
+
+function expectThrownStaticMappingError(run: () => unknown): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CsvMappingError);
+  expect(thrown).not.toBeInstanceOf(TypeError);
+  const serialized = `${JSON.stringify(thrown)}\n${String(thrown)}\n${(thrown as Error).message}`;
+  expect(serialized).not.toContain(SECRET);
+  expect(serialized).not.toContain(EVIL_URL);
+  expect(serialized).not.toContain(FORMULA);
+  expect(serialized).not.toContain("https://");
 }

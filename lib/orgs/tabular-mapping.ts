@@ -22,6 +22,7 @@ import {
 } from "@/lib/orgs/offering-validation";
 import { normalizeHeaderName } from "@/lib/orgs/tabular-helpers";
 import {
+  TABULAR_MAX_COLUMNS,
   TABULAR_PREVIEW_ROWS,
   type TabularHeader,
   type TabularIssue,
@@ -109,7 +110,8 @@ export type CsvMappingErrorCode =
   | "unknown_target"
   | "missing_required_target"
   | "incompatible_target_family"
-  | "invalid_source_column";
+  | "invalid_source_column"
+  | "invalid_mapping";
 
 export type CsvMappedRowIssueCode =
   | "missing_required_value"
@@ -202,6 +204,7 @@ const ERROR_MESSAGES: Record<CsvMappingErrorCode, string> = {
   incompatible_target_family:
     "A mapped target does not belong to the selected target family.",
   invalid_source_column: "Source columns must be stable one-based integers.",
+  invalid_mapping: "The CSV mapping contract is invalid.",
 };
 
 export const CSV_MAPPING_TARGET_REGISTRY: readonly CsvMappingTargetFieldDefinition[] =
@@ -417,11 +420,56 @@ export function suggestCsvColumnMappings(
   );
 }
 
+/**
+ * Runtime-validates untrusted mapping JSON before any property dereference or
+ * semantic assignment. Returns a canonical mapping used by later checks.
+ */
+export function parseCsvMappingInput(input: unknown): CsvMappingInput {
+  if (!isPlainObject(input)) {
+    throw mappingError("invalid_mapping");
+  }
+
+  if (typeof input.family !== "string") {
+    throw mappingError("invalid_mapping");
+  }
+  if (!FAMILY_SET.has(input.family)) {
+    throw mappingError("incompatible_target_family");
+  }
+  const family = input.family as CsvMappingTargetFamily;
+
+  if (!Array.isArray(input.columns)) {
+    throw mappingError("invalid_mapping");
+  }
+  if (input.columns.length > TABULAR_MAX_COLUMNS) {
+    throw mappingError("invalid_mapping");
+  }
+
+  const columns: CsvColumnMapping[] = [];
+  for (const column of input.columns) {
+    if (!isPlainObject(column)) {
+      throw mappingError("invalid_mapping");
+    }
+    if (typeof column.sourceColumn !== "number") {
+      throw mappingError("invalid_mapping");
+    }
+    if (typeof column.target !== "string") {
+      throw mappingError("invalid_mapping");
+    }
+    columns.push({
+      sourceColumn: column.sourceColumn,
+      target: column.target as CsvMappingColumnTarget,
+    });
+  }
+
+  return { family, columns };
+}
+
 export function mapCsvPreview(
   preview: TabularNormalizedPreview,
-  mapping: CsvMappingInput,
+  mapping: unknown,
 ): CsvMappedPreview {
-  const assignments = validateCsvMapping(preview, mapping);
+  const parsed = parseCsvMappingInput(mapping);
+  const assignments = validateParsedCsvMapping(preview, parsed);
   const columnCount = preview.headers.length;
   const boundedRows = preview.previewRows.slice(0, TABULAR_PREVIEW_ROWS);
 
@@ -432,11 +480,11 @@ export function mapCsvPreview(
       skippedBlankRowCount += 1;
       continue;
     }
-    rows.push(mapPreviewRow(row, columnCount, assignments, mapping.family));
+    rows.push(mapPreviewRow(row, columnCount, assignments, parsed.family));
   }
 
   return {
-    family: mapping.family,
+    family: parsed.family,
     rows,
     skippedBlankRowCount,
     hasMoreRows: preview.totalRowCount > boundedRows.length,
@@ -447,9 +495,15 @@ export function mapCsvPreview(
 
 export function validateCsvMapping(
   preview: TabularNormalizedPreview,
+  mapping: unknown,
+): ReadonlyMap<number, CsvMappingTargetFieldId | CsvMappingIgnoredTarget> {
+  return validateParsedCsvMapping(preview, parseCsvMappingInput(mapping));
+}
+
+function validateParsedCsvMapping(
+  preview: TabularNormalizedPreview,
   mapping: CsvMappingInput,
 ): ReadonlyMap<number, CsvMappingTargetFieldId | CsvMappingIgnoredTarget> {
-  assertFamily(mapping.family);
   assertCsvPreviewReady(preview);
 
   const headerByColumn = new Map<number, TabularHeader>();
@@ -457,7 +511,7 @@ export function validateCsvMapping(
     headerByColumn.set(header.sourceColumn, header);
   }
 
-  if (!Array.isArray(mapping.columns) || mapping.columns.length === 0) {
+  if (mapping.columns.length === 0) {
     throw mappingError("missing_required_target");
   }
 
@@ -860,6 +914,10 @@ function assertFamily(
 
 function mappingError(code: CsvMappingErrorCode): CsvMappingError {
   return new CsvMappingError(code, ERROR_MESSAGES[code]);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function buildAliasMap(

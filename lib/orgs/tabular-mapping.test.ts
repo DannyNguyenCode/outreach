@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  TABULAR_MAX_COLUMNS,
   TABULAR_PREVIEW_ROWS,
   type TabularIssue,
   type TabularNormalizedPreview,
@@ -15,6 +16,7 @@ import {
   CSV_MAPPING_TARGET_REGISTRY,
   getCsvMappingRegistry,
   mapCsvPreview,
+  parseCsvMappingInput,
   suggestCsvColumnMappings,
   validateCsvMapping,
   type CsvMappingColumnTarget,
@@ -245,6 +247,168 @@ describe("CSV mapping contract", () => {
     });
     expect(validateCsvMapping(preview, mapping).get(4)).toBe("ignored");
     expect(mapCsvPreview(preview, mapping).rows).toHaveLength(1);
+  });
+});
+
+describe("CSV mapping runtime structure", () => {
+  const preview = makePreview({
+    headers: ["Title", "Section", "Body"],
+    rows: [["Policy", "Overview", "Returns"]],
+  });
+  const validMapping = covering(preview, "knowledge", {
+    1: "knowledge.title",
+    2: "knowledge.sectionTitle",
+    3: "knowledge.passageBody",
+  });
+
+  it.each([
+    { name: "null mapping root", mapping: null },
+    { name: "undefined mapping root", mapping: undefined },
+    { name: "string mapping root", mapping: "knowledge" },
+    { name: "number mapping root", mapping: 1 },
+    { name: "array mapping root", mapping: [] },
+    { name: "JSON null", mapping: JSON.parse("null") },
+    { name: "JSON array root", mapping: JSON.parse("[]") },
+    { name: "JSON primitive root", mapping: JSON.parse('"knowledge"') },
+    { name: "missing columns", mapping: { family: "knowledge" } },
+    { name: "null columns", mapping: { family: "knowledge", columns: null } },
+    {
+      name: "primitive columns",
+      mapping: { family: "knowledge", columns: 3 },
+    },
+    {
+      name: "object columns",
+      mapping: { family: "knowledge", columns: { sourceColumn: 1 } },
+    },
+    {
+      name: "JSON missing columns",
+      mapping: JSON.parse('{"family":"knowledge"}'),
+    },
+    {
+      name: "JSON null columns",
+      mapping: JSON.parse('{"family":"knowledge","columns":null}'),
+    },
+    {
+      name: "null column entry",
+      mapping: { family: "knowledge", columns: [null] },
+    },
+    {
+      name: "undefined column entry",
+      mapping: { family: "knowledge", columns: [undefined] },
+    },
+    {
+      name: "sparse column entry",
+      mapping: sparseColumns(),
+    },
+    {
+      name: "primitive column entry",
+      mapping: { family: "knowledge", columns: [1] },
+    },
+    {
+      name: "array column entry",
+      mapping: { family: "knowledge", columns: [[1, "knowledge.title"]] },
+    },
+    {
+      name: "JSON null column entry",
+      mapping: JSON.parse('{"family":"knowledge","columns":[null]}'),
+    },
+    {
+      name: "missing sourceColumn",
+      mapping: {
+        family: "knowledge",
+        columns: [{ target: "knowledge.title" }],
+      },
+    },
+    {
+      name: "string sourceColumn",
+      mapping: {
+        family: "knowledge",
+        columns: [{ sourceColumn: "1", target: "knowledge.title" }],
+      },
+    },
+    {
+      name: "missing target",
+      mapping: { family: "knowledge", columns: [{ sourceColumn: 1 }] },
+    },
+    {
+      name: "non-string target",
+      mapping: {
+        family: "knowledge",
+        columns: [{ sourceColumn: 1, target: 1 }],
+      },
+    },
+    {
+      name: "array target",
+      mapping: {
+        family: "knowledge",
+        columns: [{ sourceColumn: 1, target: ["knowledge.title"] }],
+      },
+    },
+    {
+      name: "oversized mapping array",
+      mapping: {
+        family: "knowledge",
+        columns: Array.from({ length: TABULAR_MAX_COLUMNS + 1 }, (_, i) => ({
+          sourceColumn: i + 1,
+          target: "ignored",
+        })),
+      },
+    },
+  ])("rejects $name with invalid_mapping, never TypeError", ({ mapping }) => {
+    expectInvalidMapping(preview, mapping);
+    expectInvalidMappingOnMap(preview, mapping);
+  });
+
+  it.each([
+    { name: "zero", sourceColumn: 0 },
+    { name: "negative", sourceColumn: -1 },
+    { name: "fractional", sourceColumn: 1.5 },
+    { name: "NaN", sourceColumn: Number.NaN },
+    { name: "Infinity", sourceColumn: Number.POSITIVE_INFINITY },
+  ])(
+    "rejects $name sourceColumn with invalid_source_column",
+    ({ sourceColumn }) => {
+      expect(() =>
+        validateCsvMapping(preview, {
+          family: "knowledge",
+          columns: [
+            { sourceColumn, target: "knowledge.title" },
+            { sourceColumn: 2, target: "knowledge.sectionTitle" },
+            { sourceColumn: 3, target: "knowledge.passageBody" },
+          ],
+        }),
+      ).toThrowError(
+        expect.objectContaining({ code: "invalid_source_column" }),
+      );
+    },
+  );
+
+  it("parses a canonical mapping that existing valid input still maps identically", () => {
+    const parsed = parseCsvMappingInput(validMapping);
+    expect(parsed).toEqual(validMapping);
+    const first = mapCsvPreview(preview, validMapping);
+    const second = mapCsvPreview(preview, parsed);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+    expect(JSON.stringify(first)).toBe(
+      JSON.stringify({
+        family: "knowledge",
+        rows: [
+          {
+            sourceRowNumber: 2,
+            values: {
+              "knowledge.title": { kind: "text", value: "Policy" },
+              "knowledge.sectionTitle": { kind: "text", value: "Overview" },
+              "knowledge.passageBody": { kind: "text", value: "Returns" },
+            },
+            issues: [],
+          },
+        ],
+        skippedBlankRowCount: 0,
+        hasMoreRows: false,
+        totalRowCount: 1,
+        mappedPreviewRowCount: 1,
+      }),
+    );
   });
 });
 
@@ -829,4 +993,43 @@ function freezePreview(preview: TabularNormalizedPreview): void {
     Object.freeze(row);
     Object.freeze(row.cells);
   }
+}
+
+function sparseColumns(): { family: string; columns: unknown[] } {
+  const columns: unknown[] = [];
+  columns[0] = { sourceColumn: 1, target: "knowledge.title" };
+  columns[2] = { sourceColumn: 3, target: "knowledge.passageBody" };
+  return { family: "knowledge", columns };
+}
+
+function expectInvalidMapping(
+  preview: TabularNormalizedPreview,
+  mapping: unknown,
+): void {
+  expectThrownInvalidMapping(() => validateCsvMapping(preview, mapping));
+}
+
+function expectInvalidMappingOnMap(
+  preview: TabularNormalizedPreview,
+  mapping: unknown,
+): void {
+  expectThrownInvalidMapping(() => mapCsvPreview(preview, mapping));
+}
+
+function expectThrownInvalidMapping(run: () => unknown): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CsvMappingError);
+  expect(thrown).not.toBeInstanceOf(TypeError);
+  expect(thrown).toMatchObject({
+    name: "CsvMappingError",
+    code: "invalid_mapping",
+  });
+  expect((thrown as Error).message).toBe(
+    "The CSV mapping contract is invalid.",
+  );
 }
