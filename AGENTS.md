@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-import-draft-persistence
 base_develop_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 cursor_implementation_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 last_reviewed_sha: null
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 15
 previous_develop_merge_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
@@ -34,20 +34,47 @@ last_cursor_activity_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T22:05:43Z"
-cursor_completed_at: null
+cursor_completed_at: "2026-08-15T22:17:32Z"
 cursor_claim_sha: 016994c7d90a9fa3bb52da168f76894eac49d249
-cursor_lease_id: 67a13c12-d486-44f4-af4d-d2aa03e14343
-cursor_lease_expires_at: "2026-08-15T23:09:20Z"
-cursor_heartbeat_at: "2026-08-15T22:14:20Z"
+cursor_lease_id: null
+cursor_lease_expires_at: null
+cursor_heartbeat_at: "2026-08-15T22:17:32Z"
 cursor_checkpoint_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 cursor_checkpoint_summary: "CSV import draft persistence is committed at 50051ae5dc094bf06bb761686e39cb08e6ad5a2e: Prisma CsvImport/CsvImportRow plus immutable-update triggers, server-owned identity, stage/get with org.knowledge.manage and organization-csv-import lock, official-template/invalid/incomplete/XLSX/auth/idempotency/concurrency coverage, and docs/phase-4d-csv-import-draft-persistence.md. Focused unit 7 files/110 passed; focused integration 4 files/14 passed. Next: format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, committed-range git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
-cursor_report: null
+cursor_report: |
+  CSV import draft persistence foundation completed at implementation SHA 50051ae5dc094bf06bb761686e39cb08e6ad5a2e (claim 016994c7d90a9fa3bb52da168f76894eac49d249). Objective: add a server-only, tenant-scoped, retry-safe snapshot of one complete CSV mapped-validation result without creating knowledge/offering domain records, UI, jobs, or XLSX consumption, and without changing the OPEN MR-4D-OOXML-001 flag.
+  Requirements/acceptance: stageCsvImport revalidates original bytes through validateMappedCsvFile and never trusts caller-supplied preview, checksum, identity, counts, rows, status, or persistenceEligible values. Authenticated verified actors with a selected organization, active membership, and org.knowledge.manage are required; membership and permission are rechecked after the organization-csv-import advisory lock. Complete valid files persist as READY_TO_CONFIRM; complete invalid files persist as NEEDS_ATTENTION with exact counts and static issues. Timeout, malformed, parser-attention, issue-cap/incomplete, over-limit, and XLSX results create no import, row, or audit records. Import identity is SHA-256 of organization, family, source checksum, canonical mapping identity, and csv-import.v1. Sequential and concurrent retries return one import, one row set, and one CSV_IMPORT_STAGED audit event. Mapping and row payloads are stored as TEXT and recanonicalized on read. Database constraints and update triggers keep staged content immutable and organization-scoped. getCsvImport returns one authorized import with deterministic ordered rows. MR-4D-OOXML-001 remains OPEN.
+  Files changed: lib/orgs/csv-import.ts; lib/orgs/csv-import-access.ts; lib/orgs/csv-import-identity.ts; lib/orgs/csv-import.test.ts; lib/orgs/csv-import-identity.test.ts; prisma/schema.prisma; prisma/migrations/20260815220000_phase_04d_csv_import_draft_persistence/migration.sql; tests/integration/reset.ts; tests/integration/helpers/csv-import.ts; tests/integration/csv-import.schema.test.ts; tests/integration/csv-import.security.test.ts; tests/integration/csv-import.lifecycle.test.ts; tests/integration/csv-import.concurrency.test.ts; docs/phase-4d-csv-import-draft-persistence.md. One forward-only migration added. No new runtime dependency.
+  Tests added/updated: identity stability across permuted mappings and changed org/bytes/family/contract; module-boundary source checks; schema unique/FK/check/immutability constraints; unauthenticated/unverified/inactive/wrong-selected/missing-permission/cross-tenant denial; official knowledge and offering template staging; complete-invalid NEEDS_ATTENTION; timeout/malformed/formula/incomplete/over-limit/XLSX zero side effects; sequential and concurrent idempotent retries; changed identity isolation; canonical row-order round trip; transaction rollback; exact-cap complete persist; no KnowledgeSource/KnowledgeVersion/Offering/OfferingVersion/document/job/retrieval writes. Existing Phase 4A-4D regressions kept green.
+  Commands and exact results on this implementation head:
+  - npm ci: added 564 packages, audited 565, 0 vulnerabilities
+  - focused unit tests (csv-import, identity, complete-file, mapping, templates, tabular-validation, security): 7 files, 110 passed
+  - focused integration tests (schema, security, lifecycle, concurrency): 4 files, 14 passed
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
+  - npm run prisma:validate: schema valid with DATABASE_URL/DIRECT_URL set
+  - fresh DROP/CREATE outreach_ci + outreach_test + npm run prisma:migrate:deploy: 12 migrations applied through Phase 4D CSV import draft persistence
+  - npm test: 35 files, 367 passed
+  - npm run test:integration: 45 files, 502 passed
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (29.9s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check 60ceecfbc472835faf6212601a0732f4f1b12371..50051ae5dc094bf06bb761686e39cb08e6ad5a2e: exit 0
+  - GitHub Actions: exact-head verify is required on the READY_FOR_REVIEW completion-report SHA after this push.
+  Authorization/tenant isolation: writes and gets require verified active membership and org.knowledge.manage. Foreign import IDs are indistinguishable from not found. Cross-organization row attachment is rejected by composite FK. The same file in another organization produces a different organization-owned identity and record.
+  Security/privacy: server-only module; XLSX rejected before persistence; raw bytes, formulas, secrets, stack traces, fetched URLs, and mapping payloads are excluded from audit metadata. Errors stay static and payload-free. Mapped values exist only on authorized get/stage snapshots.
+  Failure/recovery: validation failures and incomplete results write nothing. Unique-constraint races re-read the existing import without a second audit event. Mid-insert exceptions roll back the transaction so no partial import or rows remain.
+  Manual configuration still required: none for this task.
+  Assumptions: no client idempotency key is accepted because existing Phase 4 writers derive server-owned identities. Official JSON.stringify on rebuilt objects is sufficient; no extra serializer was added. Get requires org.knowledge.manage, matching later review work rather than member-visible retrieval.
+  Remaining risks: staged imports are not confirmed, activated, listed, or checked for duplicates against existing records. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
+  Deferred work: mapping UI, upload/download routes, raw-file storage, saved templates, row editing, duplicate/existing-record conflicts, confirmation, activation, jobs, live connectors, and Phase 5. No PR opened; ChatGPT owns the develop merge gate. Blocker-set revision 0, empty signature, attempt count 0, and empty history were preserved exactly.
 review_findings: |
   PR #15 passed review and exact-head CI run 31909884395, then squash-merged to develop at 60ceecfbc472835faf6212601a0732f4f1b12371. P4D-CSV-COMPLETE-BOUNDS-001, P4D-CSV-COMPLETE-IDENTITY-001, and P4D-CSV-COMPLETE-VERIFICATION-001 are verified resolved for the merged CSV complete-file validator. No blockers are assigned to this new task.
 required_tests: |
   Add focused unit and integration coverage for schema constraints, authenticated organization authorization, tenant isolation, stable import identity, sequential and concurrent idempotent retries, complete-valid and complete-invalid staging, rejection of incomplete/capped/timeout/XLSX inputs, immutable ordered row snapshots, transaction rollback, audit deduplication, and proof that no KnowledgeSource, KnowledgeVersion, Offering, OfferingVersion, active retrieval, storage object, job, or external side effect is created. Preserve Phase 4A-4D regressions and run the repository's format, lint, typecheck, Prisma validation, fresh migration, unit/component, integration, build, E2E, audit, committed-range diff, and exact-head CI gates.
-next_action: "Cursor must claim this branch, implement the bounded task below, checkpoint after focused tests, complete full verification, and set READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
