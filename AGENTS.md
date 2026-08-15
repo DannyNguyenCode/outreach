@@ -39,17 +39,17 @@ blocker_history:
     attempt: 1
     evidence: "The public runtime validator dereferences mapping.family and column.sourceColumn before validating that the mapping and column entries are objects; malformed JSON can throw raw TypeError instead of a static CsvMappingError."
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
+last_cursor_activity_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T19:06:18Z"
 cursor_completed_at: "2026-08-15T17:38:00Z"
-cursor_claim_sha: null
+cursor_claim_sha: e616b3db44e088fa3c7cda32e0c7843ef56ffa85
 cursor_lease_id: c8472057-ffa4-4e7e-b70d-db1b33d368da
-cursor_lease_expires_at: "2026-08-15T20:01:18Z"
-cursor_heartbeat_at: "2026-08-15T19:06:18Z"
-cursor_checkpoint_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
-cursor_checkpoint_summary: "Base implementation is committed and verified; resume from this SHA to fix P4D-CSV-MAPPING-RUNTIME-001."
+cursor_lease_expires_at: "2026-08-15T20:04:05Z"
+cursor_heartbeat_at: "2026-08-15T19:09:05Z"
+cursor_checkpoint_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
+cursor_checkpoint_summary: "P4D-CSV-MAPPING-RUNTIME-001 parser is committed. parseCsvMappingInput accepts unknown, rejects malformed roots/columns/entries with static invalid_mapping, bounds columns at TABULAR_MAX_COLUMNS, and reuses the canonical mapping for semantic checks. Focused mapping+security tests: 2 files, 65 passed. Next: npm run format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
 cursor_report: |
   Attempt 1 completed at implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b (claim 5e9842267369dcba18fbf8ee220061e2b5b5deba). Objective: add a server-only CSV column-mapping and bounded dry-run mapped-preview foundation on top of the existing tabular validator without persisting, activating, or importing records.
