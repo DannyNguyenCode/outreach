@@ -17,19 +17,20 @@ task_id: phase-04b-corrective-sync-001
 phase: "Phase 4B corrective integration"
 active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
-cursor_implementation_sha: 975f6464e4f3943a965376c839e501ea11e5ef1b
+cursor_implementation_sha: 3f389873a05a7f214ddb57371651129697f16f66
 last_reviewed_sha: 0df214b2975cde3e55b85f67f590a81c16a46284
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
 cursor_attempt_count: 1
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: null
+last_cursor_activity_sha: 3f389873a05a7f214ddb57371651129697f16f66
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T02:32:00Z"
-next_action: "Cursor is merging origin/develop into this branch, verifying the combined Phase 4B corrective work with already-merged Phase 4C code, and will report READY_FOR_REVIEW."
+cursor_completed_at: "2026-08-15T02:36:30Z"
+next_action: "ChatGPT must review the complete branch against current develop and decide whether a corrective PR may merge into develop."
 ```
 
 ## Why this task is required
@@ -153,6 +154,120 @@ See the required verification and Phase 4B behavior sections above. Every functi
 
 ## Cursor report
 
-Pending Cursor integration and verification.
+Attempt: 1 of 3. Claimed at 2026-08-15T02:32:00Z. Implementation/merge SHA `3f389873a05a7f214ddb57371651129697f16f66`.
+
+### Task objective completed
+
+Merged current `origin/develop` (`d06ec79f0d5ee7297e934aed2f692f13f472cfcf`) into `feature/phase-04b-private-document-processing` without rebasing. The Phase 4B corrective commit `975f6464e4f3943a965376c839e501ea11e5ef1b` remains an ancestor of the combined head. Phase 4C structured-offering code from PR #9 is present on the same tree. No application-code conflicts occurred. No Phase 4D work was added. No pull request was opened.
+
+### Merge / conflict outcome
+
+- Strategy: `git merge origin/develop --no-edit` (ort).
+- Conflicts: none.
+- Merge commit: `3f389873a05a7f214ddb57371651129697f16f66`.
+- Preserved: Phase 4B lifecycle/security/compensation fixes, persisted storage-bucket checks, scan-gated downloads, manage-permission-before-multipart, retry cause-chain classification, expired-lease terminalization.
+- Introduced from develop: Phase 4C offerings schema, UI, retrieval, backfill migration, and tests.
+
+### Requirements and acceptance criteria addressed
+
+- Organization membership and `org.knowledge.manage` before multipart parsing: preserved and covered by upload-route + document integration tests.
+- Bounded upload reading and declared/detected file validation: preserved (`document-upload-request`, `document-validation` unit tests).
+- Private tenant-scoped document storage and persisted bucket validation: preserved (`document-storage` unit tests, including mismatched-bucket rejection).
+- Fail-closed malware scanning and checksum matching: preserved (`document-security-processing` unit tests; infected-file integration test).
+- Download denial until clean matching scan evidence and finalization: preserved (integration: "denies private download until scan evidence is clean and matching").
+- Retry classification through wrapped error cause chains: preserved (`httpStatus` cause walk in `document-processing.ts`).
+- Terminalization of expired exhausted job leases: preserved (integration: "terminalizes expired leases after the final attempt").
+- Idempotent cleanup and upload compensation: preserved (multiple compensation integration tests, including cross-tenant retry).
+- Safe worker authorization, leases, retry bounds, lock ordering: preserved.
+- Cross-tenant denial and non-enumerating protected access: preserved (document + offering security tests).
+- Reproducible forward-only migrations through Phase 4C: verified on a fresh database.
+- Phase 4C offerings remain confirmable, tenant-isolated, and backfill-compatible: verified by Phase 4C integration/security/migration tests.
+
+### Files changed
+
+Relative to `origin/develop` after the merge, remaining feature-branch deltas are the Phase 4B corrective files plus this automation handoff:
+
+- `AGENTS.md` (Outreach automation block only)
+- `app/api/orgs/[slug]/knowledge/documents/upload/route.ts`
+- `app/api/orgs/[slug]/knowledge/documents/[versionId]/download/route.ts`
+- `lib/orgs/document-processing.ts`
+- `lib/orgs/document-security-processing.test.ts`
+- `lib/orgs/document-storage.ts`
+- `lib/orgs/document-storage.test.ts`
+- `lib/orgs/knowledge-access.ts`
+- `lib/orgs/knowledge-documents.ts`
+- `tests/integration/knowledge.documents.test.ts`
+
+Phase 4C files arrived via the merge and match `origin/develop`. No additional application files were edited in this attempt.
+
+### Migrations added or changed
+
+None in this attempt. Fresh deploy applied all 11 existing migrations, including:
+
+- `20260814190000_phase_04b_private_document_processing`
+- `20260814211500_phase_04b_upload_compensation`
+- `20260815000000_phase_04c_structured_offerings`
+
+### Tests added or updated
+
+No new tests were required: merge introduced no functional regression. Existing Phase 4B corrective tests and Phase 4C tests were re-run against the combined tree.
+
+### Commands actually executed and exact results
+
+- `git fetch --all --prune` / `git fetch origin develop`: success. `origin/develop` = `d06ec79f0d5ee7297e934aed2f692f13f472cfcf`.
+- `git checkout -B feature/phase-04b-private-document-processing origin/feature/phase-04b-private-document-processing`: success. Clean working tree. HEAD included `975f646`.
+- `chore: mark Cursor task in progress` → `7111975c45a68109301a9013d49665d04ed906b4` pushed.
+- `git merge origin/develop --no-edit`: success, no conflicts, merge SHA `3f389873a05a7f214ddb57371651129697f16f66`.
+- `npm ci`: success. 553 packages. Prisma Client generated. `found 0 vulnerabilities`.
+- `npm run prisma:validate`: success. `The schema at prisma/schema.prisma is valid`.
+- `npm run prisma:migrate:deploy` on empty `outreach_fresh`: success. 11/11 migrations applied through Phase 4C.
+- `npm run prisma:migrate:deploy` on `outreach_ci`: success. 11/11 migrations applied.
+- `npm run format:check`: success. `All matched files use Prettier code style!`
+- `npm run lint`: success. exit 0.
+- `npm run typecheck`: success. `Types generated successfully`; `tsc --noEmit` exit 0.
+- `npm test`: success. 23 files, 132 tests passed (includes document security, storage, upload-request, extraction, validation).
+- `npm run test:integration`: success. 38 files, 466 tests passed (includes `knowledge.documents`, knowledge security/lifecycle, offerings security/lifecycle/pricing/retrieval/concurrency/migration-backfill).
+- `npm run build`: success. Next.js 16.3.0 production build compiled; Phase 4B upload/download/worker routes and Phase 4C offering routes present.
+- `npx playwright install --with-deps chromium`: success.
+- `CI=true npm run test:e2e`: success. 16 passed (28.8s), including `knowledge-documents.spec.ts` and `offerings.spec.ts`. Expected `CredentialsSignin` logs from negative auth cases; not failures.
+- `npm audit --omit=dev`: success. `found 0 vulnerabilities`.
+- `git diff --check` (working tree and `origin/develop...HEAD`): success. no whitespace errors.
+
+A required check that is skipped/pending/unavailable/incomplete/flaky is not reported as passing. None of the required checks were skipped.
+
+### Authorization and tenant-isolation verification
+
+- Document upload/download remain permission-gated; cross-tenant document status and compensation have no cross-tenant effects (`knowledge.documents` integration tests).
+- Offering retrieval/search hide drafts and cross-tenant identifiers (`offerings.security` and pricing tenant-isolation tests).
+- Phase 4C backfill stays tenant-scoped (`offerings.migration-backfill`).
+
+### Security and privacy considerations
+
+- Fake knowledge adapters and CI scanner metadata only; no production credentials or production migrations.
+- Private bucket name remains `knowledge-documents-private`; mismatched persisted buckets are rejected before storage calls.
+- Malware path remains fail-closed. Signed URLs, file bytes, and credentials were not logged.
+
+### Failure and recovery behaviour
+
+- Upload compensation, checksum-mismatch graph removal, restore-copy compensation, and exhausted-lease terminalization all passed on the combined tree.
+
+### Manual configuration still required
+
+Staging still needs the private Supabase bucket, scanner endpoint/credentials, and worker token as documented in `docs/phase-4b-private-document-processing.md`. Not performed in this run.
+
+### Assumptions
+
+- Local PostgreSQL 16 on this runner with `postgres:postgres@127.0.0.1:5432` is an acceptable stand-in for CI Postgres 16.
+- `KNOWLEDGE_DOCUMENT_ADAPTER_MODE=fake` is the correct non-production verification mode.
+
+### Remaining risks
+
+- GitHub Actions has not yet run against merge SHA `3f38987`. This report is local/CI-equivalent evidence, not a GitHub check conclusion.
+- Staging malware scanner and private bucket remain unexercised here by design.
+
+### Deferred work
+
+- Phase 4D CSV/XLSX import and `feature/phase-04d-source-runtime-composition` were not touched.
+- ChatGPT owns review and any corrective PR into `develop`. Cursor did not open a pull request.
 
 <!-- END:outreach-automation -->
