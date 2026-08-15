@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: 40c2ea669fcc3d8f3520198c73fa36160ed2fda5
 last_reviewed_sha: e8ff4601bcf1677a2c66ba79d8403b8fb1e63f5f
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -74,7 +74,7 @@ required_tests: |
   Add regression tests that fail against 58010d58b1a71432d8857e4335cd1adc46064c44 and pass after the fix for: OOXML markup embedded in CDATA and processing instructions not affecting workbook/sheet/relationship/cell/formula/hyperlink/merge evidence; negative numeric XLSX values remaining ready while identical literal string values are formula_like; CSV extra-column aggregate text at and one past the limit; formula prefixes present only in CSV extra columns; and a valid namespace-prefixed canonical workbook Override.
   Preserve the corrected closing-quote, comment, duplicate-coordinate, XLSX aggregate, misbound content-type, safe-error, security, deterministic-preview, document, offering, and Phase 4A–4C regression coverage.
   Rerun npm ci, format:check, lint, typecheck, prisma:validate, a fresh PostgreSQL prisma:migrate:deploy, focused tabular validation/security tests, npm test, test:integration, build, CI=true test:e2e, npm audit --omit=dev, and git diff --check. Missing, skipped, cancelled, pending, flaky, or failing checks are not a pass.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "Cursor must pause. ChatGPT owns the branch while reviewing final attempt 3 at the exact remote head for the develop merge gate."
 ```
 
 ## Cursor final corrective implementation prompt — Phase 4D task 1, attempt 3 of 3
