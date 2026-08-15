@@ -6,7 +6,7 @@ export function KnowledgeNav({
   canCreate = false,
 }: {
   organizationSlug: string;
-  current: "list" | "new" | "detail";
+  current: "list" | "new" | "detail" | "offerings";
   canCreate?: boolean;
 }) {
   const base = `/app/orgs/${organizationSlug}/knowledge`;
@@ -27,6 +27,19 @@ export function KnowledgeNav({
             ].join(" ")}
           >
             All knowledge
+          </Link>
+        </li>
+        <li>
+          <Link
+            href={`${base}/offerings`}
+            className={[
+              "inline-flex items-center rounded-sm border px-3 py-1.5 text-sm",
+              current === "offerings"
+                ? "border-[var(--foreground)] bg-[var(--surface)] font-medium"
+                : "border-[var(--border)] hover:bg-[var(--background)]",
+            ].join(" ")}
+          >
+            Offerings
           </Link>
         </li>
         {canCreate ? (
