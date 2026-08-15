@@ -18,17 +18,26 @@ phase: "Phase 4D — CSV complete-file mapped validation"
 active_branch: feature/phase-04d-csv-complete-file-validation
 base_develop_sha: a10489131522e79cf6bec9983ff520171254a7df
 cursor_implementation_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
-last_reviewed_sha: null
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+last_reviewed_sha: 0894ea4c1733d3c0253ff3d9157e05dc52f67f1e
+status: READY_FOR_CURSOR
 previous_task_status: MERGED
 previous_pr_number: 14
 previous_develop_merge_sha: a10489131522e79cf6bec9983ff520171254a7df
 cursor_attempt_count: 0
 cursor_attempt_count_legacy: true
-blocker_set_revision: 0
-blocker_set_signature: []
-blocker_attempt_count: 0
-blocker_history: []
+blocker_set_revision: 1
+blocker_set_signature: [P4D-CSV-COMPLETE-BOUNDS-001, P4D-CSV-COMPLETE-IDENTITY-001, P4D-CSV-COMPLETE-VERIFICATION-001]
+blocker_attempt_count: 1
+blocker_history:
+  - revision: 1
+    reviewed_sha: 0894ea4c1733d3c0253ff3d9157e05dc52f67f1e
+    implementation_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
+    previous_signature: []
+    resulting_signature: [P4D-CSV-COMPLETE-BOUNDS-001, P4D-CSV-COMPLETE-IDENTITY-001, P4D-CSV-COMPLETE-VERIFICATION-001]
+    verified_resolved_ids: []
+    new_ids: [P4D-CSV-COMPLETE-BOUNDS-001, P4D-CSV-COMPLETE-IDENTITY-001, P4D-CSV-COMPLETE-VERIFICATION-001]
+    attempt: 1
+    evidence: "Complete-row mapping has no periodic deadline checks and flattened issues are fully accumulated before the 1000-item slice; canonical mapping identity preserves caller column order; base-to-implementation git diff --check fails on trailing whitespace despite the completion report claiming clean."
 consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 stop_reason: null
@@ -40,7 +49,7 @@ cursor_lease_id: null
 cursor_lease_expires_at: null
 cursor_heartbeat_at: "2026-08-15T20:19:05Z"
 cursor_checkpoint_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
-cursor_checkpoint_summary: "CSV complete-file mapped validation is committed. validateMappedCsvFile revalidates original CSV bytes, reuses parseCsvMappingInput/mapCsvRows, maps every nonblank row past the 50-row preview, caps flattened issues at CSV_MAPPED_FILE_MAX_ISSUES, and rejects XLSX without workbook helpers. Focused complete-file+mapping+validation+security tests: 6 files, 106 passed. Next: npm run format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, git diff --check, exact-head GitHub Actions."
+cursor_checkpoint_summary: "Base implementation is committed and verified; resume from 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 to fix the complete-file bounds, canonical-identity, and verification blockers together."
 cursor_resume_count: 0
 cursor_report: |
   Complete-file CSV mapped-validation foundation completed at implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 (claim babbea38a8df7432744ef7b4169aa67581e9055d). Objective: prove every accepted CSV data row is structurally and semantically validated against a customer-reviewed mapping before later persistence work, without trusting a caller-supplied preview and without persisting, activating, or mapping XLSX.
@@ -69,10 +78,15 @@ cursor_report: |
   Assumptions: trailing blank records are stripped by the shared CSV parser, matching task 1; internal blank data rows are skipped and counted. A validly shaped mapping whose family is not knowledge or offering still fails with incompatible_target_family before row mapping.
   Remaining risks: complete-file validation still does not persist, confirm, or activate drafts, and does not detect duplicates against existing records. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
   Deferred work: mapping UI, saved templates, persistence, confirmation, activation, retrieval, duplicate/existing-record conflicts, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Blocker-set revision, signature, attempt count, and history were preserved exactly.
-review_findings: null
+review_findings: |
+  P4D-CSV-COMPLETE-BOUNDS-001: validateMappedCsvFile checks the 2,000 ms deadline only before and after the complete mapCsvRows call. mapCsvRows performs the full row loop without periodic enforcement, and the later aggregation loop has no deadline check. It also accumulates every flattened issue in allIssues before slicing to the 1,000-item public cap, so the cap does not bound intermediate issue allocation. This violates the complete-file bounded-execution contract.
+  P4D-CSV-COMPLETE-IDENTITY-001: canonicalizeMapping copies columns in caller-provided order and mappingIdentity is JSON.stringify of that copy. Semantically identical mappings with permuted column entries therefore produce different canonical identities and different JSON property insertion order in mapped values. Column-array order is not part of sourceColumn mapping semantics, so this is not a stable canonical identity for later idempotency.
+  P4D-CSV-COMPLETE-VERIFICATION-001: git diff --check a10489131522e79cf6bec9983ff520171254a7df..8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 exits 2 because docs/phase-4d-csv-complete-file-validation.md line 3 has trailing whitespace. The completion report claims git diff --check was clean, apparently checking only an already-clean working tree rather than the committed branch range.
+  PASS: Original bytes are revalidated, rows after preview row 50 are mapped, source row numbers and blank-row counts are preserved, unsafe parser issues fail closed, XLSX remains rejected, and no persistence/route/migration/tenant behavior was added.
+  PASS: Implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 is an ancestor of review head 0894ea4c1733d3c0253ff3d9157e05dc52f67f1e; later commits change AGENTS.md only; the branch is 0 commits behind develop. GitHub Actions run 31906362597 succeeded on the Cursor completion head.
 required_tests: |
-  Add focused deterministic unit/security tests proving complete-file CSV row validation beyond the 50-row preview, source-row preservation, blank-row behavior, full-file bounds, static payload-free failures, immutability, deterministic output, and no database/storage/network/formula side effects. Preserve all existing Phase 4A–4D and mapping regressions. Run the complete repository verification suite and successful exact-head GitHub Actions.
-next_action: "ChatGPT owns the branch while reviewing implementation SHA 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0 and the complete remote head."
+  Add regressions proving equivalent mappings with different column-array order produce byte-for-byte identical canonical mapping, mappingIdentity, and mapped rows. Add deterministic deadline tests that expire during complete-row mapping and during result aggregation, plus a cap test proving only the first CSV_MAPPED_FILE_MAX_ISSUES flattened issues are retained while total issue and invalid-row counts remain exact. Preserve all existing complete-file, preview, mapping, validation, security, and Phase 4 regressions. Run git diff --check against the committed base-to-final range and run the full suite plus successful exact-head GitHub Actions.
+next_action: "Cursor must claim and fix all three complete-file blockers together on this branch, preserve the blocker epoch, checkpoint durably, verify the committed range, and return READY_FOR_REVIEW."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -100,60 +114,54 @@ A `CURSOR_WORKING` claim is a renewable 55-minute lease. The remote branch is th
 - End only in one recoverable state: `READY_FOR_REVIEW` after full verification and exact-head CI; resumable `CURSOR_WORKING` with a pushed checkpoint and live lease; retryable `READY_FOR_CURSOR` after discarding unsafe ephemeral work and clearing the lease; or genuine `BLOCKED` for an external, permission, infrastructure, safety, or human-decision blocker.
 - ChatGPT reviews only `READY_FOR_REVIEW`. Preserve blocker-set fields exactly; ChatGPT owns blocker identity, epochs, counters, and history. The legacy `cursor_attempt_count` is not a retry budget.
 
-## Cursor implementation prompt — CSV complete-file mapped validation
+## Cursor corrective prompt — complete-file determinism and bounds
 
 ### Objective
 
-Build the next small Phase 4D slice: a server-only, deterministic complete-file CSV mapped-validation foundation on top of the merged byte validator and CSV mapping module.
+Fix all three blockers in blocker-set revision 1 on the existing branch. Preserve the completed CSV-only complete-file behavior, the OPEN XLSX flag, and every explicit exclusion.
 
-The current mapped preview intentionally inspects at most 50 preview rows. This task must prove that every row in an accepted CSV is structurally and semantically validated against the customer-reviewed mapping before later persistence work can rely on it. It remains a pure validation foundation: do not persist, activate, confirm, upload, or expose records.
+### Required corrections
 
-### Required source-of-truth review
+1. **P4D-CSV-COMPLETE-BOUNDS-001 — enforce bounds during all complete-file work**
+   - Enforce the existing 2,000 ms deadline periodically inside the complete-row mapping loop, not only after the loop returns.
+   - Enforce it periodically during result counting/aggregation and once immediately before returning.
+   - Do not change bounded-preview behavior merely to add complete-file timing. Prefer an optional deadline/check callback or a focused complete-file helper so existing callers remain deterministic.
+   - Retain at most `CSV_MAPPED_FILE_MAX_ISSUES` flattened issues as rows are processed while separately counting the exact total issue count and exact valid/invalid row counts. Do not first build an unbounded-to-the-public-cap `allIssues` array and slice it afterward.
+   - Per-row issues may remain on returned mapped rows under the existing file/row/column bounds; document the distinction between complete per-row issues and the capped flattened index.
 
-Read `requirements.md` KNOW-001 through KNOW-004, Phase 4D and the overall Phase 4 gate in `outreach-implementation-phases.md`, `docs/phase-4d-tabular-import-hardening.md`, `docs/phase-4d-csv-mapping-foundation.md`, and the existing tabular validator/mapping tests before changing code.
+2. **P4D-CSV-COMPLETE-IDENTITY-001 — make mapping identity genuinely canonical**
+   - Canonicalize validated mapping columns by stable `sourceColumn` order before producing `mapping`, `mappingIdentity`, assignments, and mapped value insertion order.
+   - Equivalent mappings that differ only in column-array order must produce byte-for-byte identical canonical mapping JSON, mappingIdentity, rows, values, issues, and counts.
+   - Preserve every existing source/target validation code and precedence. Do not make header names authoritative or auto-apply suggestions.
+   - Keep the identity payload-free beyond the already-approved field IDs and numeric source columns. Do not add customer cell values to it.
 
-Reuse the existing bounded RFC 4180 parser, normalized headers, limits, error types, target registry, field parsers, mapping semantics, source-column identity, and Phase 4C offering rules. Do not introduce a second CSV parser, competing schemas, or duplicated field-validation logic.
+3. **P4D-CSV-COMPLETE-VERIFICATION-001 — repair committed-range cleanliness**
+   - Remove the trailing whitespace in `docs/phase-4d-csv-complete-file-validation.md`.
+   - Verify the actual committed feature range with `git diff --check a10489131522e79cf6bec9983ff520171254a7df..<final-implementation-sha>`; a clean working-tree-only check is insufficient.
+   - Report the exact command and exit result. Do not rewrite unrelated documentation.
 
-### Mandatory scope and trust boundaries
+### Regression tests
 
-- Accept and revalidate the original CSV bytes, filename, declared MIME type, and an untrusted mapping input. Do not trust a caller-supplied preview as evidence for the complete file.
-- CSV only. Reject XLSX and do not import/call XLSX helpers or consume XLSX previews. Preserve OPEN flag `MR-4D-OOXML-001`.
-- Reuse the exact existing CSV byte/signature/encoding/header/row/column/cell/aggregate-text/deadline rules. Refactor shared internal parsing safely if necessary so preview and complete-file paths cannot drift.
-- Run `parseCsvMappingInput` and the existing semantic mapping validation before mapping complete rows. Preserve all current error codes and precedence for existing valid and invalid inputs.
-- Validate every accepted nonblank data row, including rows after preview row 50, while preserving original one-based `sourceRowNumber`.
-- Apply the existing knowledge/offering cell parsing and cross-field rules without weakening required fields, enums, dates, prices, currencies, billing frequencies, pricing models, or quote-required behavior.
-- Return a deterministic server-only result suitable for later persistence work: canonical family/mapping identity, validated source checksum, total/nonblank/valid/invalid/skipped counts, complete mapped draft rows in source order, row issues, and explicit bounded/truncation metadata if issue output is capped.
-- Keep memory and output bounded by existing file, row, column, cell, and aggregate-text limits. If a total-issue cap is required, make it deterministic, preserve invalid-row counts, expose `hasMoreIssues`, and never imply omitted rows were valid.
-- Errors and row issues must remain static/payload-free. Mapped customer values may appear only in the explicit server-only mapped-row values intended for later authorized persistence/preview work.
-- Never evaluate formulas, fetch URLs, access storage/database/network/filesystem beyond the supplied bytes, or mutate caller inputs.
-- Do not add routes, server actions, UI, Prisma models/migrations, jobs, saved templates, persistence, confirmation, activation, duplicate/existing-record conflict resolution, live connectors, XLSX behavior, or Phase 5 work.
+Add deterministic tests that:
 
-### Required tests
+- submit at least two semantically identical knowledge mappings and two offering mappings with different column-array orders and prove byte-for-byte identical canonical mappings, identities, mapped rows, values, issues, and counts;
+- prove deadline expiry during a long complete-row mapping loop returns the existing static timeout error before all rows are processed;
+- prove deadline expiry during aggregation/finalization cannot return a result after the deadline;
+- prove the flattened issue array never retains more than `CSV_MAPPED_FILE_MAX_ISSUES` while `issueCount`, `invalidRowCount`, per-row issues, ordering, and `hasMoreIssues` remain exact;
+- preserve valid 50-row preview output and all existing row-limit, post-preview invalid-row, parser-gate, privacy, side-effect, XLSX-rejection, and Phase 4A–4D regressions.
 
-Add direct deterministic regressions for at least:
+Use deterministic clock control or an injected internal deadline checker; do not add flaky wall-clock tests.
 
-- a valid CSV with more than 50 rows where all complete rows are returned in source order;
-- an invalid mapped value only after preview row 50, proving complete-file validation detects and counts it;
-- first/last source-row numbers, internal blank rows, trailing blank rows, and completely blank data rows;
-- knowledge and offering families using the existing mapping and cross-field semantics;
-- malformed/unsafe bytes, mapping roots, headers, formulas/links, row/column/cell/text limits, and oversized files failing through existing static errors;
-- CSV row limit at the accepted boundary and one past it without unbounded allocation;
-- deterministic repeated output, canonical checksum/mapping identity, and input immutability;
-- payload-bearing secrets, formulas, and URLs absent from thrown errors and row issues;
-- no database, storage, network, external-resource, or formula-evaluation side effects;
-- existing 50-row mapped-preview output remaining byte-for-byte unchanged;
-- all existing Phase 4A knowledge, Phase 4B document, Phase 4C offering, runtime-composition, tabular-validation, mapping, and security tests remaining unchanged and passing.
+### Exclusions
 
-### Documentation and exclusions
-
-Add a focused task-3 section/document describing the complete-file contract, bounds, privacy behavior, result shape, and the explicit absence of persistence/activation. Do not claim Phase 4D, KNOW-002, KNOW-003, or the overall Phase 4 gate complete.
+Do not add routes, server actions, UI, persistence, Prisma changes, migrations, jobs, activation, confirmation, duplicate/existing-record conflict handling, XLSX consumption, live connectors, or Phase 5 work. Do not remove or weaken `MR-4D-OOXML-001`.
 
 ### Verification and completion
 
-Run and report exact results for:
+Run and report:
 
 - `npm ci`
-- focused complete-file, tabular-validation, mapping, and security tests
+- focused complete-file, mapping, tabular-validation, and security tests
 - `npm run format:check`
 - `npm run lint`
 - `npm run typecheck`
@@ -164,9 +172,9 @@ Run and report exact results for:
 - `npm run build`
 - `CI=true npm run test:e2e`
 - `npm audit --omit=dev`
-- `git diff --check`
+- committed-range `git diff --check a10489131522e79cf6bec9983ff520171254a7df..<final-implementation-sha>`
 - successful exact-head GitHub Actions
 
-Commit and push the implementation/test/docs checkpoint before the full suite. Set `READY_FOR_REVIEW` only after the full suite and exact-head CI pass. Record the implementation SHA, exact results, files changed, design/bounds decisions, security/privacy evidence, assumptions, remaining risks, and deferred work. Do not open or merge a pull request.
+Follow the lease/checkpoint rules. Commit and push code/tests/docs before the completion report. Preserve blocker revision 1, its three stable IDs, attempt count, and history exactly; ChatGPT owns their resolution. Set `READY_FOR_REVIEW` only after every gate passes, and do not open or merge a pull request.
 
 <!-- END:outreach-automation -->
