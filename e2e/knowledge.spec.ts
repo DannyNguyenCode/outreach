@@ -196,5 +196,23 @@ test.describe("Phase 4A business knowledge", () => {
     await expect(
       page.getByText("Unused items may be returned in 30 days."),
     ).toBeVisible();
+
+    await page.goto(`/app/orgs/${slug}/knowledge/sources`);
+    await expect(
+      page.getByRole("heading", { name: "Runtime source inspector" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("search", { name: "Runtime evidence filters" }),
+    ).toBeVisible();
+    await page.getByLabel("Evidence query").fill("return");
+    await page.getByRole("button", { name: "Inspect evidence" }).click();
+    await expect(
+      page.getByRole("heading", { name: /Composition state: SUPPORTED/ }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Runtime evidence" }),
+    ).toBeVisible();
+    await expect(page.getByText("Return policy — Overview")).toBeVisible();
+    await page.keyboard.press("Tab");
   });
 });
