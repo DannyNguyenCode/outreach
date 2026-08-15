@@ -19,7 +19,7 @@ active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
 cursor_implementation_sha: 42429a482b65c72ebf6106d44f2968bfb4a9ad18
 last_reviewed_sha: a2ab9520d5499cb96afdf5f2e6a809c88cdb2fbf
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
@@ -66,7 +66,7 @@ required_tests: |
   Add focused coverage for failOrRetryDocumentJob revalidation of job lease ownership/expiry and attempt identity plus source, version, and worker-owned document state after all graph locks are held.
   Preserve and rerun the existing concurrent sweeper, claim/archive, tenant isolation, upload pre-parse authorization, checksum mismatch, successful processing, retry, compensation, archive/restore, and Phase 4C tests.
   Run the full required format, lint, typecheck, Prisma validation/fresh migration deploy, unit, integration, build, E2E, audit, and diff checks.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT is reviewing the exact attempt-3 branch head for the final develop merge gate. Cursor must not modify or push."
 ```
 
 ## Cursor corrective implementation prompt — final attempt
