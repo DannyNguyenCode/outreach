@@ -30,17 +30,17 @@ blocker_set_signature: []
 blocker_attempt_count: 0
 blocker_history: []
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: null
+last_cursor_activity_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T20:06:35Z"
 cursor_completed_at: null
-cursor_claim_sha: null
+cursor_claim_sha: babbea38a8df7432744ef7b4169aa67581e9055d
 cursor_lease_id: c00d4cf1-fa8e-4e8f-be66-295e74dc2bf6
-cursor_lease_expires_at: "2026-08-15T21:01:35Z"
-cursor_heartbeat_at: "2026-08-15T20:06:35Z"
-cursor_checkpoint_sha: null
-cursor_checkpoint_summary: null
+cursor_lease_expires_at: "2026-08-15T21:08:10Z"
+cursor_heartbeat_at: "2026-08-15T20:13:10Z"
+cursor_checkpoint_sha: 8b2a6e0a831e9f457a80c66cd3c99de56eea20b0
+cursor_checkpoint_summary: "CSV complete-file mapped validation is committed. validateMappedCsvFile revalidates original CSV bytes, reuses parseCsvMappingInput/mapCsvRows, maps every nonblank row past the 50-row preview, caps flattened issues at CSV_MAPPED_FILE_MAX_ISSUES, and rejects XLSX without workbook helpers. Focused complete-file+mapping+validation+security tests: 6 files, 106 passed. Next: npm run format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
 cursor_report: null
 review_findings: null
