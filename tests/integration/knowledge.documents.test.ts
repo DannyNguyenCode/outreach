@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import type {
-  MalwareScanner,
-  MalwareScanResult,
+import {
+  MalwareScanUnavailableError,
+  type MalwareScanner,
+  type MalwareScanResult,
 } from "@/lib/orgs/document-malware";
 import { extractDocument } from "@/lib/orgs/document-extraction";
 import type {
@@ -23,8 +24,12 @@ import {
 import {
   claimKnowledgeDocumentJob,
   compensateFailedDocumentUpload,
+  createAuthorizedDocumentDownload,
+  DOCUMENT_JOB_MAX_ATTEMPTS,
+  failExpiredExhaustedKnowledgeDocumentJobs,
   getKnowledgeDocument,
   processNextKnowledgeDocumentJob,
+  requestKnowledgeDocumentRetry,
   restoreKnowledgeDocumentVersion,
   uploadValidatedKnowledgeDocument,
 } from "@/lib/orgs/knowledge-documents";
@@ -164,6 +169,216 @@ describe("Phase 4B private document processing", () => {
       },
     });
     expect(confirmation.ok).toBe(false);
+
+    const download = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(download.ok).toBe(false);
+  });
+
+  it("denies private download until scan evidence is clean and matching", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-download-gate");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "pending.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const pending = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(pending.ok).toBe(false);
+
+    const processed = await processNextKnowledgeDocumentJob({
+      workerId: "worker-download-gate",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    });
+    expect(processed).toMatchObject({ claimed: true, outcome: "published" });
+
+    const allowed = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(allowed.ok).toBe(true);
+    if (!allowed.ok) throw new Error(allowed.message);
+    expect(allowed.objectBucket).toBe(storage.bucketName);
+  });
+
+  it("denies CLEAN scan evidence when scanned and binary checksums differ", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-checksum-mismatch");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "mismatch.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const mismatched = "b".repeat(64);
+    expect(mismatched).not.toBe(uploaded.value.document.binaryChecksum);
+    await prisma.$executeRaw`
+      ALTER TABLE "KnowledgeDocument"
+      DROP CONSTRAINT "KnowledgeDocument_clean_checksum_check"
+    `;
+    try {
+      await prisma.knowledgeDocument.update({
+        where: { id: uploaded.value.document.id },
+        data: {
+          scanState: "CLEAN",
+          finalizedAt: new Date("2026-08-15T00:00:00.000Z"),
+          scannedAt: new Date("2026-08-15T00:00:00.000Z"),
+          scannerName: "test-clean",
+          scannerVersion: "1",
+          scannedChecksum: mismatched,
+        },
+      });
+
+      const signedBefore = storage.signedDownloadCalls;
+      const downloadBefore = storage.downloadCalls;
+      const denied = await createAuthorizedDocumentDownload({
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        sourceId: uploaded.value.source.id,
+        versionId: uploaded.value.version.id,
+        storage,
+      });
+      expect(denied.ok).toBe(false);
+      if (!denied.ok) {
+        expect(denied.reason).toBe("not_confirmable");
+      }
+      expect(storage.signedDownloadCalls).toBe(signedBefore);
+      expect(storage.downloadCalls).toBe(downloadBefore);
+    } finally {
+      await prisma.knowledgeDocument.update({
+        where: { id: uploaded.value.document.id },
+        data: {
+          scanState: "PENDING",
+          scannedChecksum: null,
+          scannedAt: null,
+          scannerName: null,
+          scannerVersion: null,
+        },
+      });
+      await prisma.$executeRaw`
+        ALTER TABLE "KnowledgeDocument"
+        ADD CONSTRAINT "KnowledgeDocument_clean_checksum_check"
+        CHECK ("scanState" <> 'CLEAN' OR ("scannedChecksum" IS NOT NULL AND "scannedChecksum" = "binaryChecksum"))
+      `;
+    }
+  });
+
+  it("terminalizes expired leases after the final attempt", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-lease-exhaust");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "lease.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const expired = new Date("2020-01-01T00:00:00.000Z");
+    await prisma.knowledgeDocumentJob.update({
+      where: { id: uploaded.value.job.id },
+      data: {
+        state: "RUNNING",
+        attempts: DOCUMENT_JOB_MAX_ATTEMPTS,
+        leaseOwner: "dead-worker",
+        leaseExpiresAt: expired,
+      },
+    });
+    await prisma.knowledgeDocument.update({
+      where: { id: uploaded.value.document.id },
+      data: {
+        processingState: "SCANNING",
+        leaseOwner: "dead-worker",
+        leaseExpiresAt: expired,
+      },
+    });
+
+    expect(
+      await failExpiredExhaustedKnowledgeDocumentJobs({
+        now: new Date("2026-08-14T12:00:00.000Z"),
+      }),
+    ).toBe(1);
+
+    const job = await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+      where: { id: uploaded.value.job.id },
+    });
+    expect(job).toMatchObject({
+      state: "FAILED",
+      leaseOwner: null,
+      lastSafeErrorCode: "lease_exhausted",
+    });
+    const document = await prisma.knowledgeDocument.findUniqueOrThrow({
+      where: { id: uploaded.value.document.id },
+    });
+    expect(document).toMatchObject({
+      processingState: "FAILED",
+      leaseOwner: null,
+      lastSafeErrorCode: "lease_exhausted",
+    });
+    const version = await prisma.knowledgeVersion.findUniqueOrThrow({
+      where: { id: uploaded.value.version.id },
+    });
+    expect(version.state).toBe("FAILED");
+
+    const next = await processNextKnowledgeDocumentJob({
+      workerId: "worker-after-exhaust",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+        now: () => new Date("2026-08-14T12:01:00.000Z"),
+      },
+    });
+    expect(next).toEqual({ claimed: false });
+
+    const retried = await requestKnowledgeDocumentRetry({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+    });
+    expect(retried.ok).toBe(true);
+    const recovered = await processNextKnowledgeDocumentJob({
+      workerId: "worker-after-retry",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    });
+    expect(recovered).toMatchObject({ claimed: true, outcome: "published" });
   });
 
   it("denies cross-tenant document status and atomically claims one job once", async () => {
@@ -455,6 +670,54 @@ describe("Phase 4B private document processing", () => {
     });
     expect(retry.ok).toBe(true);
   });
+
+  it("retries a bounded remote scanner failure without terminalizing the graph", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-bounded-retry");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "retry.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const retried = await processNextKnowledgeDocumentJob({
+      workerId: "worker-retry",
+      dependencies: {
+        storage,
+        scanner: new UnavailableScanner(),
+        scannerName: "test-unavailable",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    });
+    expect(retried).toMatchObject({ claimed: true, outcome: "retry" });
+
+    const job = await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+      where: { id: uploaded.value.job.id },
+    });
+    expect(job.state).toBe("RETRY");
+    expect(job.attempts).toBe(1);
+    expect(job.leaseOwner).toBeNull();
+    const document = await prisma.knowledgeDocument.findUniqueOrThrow({
+      where: { id: uploaded.value.document.id },
+    });
+    expect(document.processingState).toBe("QUEUED");
+    const version = await prisma.knowledgeVersion.findUniqueOrThrow({
+      where: { id: uploaded.value.version.id },
+    });
+    expect(version.state).toBe("PROCESSING");
+    expect(
+      await prisma.organizationAuditEvent.count({
+        where: {
+          organizationId: ctx.organizationId,
+          action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        },
+      }),
+    ).toBe(0);
+  });
 });
 
 async function sampleTxt() {
@@ -538,6 +801,12 @@ class CleanScanner implements MalwareScanner {
   }
 }
 
+class UnavailableScanner implements MalwareScanner {
+  async scan(): Promise<MalwareScanResult> {
+    throw new MalwareScanUnavailableError("scanner offline");
+  }
+}
+
 class InfectedScanner implements MalwareScanner {
   async scan(
     _bytes: Uint8Array,
@@ -556,6 +825,8 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   readonly bucketName = "test-private";
   private readonly objects = new Map<string, Uint8Array>();
   readonly deletedKeys: string[] = [];
+  signedDownloadCalls = 0;
+  downloadCalls = 0;
   failUpload = false;
   failDownload = false;
   failDelete = false;
@@ -569,22 +840,23 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
     return `${organizationStoragePrefix(organizationId)}${randomUUID()}.${kind}`;
   }
 
-  async createSignedUpload(ref: PrivateDocumentRef): Promise<SignedObjectUrl> {
-    return this.signed(ref);
-  }
-
   async createSignedDownload(
     ref: PrivateDocumentRef,
   ): Promise<SignedObjectUrl> {
+    this.assertScoped(ref);
+    this.signedDownloadCalls += 1;
     return this.signed(ref);
   }
 
   async upload(ref: PrivateDocumentRef, bytes: Uint8Array) {
+    this.assertScoped(ref);
     if (this.failUpload) throw new Error("upload unavailable");
     this.objects.set(ref.key, bytes.slice());
   }
 
   async download(ref: PrivateDocumentRef) {
+    this.assertScoped(ref);
+    this.downloadCalls += 1;
     if (this.failDownload) throw new Error("download unavailable");
     const bytes = this.objects.get(ref.key);
     if (!bytes) throw new Error("missing");
@@ -595,6 +867,7 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   }
 
   async head(ref: PrivateDocumentRef): Promise<PrivateObjectHead | null> {
+    this.assertScoped(ref);
     const bytes = this.objects.get(ref.key);
     return bytes
       ? {
@@ -607,9 +880,17 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   }
 
   async delete(ref: PrivateDocumentRef) {
+    this.assertScoped(ref);
     if (this.failDelete) throw new Error("delete unavailable");
     this.deletedKeys.push(ref.key);
     this.objects.delete(ref.key);
+  }
+
+  private assertScoped(ref: PrivateDocumentRef) {
+    const requested = ref.bucket ?? this.bucketName;
+    if (requested !== this.bucketName) {
+      throw new Error("Document storage bucket is not available.");
+    }
   }
 
   private signed(ref: PrivateDocumentRef): SignedObjectUrl {

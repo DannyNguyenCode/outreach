@@ -8,6 +8,7 @@ import type {
   KnowledgeDocumentJob,
   KnowledgeSource,
   KnowledgeVersion,
+  Prisma,
 } from "@prisma/client";
 
 import type { SafeUser } from "@/lib/auth/users";
@@ -26,7 +27,10 @@ import {
   documentRetryDelayMs,
   findNearDuplicates,
 } from "@/lib/orgs/document-processing";
-import type { PrivateDocumentStorage } from "@/lib/orgs/document-storage";
+import type {
+  PrivateDocumentStorage,
+  PrivateDocumentRef,
+} from "@/lib/orgs/document-storage";
 import { PRIVATE_DOCUMENT_BUCKET } from "@/lib/orgs/document-storage";
 import type {
   ExtractedDocument,
@@ -38,12 +42,14 @@ import { requireOrganizationPermission } from "@/lib/orgs/authorization";
 import {
   acquireOrganizationKnowledgeLock,
   ConflictError,
+  isInFlightDocumentProcessingState,
   KnowledgeLifecycleError,
   KnowledgeNotFoundError,
   lockKnowledgeDocumentForUpdate,
   lockKnowledgeDocumentJobForUpdate,
   lockKnowledgeSourceForUpdate,
   lockKnowledgeVersionForUpdate,
+  lockKnowledgeWorkerGraphForUpdate,
   mapKnowledgeError,
   requireActiveActorInTx,
   type AuthFailure,
@@ -230,10 +236,7 @@ export async function uploadValidatedKnowledgeDocument(
       return { source, version, document };
     });
 
-    const ref = {
-      organizationId: input.organizationId,
-      key: initiated.document.storageObjectKey,
-    };
+    const ref = documentStorageRef(initiated.document);
     await input.storage.upload(
       ref,
       input.document.bytes,
@@ -390,11 +393,213 @@ export async function uploadValidatedKnowledgeDocument(
   }
 }
 
-export async function claimKnowledgeDocumentJob(input: {
-  workerId: string;
-  now?: Date;
-  leaseMs?: number;
-}): Promise<
+type ReservedDocumentJob = {
+  id: string;
+  organizationId: string;
+  sourceId: string;
+  versionId: string;
+  documentId: string;
+  attempts: number;
+  maxAttempts: number;
+};
+
+/**
+ * Terminalize RUNNING jobs whose lease expired after the final attempt.
+ *
+ * Two-stage protocol: a short SKIP LOCKED reservation reads a candidate and
+ * commits (releasing the job row) before the graph-mutation transaction
+ * waits on the organization knowledge lock. Mutation then locks
+ * source → version → document → job, revalidates, and applies one
+ * conditional terminal state.
+ */
+export async function failExpiredExhaustedKnowledgeDocumentJobs(
+  input: {
+    now?: Date;
+    limit?: number;
+  } = {},
+  hooks: KnowledgeMutationTestHooks = {},
+): Promise<number> {
+  const now = input.now ?? new Date();
+  const limit = input.limit ?? 20;
+  const seen = new Set<string>();
+  let failed = 0;
+  for (let count = 0; count < limit; count += 1) {
+    const candidate = await reserveExpiredExhaustedKnowledgeDocumentJob(
+      now,
+      seen,
+    );
+    if (!candidate) break;
+    seen.add(candidate.id);
+    if (hooks.testAfterJobReservation) {
+      await hooks.testAfterJobReservation();
+    }
+    const terminalized = await terminalizeReservedExhaustedJob(
+      candidate,
+      now,
+      hooks,
+    );
+    if (terminalized) failed += 1;
+  }
+  return failed;
+}
+
+async function reserveExpiredExhaustedKnowledgeDocumentJob(
+  now: Date,
+  seen: ReadonlySet<string>,
+): Promise<ReservedDocumentJob | null> {
+  return prisma.$transaction(async (tx) => {
+    const seenIds = [...seen];
+    const rows =
+      seenIds.length === 0
+        ? await tx.$queryRaw<ReservedDocumentJob[]>`
+            SELECT id,
+                   "organizationId",
+                   "sourceId",
+                   "versionId",
+                   "documentId",
+                   attempts,
+                   "maxAttempts"
+            FROM "KnowledgeDocumentJob"
+            WHERE state = 'RUNNING'
+              AND "leaseExpiresAt" < ${now}
+              AND attempts >= "maxAttempts"
+            ORDER BY "leaseExpiresAt" ASC, id ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+          `
+        : await tx.$queryRaw<ReservedDocumentJob[]>`
+            SELECT id,
+                   "organizationId",
+                   "sourceId",
+                   "versionId",
+                   "documentId",
+                   attempts,
+                   "maxAttempts"
+            FROM "KnowledgeDocumentJob"
+            WHERE state = 'RUNNING'
+              AND "leaseExpiresAt" < ${now}
+              AND attempts >= "maxAttempts"
+              AND NOT (id = ANY(${seenIds}))
+            ORDER BY "leaseExpiresAt" ASC, id ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+          `;
+    return rows[0] ?? null;
+  });
+}
+
+async function terminalizeReservedExhaustedJob(
+  candidate: ReservedDocumentJob,
+  now: Date,
+  hooks: KnowledgeMutationTestHooks,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const graph = await lockKnowledgeWorkerGraphForUpdate(
+      tx,
+      {
+        organizationId: candidate.organizationId,
+        sourceId: candidate.sourceId,
+        versionId: candidate.versionId,
+        documentId: candidate.documentId,
+        jobId: candidate.id,
+      },
+      hooks,
+    );
+    if (
+      !graph.job ||
+      graph.job.sourceId !== candidate.sourceId ||
+      graph.job.versionId !== candidate.versionId ||
+      graph.job.documentId !== candidate.documentId ||
+      graph.job.state !== "RUNNING" ||
+      graph.job.attempts < graph.job.maxAttempts ||
+      !graph.job.leaseExpiresAt ||
+      graph.job.leaseExpiresAt >= now
+    ) {
+      return false;
+    }
+    if (
+      !graph.source ||
+      graph.source.inputKind !== "DOCUMENT" ||
+      !graph.version ||
+      !graph.document
+    ) {
+      return false;
+    }
+
+    const jobUpdated = await tx.knowledgeDocumentJob.updateMany({
+      where: {
+        id: candidate.id,
+        organizationId: candidate.organizationId,
+        sourceId: candidate.sourceId,
+        versionId: candidate.versionId,
+        documentId: candidate.documentId,
+        state: "RUNNING",
+        attempts: { gte: graph.job.maxAttempts },
+        leaseExpiresAt: { lt: now },
+      },
+      data: {
+        state: "FAILED",
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastSafeErrorCode: "lease_exhausted",
+        completedAt: now,
+      },
+    });
+    if (jobUpdated.count !== 1) return false;
+
+    if (isInFlightDocumentProcessingState(graph.document.processingState)) {
+      await tx.knowledgeDocument.updateMany({
+        where: {
+          id: candidate.documentId,
+          organizationId: candidate.organizationId,
+          sourceId: candidate.sourceId,
+          versionId: candidate.versionId,
+          processingState: { in: ["QUEUED", "SCANNING", "EXTRACTING"] },
+        },
+        data: {
+          processingState: "FAILED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          lastSafeErrorCode: "lease_exhausted",
+        },
+      });
+    }
+    if (graph.version.state === "PROCESSING") {
+      await tx.knowledgeVersion.updateMany({
+        where: {
+          id: candidate.versionId,
+          organizationId: candidate.organizationId,
+          sourceId: candidate.sourceId,
+          state: "PROCESSING",
+        },
+        data: { state: "FAILED" },
+      });
+    }
+    await recordOrganizationAuditEvent(tx, {
+      organizationId: candidate.organizationId,
+      actorUserId: null,
+      action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+      metadata: {
+        sourceId: candidate.sourceId,
+        versionId: candidate.versionId,
+        documentId: candidate.documentId,
+        jobId: candidate.id,
+        safeErrorCode: "lease_exhausted",
+        attempts: graph.job.attempts,
+      },
+    });
+    return true;
+  });
+}
+
+export async function claimKnowledgeDocumentJob(
+  input: {
+    workerId: string;
+    now?: Date;
+    leaseMs?: number;
+  },
+  hooks: KnowledgeMutationTestHooks = {},
+): Promise<
   | (KnowledgeDocumentJob & {
       document: KnowledgeDocument;
       version: KnowledgeVersion;
@@ -405,14 +610,39 @@ export async function claimKnowledgeDocumentJob(input: {
   const leaseExpiresAt = new Date(
     now.getTime() + (input.leaseMs ?? DOCUMENT_JOB_LEASE_MS),
   );
+  const reserved = await reserveKnowledgeDocumentJob({
+    workerId: input.workerId,
+    now,
+    leaseExpiresAt,
+  });
+  if (!reserved) return null;
+  if (hooks.testAfterJobReservation) {
+    await hooks.testAfterJobReservation();
+  }
+  return attachClaimedKnowledgeDocumentJob(
+    reserved,
+    {
+      workerId: input.workerId,
+      now,
+      leaseExpiresAt,
+    },
+    hooks,
+  );
+}
+
+async function reserveKnowledgeDocumentJob(input: {
+  workerId: string;
+  now: Date;
+  leaseExpiresAt: Date;
+}): Promise<ReservedDocumentJob | null> {
   return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    const rows = await tx.$queryRaw<ReservedDocumentJob[]>`
       WITH candidate AS (
         SELECT id
         FROM "KnowledgeDocumentJob"
         WHERE (
-          (state IN ('QUEUED', 'RETRY') AND "availableAt" <= ${now})
-          OR (state = 'RUNNING' AND "leaseExpiresAt" < ${now})
+          (state IN ('QUEUED', 'RETRY') AND "availableAt" <= ${input.now})
+          OR (state = 'RUNNING' AND "leaseExpiresAt" < ${input.now})
         )
           AND attempts < "maxAttempts"
         ORDER BY "availableAt" ASC, id ASC
@@ -423,22 +653,79 @@ export async function claimKnowledgeDocumentJob(input: {
       SET state = 'RUNNING',
           attempts = job.attempts + 1,
           "leaseOwner" = ${input.workerId},
-          "leaseExpiresAt" = ${leaseExpiresAt},
-          "updatedAt" = ${now}
+          "leaseExpiresAt" = ${input.leaseExpiresAt},
+          "updatedAt" = ${input.now}
       FROM candidate
       WHERE job.id = candidate.id
-      RETURNING job.id
+      RETURNING job.id,
+                job."organizationId",
+                job."sourceId",
+                job."versionId",
+                job."documentId",
+                job.attempts,
+                job."maxAttempts"
     `;
-    const id = rows[0]?.id;
-    if (!id) return null;
-    const job = await tx.knowledgeDocumentJob.findUniqueOrThrow({
-      where: { id },
-      include: { document: true, version: true },
-    });
+    return rows[0] ?? null;
+  });
+}
+
+async function attachClaimedKnowledgeDocumentJob(
+  reserved: ReservedDocumentJob,
+  input: { workerId: string; now: Date; leaseExpiresAt: Date },
+  hooks: KnowledgeMutationTestHooks,
+): Promise<
+  | (KnowledgeDocumentJob & {
+      document: KnowledgeDocument;
+      version: KnowledgeVersion;
+    })
+  | null
+> {
+  return prisma.$transaction(async (tx) => {
+    const graph = await lockKnowledgeWorkerGraphForUpdate(
+      tx,
+      {
+        organizationId: reserved.organizationId,
+        sourceId: reserved.sourceId,
+        versionId: reserved.versionId,
+        documentId: reserved.documentId,
+        jobId: reserved.id,
+      },
+      hooks,
+    );
+    const jobStillOurs =
+      graph.job &&
+      graph.job.state === "RUNNING" &&
+      graph.job.leaseOwner === input.workerId &&
+      graph.job.sourceId === reserved.sourceId &&
+      graph.job.versionId === reserved.versionId &&
+      graph.job.documentId === reserved.documentId;
+    const graphProcessable =
+      Boolean(graph.source) &&
+      graph.source?.inputKind === "DOCUMENT" &&
+      !graph.source?.archivedAt &&
+      graph.version?.state === "PROCESSING" &&
+      isInFlightDocumentProcessingState(graph.document?.processingState);
+
+    if (!jobStillOurs) {
+      return null;
+    }
+    if (!graphProcessable) {
+      await releaseStaleReservedJob(tx, {
+        reserved,
+        workerId: input.workerId,
+        now: input.now,
+        documentState: graph.document?.processingState ?? null,
+        versionState: graph.version?.state ?? null,
+      });
+      return null;
+    }
+
     const claimedDocument = await tx.knowledgeDocument.updateMany({
       where: {
-        id: job.documentId,
-        organizationId: job.organizationId,
+        id: reserved.documentId,
+        organizationId: reserved.organizationId,
+        sourceId: reserved.sourceId,
+        versionId: reserved.versionId,
         processingState: {
           in: ["QUEUED", "SCANNING", "EXTRACTING"],
         },
@@ -447,35 +734,103 @@ export async function claimKnowledgeDocumentJob(input: {
         processingState: "SCANNING",
         processingAttempts: { increment: 1 },
         leaseOwner: input.workerId,
-        leaseExpiresAt,
+        leaseExpiresAt: input.leaseExpiresAt,
         retryAt: null,
       },
     });
-    if (claimedDocument.count !== 1) throw new ConflictError();
-    return job;
+    if (claimedDocument.count !== 1) {
+      await releaseStaleReservedJob(tx, {
+        reserved,
+        workerId: input.workerId,
+        now: input.now,
+        documentState: graph.document?.processingState ?? null,
+        versionState: graph.version?.state ?? null,
+      });
+      return null;
+    }
+
+    return tx.knowledgeDocumentJob.findFirstOrThrow({
+      where: {
+        id: reserved.id,
+        organizationId: reserved.organizationId,
+      },
+      include: { document: true, version: true },
+    });
   });
 }
 
-export async function processNextKnowledgeDocumentJob(input: {
-  workerId: string;
-  dependencies: DocumentProcessingDependencies;
-}): Promise<
+async function releaseStaleReservedJob(
+  tx: Prisma.TransactionClient,
+  input: {
+    reserved: ReservedDocumentJob;
+    workerId: string;
+    now: Date;
+    documentState: string | null;
+    versionState: string | null;
+  },
+): Promise<void> {
+  const completed =
+    input.documentState === "COMPLETE" ||
+    input.versionState === "DRAFT" ||
+    input.versionState === "NEEDS_ATTENTION" ||
+    input.versionState === "ACTIVE";
+  await tx.knowledgeDocumentJob.updateMany({
+    where: {
+      id: input.reserved.id,
+      organizationId: input.reserved.organizationId,
+      state: "RUNNING",
+      leaseOwner: input.workerId,
+    },
+    data: completed
+      ? {
+          state: "SUCCEEDED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          completedAt: input.now,
+          lastSafeErrorCode: null,
+        }
+      : {
+          state: "FAILED",
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          completedAt: input.now,
+          lastSafeErrorCode: "stale_claim",
+        },
+  });
+}
+
+export async function processNextKnowledgeDocumentJob(
+  input: {
+    workerId: string;
+    dependencies: DocumentProcessingDependencies;
+  },
+  hooks: KnowledgeMutationTestHooks = {},
+): Promise<
   | { claimed: false }
   | {
       claimed: true;
       jobId: string;
-      outcome: "published" | "needs_attention" | "retry" | "failed";
+      outcome: "published" | "needs_attention" | "retry" | "failed" | "stale";
     }
 > {
-  const job = await claimKnowledgeDocumentJob({ workerId: input.workerId });
+  await failExpiredExhaustedKnowledgeDocumentJobs(
+    {
+      now: input.dependencies.now?.(),
+    },
+    hooks,
+  );
+  const job = await claimKnowledgeDocumentJob(
+    {
+      workerId: input.workerId,
+      now: input.dependencies.now?.(),
+    },
+    hooks,
+  );
   if (!job) return { claimed: false };
   const now = input.dependencies.now ?? (() => new Date());
 
   try {
-    const ref = {
-      organizationId: job.organizationId,
-      key: job.document.storageObjectKey,
-    };
+    const ref = documentStorageRef(job.document);
     const bytes = await input.dependencies.storage.download(ref);
     const checksum = sha256(bytes);
     if (
@@ -490,39 +845,14 @@ export async function processNextKnowledgeDocumentJob(input: {
       checksum,
     );
 
-    await prisma.$transaction(async (tx) => {
-      const changed = await tx.knowledgeDocument.updateMany({
-        where: {
-          id: job.documentId,
-          organizationId: job.organizationId,
-          processingState: "SCANNING",
-          leaseOwner: input.workerId,
-          binaryChecksum: checksum,
-        },
-        data: {
-          scanState: "CLEAN",
-          scannedChecksum: clean.sha256,
-          scannerName: input.dependencies.scannerName,
-          scannerVersion: input.dependencies.scannerVersion,
-          scannedAt: now(),
-          processingState: "EXTRACTING",
-        },
-      });
-      if (changed.count !== 1) throw new ConflictError();
-      await recordOrganizationAuditEvent(tx, {
-        organizationId: job.organizationId,
-        actorUserId: null,
-        action: "KNOWLEDGE_DOCUMENT_SCAN_COMPLETED",
-        metadata: {
-          sourceId: job.sourceId,
-          versionId: job.versionId,
-          documentId: job.documentId,
-          jobId: job.id,
-          verdict: "clean",
-          checksum,
-          scannerVersion: input.dependencies.scannerVersion,
-        },
-      });
+    await recordCleanDocumentScan({
+      job,
+      workerId: input.workerId,
+      checksum: clean.sha256,
+      scannerName: input.dependencies.scannerName,
+      scannerVersion: input.dependencies.scannerVersion,
+      now: now(),
+      hooks,
     });
 
     const validated = await validateDocument({
@@ -627,26 +957,103 @@ export async function processNextKnowledgeDocumentJob(input: {
       outcome: published.state === "DRAFT" ? "published" : "needs_attention",
     };
   } catch (error) {
-    const outcome = await failOrRetryDocumentJob({
-      job,
-      workerId: input.workerId,
-      error,
-      scannerName: input.dependencies.scannerName,
-      scannerVersion: input.dependencies.scannerVersion,
-      now: now(),
-    });
+    const outcome = await failOrRetryDocumentJob(
+      {
+        job,
+        workerId: input.workerId,
+        error,
+        scannerName: input.dependencies.scannerName,
+        scannerVersion: input.dependencies.scannerVersion,
+        now: now(),
+      },
+      hooks,
+    );
     return { claimed: true, jobId: job.id, outcome };
   }
 }
 
-async function failOrRetryDocumentJob(input: {
-  job: KnowledgeDocumentJob & { document: KnowledgeDocument };
+async function recordCleanDocumentScan(input: {
+  job: KnowledgeDocumentJob;
   workerId: string;
-  error: unknown;
+  checksum: string;
   scannerName: string;
   scannerVersion: string;
   now: Date;
-}): Promise<"retry" | "failed"> {
+  hooks: KnowledgeMutationTestHooks;
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const graph = await lockKnowledgeWorkerGraphForUpdate(
+      tx,
+      {
+        organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        jobId: input.job.id,
+      },
+      input.hooks,
+    );
+    if (
+      !graph.source ||
+      graph.source.archivedAt ||
+      graph.source.inputKind !== "DOCUMENT" ||
+      graph.version?.state !== "PROCESSING" ||
+      graph.document?.processingState !== "SCANNING" ||
+      graph.document.leaseOwner !== input.workerId ||
+      graph.document.binaryChecksum !== input.checksum ||
+      graph.job?.state !== "RUNNING" ||
+      graph.job.leaseOwner !== input.workerId
+    ) {
+      throw new ConflictError();
+    }
+    const changed = await tx.knowledgeDocument.updateMany({
+      where: {
+        id: input.job.documentId,
+        organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        processingState: "SCANNING",
+        leaseOwner: input.workerId,
+        binaryChecksum: input.checksum,
+      },
+      data: {
+        scanState: "CLEAN",
+        scannedChecksum: input.checksum,
+        scannerName: input.scannerName,
+        scannerVersion: input.scannerVersion,
+        scannedAt: input.now,
+        processingState: "EXTRACTING",
+      },
+    });
+    if (changed.count !== 1) throw new ConflictError();
+    await recordOrganizationAuditEvent(tx, {
+      organizationId: input.job.organizationId,
+      actorUserId: null,
+      action: "KNOWLEDGE_DOCUMENT_SCAN_COMPLETED",
+      metadata: {
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        jobId: input.job.id,
+        verdict: "clean",
+        checksum: input.checksum,
+        scannerVersion: input.scannerVersion,
+      },
+    });
+  });
+}
+
+async function failOrRetryDocumentJob(
+  input: {
+    job: KnowledgeDocumentJob & { document: KnowledgeDocument };
+    workerId: string;
+    error: unknown;
+    scannerName: string;
+    scannerVersion: string;
+    now: Date;
+  },
+  hooks: KnowledgeMutationTestHooks = {},
+): Promise<"retry" | "failed" | "stale"> {
   const classification = classifyDocumentProcessingError(input.error);
   const infected = input.error instanceof MalwareDetectedError;
   const retryable =
@@ -661,17 +1068,43 @@ async function failOrRetryDocumentJob(input: {
       )
     : null;
 
-  await prisma.$transaction(async (tx) => {
-    const job = await lockKnowledgeDocumentJobForUpdate(tx, {
-      organizationId: input.job.organizationId,
-      jobId: input.job.id,
-    });
-    if (!job || job.state !== "RUNNING" || job.leaseOwner !== input.workerId) {
-      throw new ConflictError();
+  const mutated = await prisma.$transaction(async (tx) => {
+    const graph = await lockKnowledgeWorkerGraphForUpdate(
+      tx,
+      {
+        organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        jobId: input.job.id,
+      },
+      hooks,
+    );
+    if (
+      !isCurrentFailureRetryGraph(graph, {
+        workerId: input.workerId,
+        attempts: input.job.attempts,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        now: input.now,
+      })
+    ) {
+      return false;
     }
     const terminalAt = retryable ? null : input.now;
-    await tx.knowledgeDocumentJob.update({
-      where: { id: input.job.id },
+    const jobUpdated = await tx.knowledgeDocumentJob.updateMany({
+      where: {
+        id: input.job.id,
+        organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
+        documentId: input.job.documentId,
+        state: "RUNNING",
+        leaseOwner: input.workerId,
+        attempts: input.job.attempts,
+        leaseExpiresAt: { gte: input.now },
+      },
       data: {
         state: retryable ? "RETRY" : "FAILED",
         availableAt: retryAt ?? input.now,
@@ -681,11 +1114,15 @@ async function failOrRetryDocumentJob(input: {
         completedAt: terminalAt,
       },
     });
-    await tx.knowledgeDocument.updateMany({
+    if (jobUpdated.count !== 1) throw new ConflictError();
+    const documentUpdated = await tx.knowledgeDocument.updateMany({
       where: {
         id: input.job.documentId,
         organizationId: input.job.organizationId,
+        sourceId: input.job.sourceId,
+        versionId: input.job.versionId,
         leaseOwner: input.workerId,
+        processingState: { in: ["SCANNING", "EXTRACTING"] },
       },
       data: {
         processingState: retryable ? "QUEUED" : "FAILED",
@@ -712,8 +1149,9 @@ async function failOrRetryDocumentJob(input: {
         lastSafeErrorCode: safeErrorCode,
       },
     });
+    if (documentUpdated.count !== 1) throw new ConflictError();
     if (!retryable) {
-      await tx.knowledgeVersion.updateMany({
+      const versionUpdated = await tx.knowledgeVersion.updateMany({
         where: {
           id: input.job.versionId,
           organizationId: input.job.organizationId,
@@ -722,6 +1160,7 @@ async function failOrRetryDocumentJob(input: {
         },
         data: { state: "FAILED" },
       });
+      if (versionUpdated.count !== 1) throw new ConflictError();
       await recordOrganizationAuditEvent(tx, {
         organizationId: input.job.organizationId,
         actorUserId: null,
@@ -732,12 +1171,51 @@ async function failOrRetryDocumentJob(input: {
           documentId: input.job.documentId,
           jobId: input.job.id,
           safeErrorCode,
-          attempts: input.job.attempts,
+          attempts: graph.job.attempts,
         },
       });
     }
+    return true;
   });
+  if (!mutated) return "stale";
   return retryable ? "retry" : "failed";
+}
+
+function isCurrentFailureRetryGraph(
+  graph: Awaited<ReturnType<typeof lockKnowledgeWorkerGraphForUpdate>>,
+  expected: {
+    workerId: string;
+    attempts: number;
+    sourceId: string;
+    versionId: string;
+    documentId: string;
+    now: Date;
+  },
+): graph is {
+  source: NonNullable<(typeof graph)["source"]>;
+  version: NonNullable<(typeof graph)["version"]>;
+  document: NonNullable<(typeof graph)["document"]>;
+  job: NonNullable<(typeof graph)["job"]>;
+} {
+  return (
+    Boolean(graph.source) &&
+    graph.source?.archivedAt === null &&
+    graph.source?.inputKind === "DOCUMENT" &&
+    graph.version?.state === "PROCESSING" &&
+    graph.job !== null &&
+    graph.job.state === "RUNNING" &&
+    graph.job.leaseOwner === expected.workerId &&
+    graph.job.attempts === expected.attempts &&
+    graph.job.sourceId === expected.sourceId &&
+    graph.job.versionId === expected.versionId &&
+    graph.job.documentId === expected.documentId &&
+    graph.job.leaseExpiresAt !== null &&
+    graph.job.leaseExpiresAt >= expected.now &&
+    graph.document !== null &&
+    graph.document.leaseOwner === expected.workerId &&
+    (graph.document.processingState === "SCANNING" ||
+      graph.document.processingState === "EXTRACTING")
+  );
 }
 
 export async function requestKnowledgeDocumentRetry(
@@ -982,10 +1460,9 @@ export async function restoreKnowledgeDocumentVersion(
       },
     });
     if (!historical?.document) throw new KnowledgeNotFoundError();
-    const sourceBytes = await input.storage.download({
-      organizationId: input.organizationId,
-      key: historical.document.storageObjectKey,
-    });
+    const sourceBytes = await input.storage.download(
+      documentStorageRef(historical.document),
+    );
     const validated = await validateDocument({
       bytes: sourceBytes,
       filename: historical.document.displayFilename,
@@ -1111,6 +1588,7 @@ export async function restoreKnowledgeDocumentVersion(
     const copiedRef = {
       organizationId: input.organizationId,
       key: copiedKey,
+      bucket: initiated.document.storageBucket,
     };
     await input.storage.upload(
       copiedRef,
@@ -1324,6 +1802,7 @@ export async function createAuthorizedDocumentDownload(input: {
       url: string;
       expiresAt: Date;
       objectKey: string;
+      objectBucket: string;
       filename: string;
       mimeType: string;
     }
@@ -1343,11 +1822,19 @@ export async function createAuthorizedDocumentDownload(input: {
       },
     });
     if (!document) throw new KnowledgeNotFoundError();
+    if (
+      document.scanState !== "CLEAN" ||
+      !document.finalizedAt ||
+      !document.binaryChecksum ||
+      document.scannedChecksum !== document.binaryChecksum
+    ) {
+      throw new KnowledgeLifecycleError(
+        "not_confirmable",
+        "This document is not available for private download.",
+      );
+    }
     const signed = await input.storage.createSignedDownload(
-      {
-        organizationId: input.organizationId,
-        key: document.storageObjectKey,
-      },
+      documentStorageRef(document),
       60,
     );
     return {
@@ -1355,6 +1842,7 @@ export async function createAuthorizedDocumentDownload(input: {
       url: signed.url,
       expiresAt: signed.expiresAt,
       objectKey: document.storageObjectKey,
+      objectBucket: document.storageBucket,
       filename: document.displayFilename,
       mimeType: document.detectedMimeType ?? document.declaredMimeType,
     };
@@ -1464,6 +1952,7 @@ export async function compensateFailedDocumentUpload(input: {
     return {
       state: "cleanup_pending" as const,
       objectKey: document.storageObjectKey,
+      objectBucket: document.storageBucket,
     };
   });
 
@@ -1475,6 +1964,7 @@ export async function compensateFailedDocumentUpload(input: {
     await input.storage.delete({
       organizationId: input.organizationId,
       key: prepared.objectKey,
+      bucket: prepared.objectBucket,
     });
   } catch {
     return "cleanup_pending";
@@ -1641,6 +2131,18 @@ async function findDocumentDuplicates(input: {
       nearSourceId && nearVersionId
         ? { sourceId: nearSourceId, versionId: nearVersionId }
         : null,
+  };
+}
+
+function documentStorageRef(document: {
+  organizationId: string;
+  storageObjectKey: string;
+  storageBucket: string;
+}): PrivateDocumentRef {
+  return {
+    organizationId: document.organizationId,
+    key: document.storageObjectKey,
+    bucket: document.storageBucket,
   };
 }
 

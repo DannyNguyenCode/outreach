@@ -11,11 +11,12 @@ import type { DocumentKind } from "@/lib/orgs/document-types";
 
 export const PRIVATE_DOCUMENT_BUCKET = "knowledge-documents-private";
 export const SIGNED_DOWNLOAD_MAX_SECONDS = 5 * 60;
-export const SUPABASE_SIGNED_UPLOAD_SECONDS = 2 * 60 * 60;
 
 export type PrivateDocumentRef = {
   organizationId: string;
   key: string;
+  /** Persisted bucket for this object. Must match the adapter bucket. */
+  bucket?: string;
 };
 
 export type SignedObjectUrl = {
@@ -35,7 +36,6 @@ export type PrivateObjectHead = {
 export interface PrivateDocumentStorage {
   readonly bucketName?: string;
   createObjectKey(organizationId: string, kind: DocumentKind): string;
-  createSignedUpload(ref: PrivateDocumentRef): Promise<SignedObjectUrl>;
   createSignedDownload(
     ref: PrivateDocumentRef,
     expiresInSeconds?: number,
@@ -72,33 +72,13 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
     return `${organizationStoragePrefix(organizationId)}${nonce}.${kind}`;
   }
 
-  async createSignedUpload(ref: PrivateDocumentRef): Promise<SignedObjectUrl> {
-    this.assertScoped(ref);
-    const { data, error } = await this.bucket().createSignedUploadUrl(ref.key, {
-      upsert: false,
-    });
-    if (error) {
-      throw new Error(`Could not sign document upload: ${error.message}`, {
-        cause: error,
-      });
-    }
-    return {
-      url: data.signedUrl,
-      token: data.token,
-      key: ref.key,
-      expiresAt: new Date(
-        this.now().getTime() + SUPABASE_SIGNED_UPLOAD_SECONDS * 1_000,
-      ),
-    };
-  }
-
   async createSignedDownload(
     ref: PrivateDocumentRef,
     expiresInSeconds = 60,
   ): Promise<SignedObjectUrl> {
     this.assertScoped(ref);
     const expires = boundedExpiry(expiresInSeconds);
-    const { data, error } = await this.bucket().createSignedUrl(
+    const { data, error } = await this.bucket(ref).createSignedUrl(
       ref.key,
       expires,
     );
@@ -120,7 +100,7 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
     contentType: string,
   ): Promise<void> {
     this.assertScoped(ref);
-    const { error } = await this.bucket().upload(ref.key, bytes, {
+    const { error } = await this.bucket(ref).upload(ref.key, bytes, {
       contentType,
       cacheControl: "no-store",
       upsert: false,
@@ -134,7 +114,7 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
 
   async download(ref: PrivateDocumentRef): Promise<Uint8Array> {
     this.assertScoped(ref);
-    const { data, error } = await this.bucket().download(ref.key);
+    const { data, error } = await this.bucket(ref).download(ref.key);
     if (error) {
       throw new Error(`Could not download document: ${error.message}`, {
         cause: error,
@@ -145,7 +125,7 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
 
   async head(ref: PrivateDocumentRef): Promise<PrivateObjectHead | null> {
     this.assertScoped(ref);
-    const { data, error } = await this.bucket().info(ref.key);
+    const { data, error } = await this.bucket(ref).info(ref.key);
     if (error) {
       const status = Number(
         (error as { status?: number; statusCode?: string }).status ??
@@ -172,7 +152,7 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
 
   async delete(ref: PrivateDocumentRef): Promise<void> {
     this.assertScoped(ref);
-    const { error } = await this.bucket().remove([ref.key]);
+    const { error } = await this.bucket(ref).remove([ref.key]);
     if (error) {
       throw new Error(`Could not delete document: ${error.message}`, {
         cause: error,
@@ -180,11 +160,20 @@ export class SupabasePrivateDocumentStorage implements PrivateDocumentStorage {
     }
   }
 
-  private bucket() {
-    return this.client.storage.from(this.bucketName);
+  private bucket(ref: PrivateDocumentRef) {
+    return this.client.storage.from(this.resolveBucket(ref));
+  }
+
+  private resolveBucket(ref: PrivateDocumentRef): string {
+    const requested = ref.bucket ?? this.bucketName;
+    if (requested !== this.bucketName) {
+      throw new Error("Document storage bucket is not available.");
+    }
+    return requested;
   }
 
   private assertScoped(ref: PrivateDocumentRef): void {
+    this.resolveBucket(ref);
     if (!ref.key.startsWith(organizationStoragePrefix(ref.organizationId))) {
       throw new Error("Document key is outside the organization scope.");
     }
@@ -216,10 +205,6 @@ export class FileSystemPrivateDocumentStorage implements PrivateDocumentStorage 
 
   createObjectKey(organizationId: string, kind: DocumentKind): string {
     return `${organizationStoragePrefix(organizationId)}${randomBytes(24).toString("base64url")}.${kind}`;
-  }
-
-  async createSignedUpload(): Promise<SignedObjectUrl> {
-    throw new Error("The CI storage adapter does not expose upload URLs.");
   }
 
   async createSignedDownload(
@@ -275,6 +260,10 @@ export class FileSystemPrivateDocumentStorage implements PrivateDocumentStorage 
   }
 
   private assertScoped(ref: PrivateDocumentRef): void {
+    const requested = ref.bucket ?? this.bucketName;
+    if (requested !== this.bucketName) {
+      throw new Error("Document storage bucket is not available.");
+    }
     const prefix = organizationStoragePrefix(ref.organizationId);
     if (
       !ref.key.startsWith(prefix) ||
