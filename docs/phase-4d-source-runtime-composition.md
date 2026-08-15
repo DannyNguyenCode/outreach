@@ -170,8 +170,18 @@ This slice implements one deliberately narrow deterministic detector:
    `Pro` do not match inside unrelated words such as `improve`);
 3. the passage contains an explicit money amount using the structured
    currency code or a reviewed compatible marker for that code only
-   (`CAD`/`C$`/`CA$`, `USD`/`US$`, `EUR`/`€`, `GBP`/`£`);
+   (`CAD`/`C$`/`CA$`, `USD`/`US$`, `EUR`/`€`, `GBP`/`£`, `AUD`/`A$`/`AU$`,
+   `NZD`/`NZ$`);
 4. that amount differs from the structured price.
+
+Marker patterns follow the marker's leading and trailing character classes.
+If a marker begins with a Unicode letter, number, or underscore, it requires
+a left token boundary; if it ends with one, it requires a right token
+boundary. Alphabetic-prefix markers such as `C$`, `CA$`, `US$`, `A$`, `AU$`,
+and `NZ$` therefore cannot match inside identifiers such as `ABC$49` or
+`BUS$49`, while a trailing `$` may still sit directly against the amount
+(`C$49`). Symbol markers such as `€` and `£` keep amount adjacency on the
+symbol side. Three-letter ISO codes remain bounded on both sides.
 
 Bare `$` is never treated as a relevant marker because it cannot prove USD
 versus CAD versus AUD. Prefer no conflict over a false conflict when currency

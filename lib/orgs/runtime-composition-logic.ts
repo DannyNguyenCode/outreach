@@ -193,10 +193,11 @@ function escapeRegExp(value: string): string {
 
 function markerPattern(marker: string): string {
   const escaped = escapeRegExp(marker);
-  if (/^[A-Z]{3}$/i.test(marker)) {
-    return `(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`;
-  }
-  return escaped;
+  const startsWithTokenChar = /^[\p{L}\p{N}_]/u.test(marker);
+  const endsWithTokenChar = /[\p{L}\p{N}_]$/u.test(marker);
+  return `${startsWithTokenChar ? "(?<![\\p{L}\\p{N}_])" : ""}${escaped}${
+    endsWithTokenChar ? "(?![\\p{L}\\p{N}_])" : ""
+  }`;
 }
 
 function extractMoneyAmounts(text: string, currencyCode: string): string[] {

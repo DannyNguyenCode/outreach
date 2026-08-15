@@ -354,6 +354,165 @@ describe("KNOW-004 runtime composition helpers", () => {
     ).toHaveLength(1);
   });
 
+  it.each([
+    {
+      title: "CAD does not match C$ inside ABC$49",
+      currencyCode: "CAD",
+      safeText: "Premium plan uses SKU ABC$49.",
+    },
+    {
+      title: "CAD does not match CA$ inside ABCA$49",
+      currencyCode: "CAD",
+      safeText: "Premium plan uses SKU ABCA$49.",
+    },
+    {
+      title: "CAD does not match a suffix inside ABCAU$49",
+      currencyCode: "CAD",
+      safeText: "Premium plan uses SKU ABCAU$49.",
+    },
+    {
+      title: "USD does not match US$ inside BUS$49",
+      currencyCode: "USD",
+      safeText: "Premium plan uses SKU BUS$49.",
+    },
+    {
+      title: "AUD does not match AU$ inside ABCAU$49",
+      currencyCode: "AUD",
+      safeText: "Premium plan uses SKU ABCAU$49.",
+    },
+    {
+      title: "AUD does not match A$ inside ABCA$49",
+      currencyCode: "AUD",
+      safeText: "Premium plan uses SKU ABCA$49.",
+    },
+    {
+      title: "CAD does not match C$ after an underscore token",
+      currencyCode: "CAD",
+      safeText: "Premium plan uses SKU _C$49.",
+    },
+    {
+      title: "CAD still treats a bare dollar as ambiguous",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs $49 each month.",
+    },
+    {
+      title: "USD still ignores a foreign euro marker",
+      currencyCode: "USD",
+      safeText: "Premium plan is €49 per month.",
+    },
+  ])("$title", ({ currencyCode, safeText }) => {
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: `knowledge-passage:${currencyCode}-embedded`,
+          safeText,
+        }),
+        priceItem({
+          evidenceId: `offering-price:${currencyCode}-embedded`,
+          structuredValue: {
+            kind: "price",
+            amount: "59.00",
+            currencyCode,
+            variantId: null,
+            offeringName: "Premium plan",
+          },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it.each([
+    {
+      title: "standalone C$49 proves CAD",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs C$49 each month.",
+    },
+    {
+      title: "standalone CA$49 proves CAD",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs CA$49 each month.",
+    },
+    {
+      title: "standalone US$49 proves USD",
+      currencyCode: "USD",
+      safeText: "Premium plan costs US$49 each month.",
+    },
+    {
+      title: "standalone A$49 proves AUD",
+      currencyCode: "AUD",
+      safeText: "Premium plan costs A$49 each month.",
+    },
+    {
+      title: "standalone AU$49 proves AUD",
+      currencyCode: "AUD",
+      safeText: "Premium plan costs AU$49 each month.",
+    },
+    {
+      title: "standalone NZ$49 proves NZD",
+      currencyCode: "NZD",
+      safeText: "Premium plan costs NZ$49 each month.",
+    },
+    {
+      title: "amount before C$ proves CAD",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs 49 C$ each month.",
+    },
+    {
+      title: "amount before CA$ proves CAD",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs 49 CA$ each month.",
+    },
+    {
+      title: "amount before US$ proves USD",
+      currencyCode: "USD",
+      safeText: "Premium plan costs 49 US$ each month.",
+    },
+    {
+      title: "amount before A$ proves AUD",
+      currencyCode: "AUD",
+      safeText: "Premium plan costs 49 A$ each month.",
+    },
+    {
+      title: "amount before AU$ proves AUD",
+      currencyCode: "AUD",
+      safeText: "Premium plan costs 49 AU$ each month.",
+    },
+    {
+      title: "amount before NZ$ proves NZD",
+      currencyCode: "NZD",
+      safeText: "Premium plan costs 49 NZ$ each month.",
+    },
+    {
+      title: "parenthesized C$49 still proves CAD",
+      currencyCode: "CAD",
+      safeText: "Premium plan costs (C$49) each month.",
+    },
+    {
+      title: "amount adjacent to euro still proves EUR",
+      currencyCode: "EUR",
+      safeText: "Premium plan costs 49€ each month.",
+    },
+  ])("$title", ({ currencyCode, safeText }) => {
+    expect(
+      detectDeterministicConflicts([
+        knowledgeItem({
+          evidenceId: `knowledge-passage:${currencyCode}-standalone`,
+          safeText,
+        }),
+        priceItem({
+          evidenceId: `offering-price:${currencyCode}-standalone`,
+          structuredValue: {
+            kind: "price",
+            amount: "59.00",
+            currencyCode,
+            variantId: null,
+            offeringName: "Premium plan",
+          },
+        }),
+      ]),
+    ).toHaveLength(1);
+  });
+
   it("cannot hide a genuine conflict behind higher-priority structured children", () => {
     const passage = knowledgeItem({ evidenceId: "knowledge-passage:pas" });
     const price = priceItem({
