@@ -17,24 +17,24 @@ task_id: phase-04d-source-runtime-composition-001
 phase: "Phase 4D — Source classification and runtime composition"
 active_branch: feature/phase-04d-source-runtime-composition-v2
 base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
-cursor_implementation_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
+cursor_implementation_sha: eff1730efc3f9364abe6e9e6ce347737ae3947e7
 last_reviewed_sha: e60d5e99c58e7fc21700b4f2c50a9dbff2966e88
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 12
 previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
+last_cursor_activity_sha: eff1730efc3f9364abe6e9e6ce347737ae3947e7
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T15:06:40Z"
-cursor_completed_at: "2026-08-15T14:20:38Z"
+cursor_completed_at: "2026-08-15T15:17:40Z"
 cursor_report: |
-  Attempt 1 of 3 completed at implementation SHA 2d8bd1983c23b8b461d8a616cc8545a3e81fc373 (claim c4ba8ed2aa90da60e7dd7a640cea066ed2254464). Objective: implement KNOW-004 source classification and runtime composition over existing confirmed Phase 4A–4C domains without consuming CSV/XLSX previews.
-  Requirements/acceptance: exhaustive RUNTIME_SOURCE_REGISTRY and RUNTIME_SOURCE_ADAPTERS (live adapters only for CUSTOMER_CONFIRMED_KNOWLEDGE and STRUCTURED_OFFERING; future classes explicit null). composeRuntimeContext enforces org.knowledge.read, rechecks organization IDs, bounds query/limit, keeps organization evidence separate from prospect/call classes, returns UNKNOWN with no fabricated data, and surfaces a narrow deterministic base-price mismatch as CONFLICT without arbitration. Prompt-facing text is delimited as untrusted source data. Inspector at /app/orgs/[slug]/knowledge/sources is a read-only Server Component evidence preview. Audit package is IDs-only and is not persisted. retrieveActiveKnowledge now exposes source title/inputKind; member-visible DOCUMENT versions require CLEAN+COMPLETE processing.
-  Files changed: lib/orgs/runtime-evidence.ts; lib/orgs/runtime-source-adapters.ts; lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.ts; lib/orgs/knowledge-retrieval.ts; lib/orgs/knowledge-visibility.ts; lib/orgs/offering-confirmation.ts; app/app/orgs/[slug]/knowledge/sources/page.tsx; components/orgs/knowledge/knowledge-nav.tsx; docs/phase-4d-source-runtime-composition.md; README.md. Tests: lib/orgs/runtime-evidence.test.ts; lib/orgs/runtime-composition.test.ts; lib/orgs/knowledge-visibility.test.ts; tests/integration/runtime-composition.test.ts; e2e/knowledge.spec.ts. No migrations added or changed. No new npm dependencies. Tabular parser not imported. MR-4D-OOXML-001 left OPEN.
-  Tests added/updated: exhaustive registry/authority/bounds/prompt-boundary/JSON-bounding unit tests; ordering and narrow price-conflict unit tests; integration coverage for manual/document provenance, offering children, draft/future/expired/archived/failed exclusion, MEMBER/inactive/unverified/forged/cross-tenant denial, invalid input, deterministic audit IDs, CONFLICT without arbitration, prompt-injection treated as data, UNKNOWN future classes, missing prospect/call context; inspector E2E after confirmed knowledge. Existing CSV/XLSX, Phase 4A–4C, and document retrieval regressions preserved.
+  Attempt 2 of 3 completed at implementation SHA eff1730efc3f9364abe6e9e6ce347737ae3947e7 (claim daf02a30f7cb983e245bdd8acbf073b8ebdda320). Objective: close the three attempt-1 KNOW-004 defects so price-conflict detection is genuinely narrow, conflict-aware truncation cannot hide a pair, and prompt-facing source boundaries are not forgeable.
+  Requirements/acceptance: conflict evaluation uses the canonical offeringName from the price structured value with token/phrase boundaries, so a short name such as Pro does not match inside improve. Only the structured ISO code and reviewed compatible markers are relevant (CAD/C$/CA$, USD/US$, EUR/euro-sign, GBP/pound-sign); a bare dollar sign is never a marker because it cannot prove currency. Conflicts are detected on the bounded candidate pool before final truncation. selectConflictAwareEvidence keeps both cited items whenever CONFLICT is emitted, never exceeds limit, and does not emit CONFLICT when limit is below 2. promptSafeText JSON-encodes safeText on a single line between reserved header/footer markers; inspector safeText still preserves original bounded customer content. Phase document updated to match. Registry, adapters, authorization, UNKNOWN, audit privacy, and inspector behavior preserved. Tabular parser not imported. MR-4D-OOXML-001 left OPEN.
+  Files changed: lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.ts; lib/orgs/runtime-evidence.ts; lib/orgs/runtime-source-adapters.ts; docs/phase-4d-source-runtime-composition.md. Tests: lib/orgs/runtime-composition.test.ts; lib/orgs/runtime-evidence.test.ts; tests/integration/runtime-composition.test.ts. No migrations added or changed. No new npm dependencies.
+  Tests added/updated: short offering name inside an unrelated word does not conflict; CAD/EUR/GBP prices ignore unrelated symbols and foreign codes including a bare dollar sign; explicit normalized names plus CAD/C$/euro-sign still detect a mismatch; enough higher-priority structured children filling the limit cannot hide a genuine conflict; conflict-safe selection is deterministic, bounded, pair-complete, and suppresses CONFLICT at limit 1; forged end-marker plus header cannot duplicate prompt boundaries while UI safeText is unchanged. Existing registry/order/match, authorization, provenance, UNKNOWN, audit, CSV/XLSX, and Phase 4A-4C regressions preserved. The five new negative cases failed on attempt-1 parser/selection/boundary behavior and passed after the fix.
   Commands and exact results on this implementation head:
   - npm ci: added 553 packages, audited 554, 0 vulnerabilities
   - npm run format:check: All matched files use Prettier code style
@@ -42,21 +42,21 @@ cursor_report: |
   - npm run typecheck: next typegen + tsc --noEmit succeeded
   - npm run prisma:validate: schema valid
   - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - focused runtime/visibility unit tests: 3 files, 11 passed
-  - npm test: 28 files, 241 passed
-  - focused tests/integration/runtime-composition.test.ts: 1 file, 10 passed
-  - npm run test:integration: 41 files, 487 passed
+  - focused runtime/visibility unit tests: 3 files, 17 passed (5 new negatives failed before the fix)
+  - npm test: 28 files, 247 passed
+  - focused tests/integration/runtime-composition.test.ts: 1 file, 11 passed
+  - npm run test:integration: 41 files, 488 passed
   - npm run build: Next.js 16.3.0 compiled successfully; /app/orgs/[slug]/knowledge/sources present
-  - CI=true npm run test:e2e: 16 passed (29.7s)
+  - CI=true npm run test:e2e: 16 passed (29.5s)
   - npm audit --omit=dev: found 0 vulnerabilities
   - git diff --check: clean
-  - exact-head GitHub Actions run 31889420552 on 2d8bd1983c23b8b461d8a616cc8545a3e81fc373: success (https://github.com/DannyNguyenCode/outreach/actions/runs/31889420552)
-  Authorization/tenant isolation: composition independently requires active membership and org.knowledge.read; adapters reuse existing retrieval services. Inactive, unverified, forged, and cross-tenant actors are denied with payload-free reasons. MEMBERs can compose current confirmed same-tenant evidence.
-  Security/privacy: no credentials, tokens, storage paths, checksums, or customer bodies in audit packages. Inspector reads are not persisted. Instruction-like source text remains labelled data. Formulas/links/tabular parsers are unused. No writer/promotion path from caller/CRM/note data into reusable knowledge.
-  Failure/recovery: invalid source class/query/limit and missing prospect/call context return invalid_input; auth failures stay payload-free; empty support is UNKNOWN; conflicts remain visible. No jobs or storage objects are created.
-  Manual configuration still required: none for this slice.
-  Assumptions: rPh/tabular/XLSX preview remain out of scope; future source classes stay null until their domains exist; inspector audit persistence waits for an approved call/audit contract.
-  Remaining risks: conflict detection is exact/narrow, not semantic; worksheet/CSV import mapping still later; KNOW-005 retrieval ranking is not implemented.
+  - exact-head GitHub Actions run 31892074018 on eff1730efc3f9364abe6e9e6ce347737ae3947e7: success (https://github.com/DannyNguyenCode/outreach/actions/runs/31892074018)
+  Authorization/tenant isolation: composition still independently requires active membership and org.knowledge.read; adapters reuse existing retrieval services. Inactive, unverified, forged, and cross-tenant actors remain denied with payload-free reasons. No auth or tenant-scope changes in this attempt.
+  Security/privacy: prompt-facing source text can no longer forge reserved boundaries. Inspector safeText still shows bounded customer content. Audit packages remain IDs-only. No credentials, storage paths, checksums, or customer bodies logged. Formulas/links/tabular parsers unused. No writer/promotion path from caller/CRM/note data.
+  Failure/recovery: false-name or unproven-currency mismatches no longer emit CONFLICT. Real mismatches remain visible after truncation when the pair fits. A limit too small to carry a pair returns the ordinary truncated slice without CONFLICT. Forged source markers stay labelled data. No jobs or storage objects are created.
+  Manual configuration still required: none for this defect.
+  Assumptions: phonetic rPh/tabular/XLSX preview remain out of scope; reviewed compatible markers are the ISO code plus the listed unambiguous national symbols; a bare dollar sign is always ambiguous; limit below 2 cannot emit a pair-complete CONFLICT without exceeding the advertised bound.
+  Remaining risks: conflict detection is still exact/narrow, not semantic; worksheet/CSV import mapping still later; KNOW-005 retrieval ranking is not implemented.
   Deferred work: CSV/XLSX mapping/persistence/activation, prospects, CRM, calls, transcription, AI generation, embeddings, information-gap persistence, and Phase 5. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
 review_findings: |
   BLOCKING 1 — The supposedly exact/narrow price-conflict detector can create false conflicts. lib/orgs/runtime-composition-logic.ts derives the offering name by splitting a display title and uses substring includes(), so a short offering such as "Pro" matches unrelated words such as "improve". Its money regex treats $, €, and £ as relevant markers for every currency code, so a CAD price can conflict with an explicitly euro- or pound-denominated passage. This violates the documented requirements that the passage explicitly name the offering and use the relevant currency marker.
@@ -68,7 +68,7 @@ required_tests: |
   Add regressions that fail on attempt 1 and pass afterward: (1) a short offering name embedded inside an unrelated word does not count as an explicit name; (2) CAD/GBP/EUR prices do not treat unrelated currency symbols or explicit foreign currency markers as relevant; (3) normalized explicit offering names and compatible currency markers still detect a mismatch; (4) enough higher-priority structured child evidence to fill the result limit cannot hide a genuine cross-class conflict; (5) conflict-safe selection stays deterministic, never exceeds the advertised limit, and retains both cited evidence items whenever CONFLICT is emitted; (6) a source containing the exact end marker and a forged source header cannot escape or duplicate the rendered boundary, while UI safeText preserves bounded customer content.
   Preserve registry exhaustion, authorization/cross-tenant denial, inactive/draft/future/expired/archived/unsafe exclusion, UNKNOWN, audit privacy, accessibility, and all Phase 4A–4D regressions.
   Run focused runtime unit/integration/E2E tests; npm ci; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "Cursor must claim attempt 2 on this same branch, implement only the three corrective findings and regressions below, then return READY_FOR_REVIEW with exact implementation and CI evidence."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -151,24 +151,24 @@ task_id: phase-04d-source-runtime-composition-001
 phase: "Phase 4D — Source classification and runtime composition"
 active_branch: feature/phase-04d-source-runtime-composition-v2
 base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
-cursor_implementation_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
+cursor_implementation_sha: eff1730efc3f9364abe6e9e6ce347737ae3947e7
 last_reviewed_sha: e60d5e99c58e7fc21700b4f2c50a9dbff2966e88
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 12
 previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
 cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 2d8bd1983c23b8b461d8a616cc8545a3e81fc373
+last_cursor_activity_sha: eff1730efc3f9364abe6e9e6ce347737ae3947e7
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T15:06:40Z"
-cursor_completed_at: "2026-08-15T14:20:38Z"
+cursor_completed_at: "2026-08-15T15:17:40Z"
 cursor_report: |
-  Attempt 1 of 3 completed at implementation SHA 2d8bd1983c23b8b461d8a616cc8545a3e81fc373 (claim c4ba8ed2aa90da60e7dd7a640cea066ed2254464). Objective: implement KNOW-004 source classification and runtime composition over existing confirmed Phase 4A–4C domains without consuming CSV/XLSX previews.
-  Requirements/acceptance: exhaustive RUNTIME_SOURCE_REGISTRY and RUNTIME_SOURCE_ADAPTERS (live adapters only for CUSTOMER_CONFIRMED_KNOWLEDGE and STRUCTURED_OFFERING; future classes explicit null). composeRuntimeContext enforces org.knowledge.read, rechecks organization IDs, bounds query/limit, keeps organization evidence separate from prospect/call classes, returns UNKNOWN with no fabricated data, and surfaces a narrow deterministic base-price mismatch as CONFLICT without arbitration. Prompt-facing text is delimited as untrusted source data. Inspector at /app/orgs/[slug]/knowledge/sources is a read-only Server Component evidence preview. Audit package is IDs-only and is not persisted. retrieveActiveKnowledge now exposes source title/inputKind; member-visible DOCUMENT versions require CLEAN+COMPLETE processing.
-  Files changed: lib/orgs/runtime-evidence.ts; lib/orgs/runtime-source-adapters.ts; lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.ts; lib/orgs/knowledge-retrieval.ts; lib/orgs/knowledge-visibility.ts; lib/orgs/offering-confirmation.ts; app/app/orgs/[slug]/knowledge/sources/page.tsx; components/orgs/knowledge/knowledge-nav.tsx; docs/phase-4d-source-runtime-composition.md; README.md. Tests: lib/orgs/runtime-evidence.test.ts; lib/orgs/runtime-composition.test.ts; lib/orgs/knowledge-visibility.test.ts; tests/integration/runtime-composition.test.ts; e2e/knowledge.spec.ts. No migrations added or changed. No new npm dependencies. Tabular parser not imported. MR-4D-OOXML-001 left OPEN.
-  Tests added/updated: exhaustive registry/authority/bounds/prompt-boundary/JSON-bounding unit tests; ordering and narrow price-conflict unit tests; integration coverage for manual/document provenance, offering children, draft/future/expired/archived/failed exclusion, MEMBER/inactive/unverified/forged/cross-tenant denial, invalid input, deterministic audit IDs, CONFLICT without arbitration, prompt-injection treated as data, UNKNOWN future classes, missing prospect/call context; inspector E2E after confirmed knowledge. Existing CSV/XLSX, Phase 4A–4C, and document retrieval regressions preserved.
+  Attempt 2 of 3 completed at implementation SHA eff1730efc3f9364abe6e9e6ce347737ae3947e7 (claim daf02a30f7cb983e245bdd8acbf073b8ebdda320). Objective: close the three attempt-1 KNOW-004 defects so price-conflict detection is genuinely narrow, conflict-aware truncation cannot hide a pair, and prompt-facing source boundaries are not forgeable.
+  Requirements/acceptance: conflict evaluation uses the canonical offeringName from the price structured value with token/phrase boundaries, so a short name such as Pro does not match inside improve. Only the structured ISO code and reviewed compatible markers are relevant (CAD/C$/CA$, USD/US$, EUR/euro-sign, GBP/pound-sign); a bare dollar sign is never a marker because it cannot prove currency. Conflicts are detected on the bounded candidate pool before final truncation. selectConflictAwareEvidence keeps both cited items whenever CONFLICT is emitted, never exceeds limit, and does not emit CONFLICT when limit is below 2. promptSafeText JSON-encodes safeText on a single line between reserved header/footer markers; inspector safeText still preserves original bounded customer content. Phase document updated to match. Registry, adapters, authorization, UNKNOWN, audit privacy, and inspector behavior preserved. Tabular parser not imported. MR-4D-OOXML-001 left OPEN.
+  Files changed: lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.ts; lib/orgs/runtime-evidence.ts; lib/orgs/runtime-source-adapters.ts; docs/phase-4d-source-runtime-composition.md. Tests: lib/orgs/runtime-composition.test.ts; lib/orgs/runtime-evidence.test.ts; tests/integration/runtime-composition.test.ts. No migrations added or changed. No new npm dependencies.
+  Tests added/updated: short offering name inside an unrelated word does not conflict; CAD/EUR/GBP prices ignore unrelated symbols and foreign codes including a bare dollar sign; explicit normalized names plus CAD/C$/euro-sign still detect a mismatch; enough higher-priority structured children filling the limit cannot hide a genuine conflict; conflict-safe selection is deterministic, bounded, pair-complete, and suppresses CONFLICT at limit 1; forged end-marker plus header cannot duplicate prompt boundaries while UI safeText is unchanged. Existing registry/order/match, authorization, provenance, UNKNOWN, audit, CSV/XLSX, and Phase 4A-4C regressions preserved. The five new negative cases failed on attempt-1 parser/selection/boundary behavior and passed after the fix.
   Commands and exact results on this implementation head:
   - npm ci: added 553 packages, audited 554, 0 vulnerabilities
   - npm run format:check: All matched files use Prettier code style
@@ -176,21 +176,21 @@ cursor_report: |
   - npm run typecheck: next typegen + tsc --noEmit succeeded
   - npm run prisma:validate: schema valid
   - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - focused runtime/visibility unit tests: 3 files, 11 passed
-  - npm test: 28 files, 241 passed
-  - focused tests/integration/runtime-composition.test.ts: 1 file, 10 passed
-  - npm run test:integration: 41 files, 487 passed
+  - focused runtime/visibility unit tests: 3 files, 17 passed (5 new negatives failed before the fix)
+  - npm test: 28 files, 247 passed
+  - focused tests/integration/runtime-composition.test.ts: 1 file, 11 passed
+  - npm run test:integration: 41 files, 488 passed
   - npm run build: Next.js 16.3.0 compiled successfully; /app/orgs/[slug]/knowledge/sources present
-  - CI=true npm run test:e2e: 16 passed (29.7s)
+  - CI=true npm run test:e2e: 16 passed (29.5s)
   - npm audit --omit=dev: found 0 vulnerabilities
   - git diff --check: clean
-  - exact-head GitHub Actions run 31889420552 on 2d8bd1983c23b8b461d8a616cc8545a3e81fc373: success (https://github.com/DannyNguyenCode/outreach/actions/runs/31889420552)
-  Authorization/tenant isolation: composition independently requires active membership and org.knowledge.read; adapters reuse existing retrieval services. Inactive, unverified, forged, and cross-tenant actors are denied with payload-free reasons. MEMBERs can compose current confirmed same-tenant evidence.
-  Security/privacy: no credentials, tokens, storage paths, checksums, or customer bodies in audit packages. Inspector reads are not persisted. Instruction-like source text remains labelled data. Formulas/links/tabular parsers are unused. No writer/promotion path from caller/CRM/note data into reusable knowledge.
-  Failure/recovery: invalid source class/query/limit and missing prospect/call context return invalid_input; auth failures stay payload-free; empty support is UNKNOWN; conflicts remain visible. No jobs or storage objects are created.
-  Manual configuration still required: none for this slice.
-  Assumptions: rPh/tabular/XLSX preview remain out of scope; future source classes stay null until their domains exist; inspector audit persistence waits for an approved call/audit contract.
-  Remaining risks: conflict detection is exact/narrow, not semantic; worksheet/CSV import mapping still later; KNOW-005 retrieval ranking is not implemented.
+  - exact-head GitHub Actions run 31892074018 on eff1730efc3f9364abe6e9e6ce347737ae3947e7: success (https://github.com/DannyNguyenCode/outreach/actions/runs/31892074018)
+  Authorization/tenant isolation: composition still independently requires active membership and org.knowledge.read; adapters reuse existing retrieval services. Inactive, unverified, forged, and cross-tenant actors remain denied with payload-free reasons. No auth or tenant-scope changes in this attempt.
+  Security/privacy: prompt-facing source text can no longer forge reserved boundaries. Inspector safeText still shows bounded customer content. Audit packages remain IDs-only. No credentials, storage paths, checksums, or customer bodies logged. Formulas/links/tabular parsers unused. No writer/promotion path from caller/CRM/note data.
+  Failure/recovery: false-name or unproven-currency mismatches no longer emit CONFLICT. Real mismatches remain visible after truncation when the pair fits. A limit too small to carry a pair returns the ordinary truncated slice without CONFLICT. Forged source markers stay labelled data. No jobs or storage objects are created.
+  Manual configuration still required: none for this defect.
+  Assumptions: phonetic rPh/tabular/XLSX preview remain out of scope; reviewed compatible markers are the ISO code plus the listed unambiguous national symbols; a bare dollar sign is always ambiguous; limit below 2 cannot emit a pair-complete CONFLICT without exceeding the advertised bound.
+  Remaining risks: conflict detection is still exact/narrow, not semantic; worksheet/CSV import mapping still later; KNOW-005 retrieval ranking is not implemented.
   Deferred work: CSV/XLSX mapping/persistence/activation, prospects, CRM, calls, transcription, AI generation, embeddings, information-gap persistence, and Phase 5. No PR opened; ChatGPT owns the develop merge gate. Manual review flag MR-4D-OOXML-001 left OPEN.
 review_findings: |
   BLOCKING 1 — The supposedly exact/narrow price-conflict detector can create false conflicts. lib/orgs/runtime-composition-logic.ts derives the offering name by splitting a display title and uses substring includes(), so a short offering such as "Pro" matches unrelated words such as "improve". Its money regex treats $, €, and £ as relevant markers for every currency code, so a CAD price can conflict with an explicitly euro- or pound-denominated passage. This violates the documented requirements that the passage explicitly name the offering and use the relevant currency marker.
@@ -202,7 +202,7 @@ required_tests: |
   Add regressions that fail on attempt 1 and pass afterward: (1) a short offering name embedded inside an unrelated word does not count as an explicit name; (2) CAD/GBP/EUR prices do not treat unrelated currency symbols or explicit foreign currency markers as relevant; (3) normalized explicit offering names and compatible currency markers still detect a mismatch; (4) enough higher-priority structured child evidence to fill the result limit cannot hide a genuine cross-class conflict; (5) conflict-safe selection stays deterministic, never exceeds the advertised limit, and retains both cited evidence items whenever CONFLICT is emitted; (6) a source containing the exact end marker and a forged source header cannot escape or duplicate the rendered boundary, while UI safeText preserves bounded customer content.
   Preserve registry exhaustion, authorization/cross-tenant denial, inactive/draft/future/expired/archived/unsafe exclusion, UNKNOWN, audit privacy, accessibility, and all Phase 4A–4D regressions.
   Run focused runtime unit/integration/E2E tests; npm ci; npm run format:check; npm run lint; npm run typecheck; npm run prisma:validate; fresh PostgreSQL npm run prisma:migrate:deploy; npm test; npm run test:integration; npm run build; CI=true npm run test:e2e; npm audit --omit=dev; git diff --check; and obtain successful exact-head GitHub Actions.
-next_action: "Cursor must claim attempt 2 on this same branch, implement only the three corrective findings and regressions below, then return READY_FOR_REVIEW with exact implementation and CI evidence."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
