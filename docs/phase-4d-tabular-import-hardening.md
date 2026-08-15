@@ -151,3 +151,4 @@ Comments and processing instructions are ignored as markup. CDATA is character d
 - Phase 4B remains the only PDF/DOCX/TXT upload and extraction path. CSV/XLSX still fail document validation.
 - Phase 4C remains the structured offering catalog. This task does not create offerings.
 - Later Phase 4D tasks must consume this normalized preview rather than re-parsing untrusted bytes with a second library.
+- CSV column mapping (task 2) is a separate dry-run preview foundation. See `docs/phase-4d-csv-mapping-foundation.md`. It does not persist imports and does not map XLSX.
