@@ -46,6 +46,7 @@ model User {
   offeringsArchived          Offering[]                       @relation("OfferingArchiver")
   offeringVersionsCreated    OfferingVersion[]                @relation("OfferingVersionCreator")
   offeringVersionsConfirmed  OfferingVersion[]                @relation("OfferingVersionConfirmer")
+  csvImportsCreated          CsvImport[]                      @relation("CsvImportCreator")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -163,6 +164,7 @@ enum OrganizationAuditAction {
   OFFERING_SUPERSEDED
   OFFERING_ARCHIVED
   OFFERING_RESTORED
+  CSV_IMPORT_STAGED
 }
 
 enum BusinessType {
@@ -314,6 +316,8 @@ model Organization {
   knowledgeDocumentJobs   KnowledgeDocumentJob[]
   knowledgeDocumentIssues KnowledgeDocumentIssue[]
   offerings               Offering[]
+  csvImports              CsvImport[]
+  csvImportRows           CsvImportRow[]
 
   @@index([createdAt])
 }
@@ -1277,4 +1281,75 @@ model OfferingCustomValue {
   @@unique([versionId, definitionKey])
   @@index([organizationId, versionId])
   @@index([organizationId, definitionId])
+}
+
+/// Phase 4D CSV import staging status. Incomplete/capped/timeout results
+/// are never persisted. Confirmation and activation are later tasks.
+enum CsvImportStatus {
+  READY_TO_CONFIRM
+  NEEDS_ATTENTION
+}
+
+enum CsvImportTargetFamily {
+  KNOWLEDGE
+  OFFERING
+}
+
+/// Organization-owned immutable snapshot of one complete CSV mapped validation.
+/// Identity is server-derived from org, family, source checksum, canonical
+/// mapping identity, and validation-contract version. Raw bytes are not stored.
+/// PostgreSQL also enforces count/status consistency and rejects updates.
+model CsvImport {
+  id                         String                @id @default(cuid())
+  organizationId             String
+  organization               Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// SHA-256 hex of the server-owned identity material. Unique per organization.
+  importIdentity             String
+  targetFamily               CsvImportTargetFamily
+  status                     CsvImportStatus
+  filename                   String
+  mimeType                   String
+  byteLength                 Int
+  sourceChecksum             String
+  /// Canonical mapping JSON text. Not JSONB — insertion order is part of the contract.
+  mappingJson                String                @db.Text
+  mappingIdentity            String
+  validationContractVersion  String
+  totalRowCount              Int
+  nonblankRowCount           Int
+  validRowCount              Int
+  invalidRowCount            Int
+  skippedBlankRowCount       Int
+  processedRowCount          Int
+  issueCount                 Int
+  createdByUserId            String
+  createdBy                  User                  @relation("CsvImportCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt                  DateTime              @default(now())
+  rows                       CsvImportRow[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, importIdentity])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+}
+
+/// Immutable ordered row snapshot for one staged CSV import.
+/// valuesJson/issuesJson are canonical JSON text so PostgreSQL JSONB cannot
+/// reorder object keys. Composite FK prevents cross-organization attachment.
+model CsvImportRow {
+  id             String      @id @default(cuid())
+  organizationId String
+  importId       String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  import         CsvImport    @relation(fields: [importId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  displayOrder   Int
+  sourceRowNumber Int
+  valuesJson     String      @db.Text
+  issuesJson     String      @db.Text
+  createdAt      DateTime    @default(now())
+
+  @@unique([importId, displayOrder])
+  @@unique([importId, sourceRowNumber])
+  @@unique([id, organizationId, importId])
+  @@index([organizationId, importId, displayOrder])
 }
