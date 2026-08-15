@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_implementation_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
 last_reviewed_sha: null
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
@@ -72,7 +72,7 @@ cursor_report: |
 review_findings: null
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "ChatGPT owns the branch while reviewing implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b and the full remote head."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
