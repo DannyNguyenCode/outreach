@@ -13,101 +13,113 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # Outreach Automation Handoff
 
 ```yaml
-task_id: phase-04b-corrective-sync-001
-phase: "Phase 4B corrective integration — attempt 3 requested"
-active_branch: feature/phase-04b-private-document-processing
-base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
-cursor_implementation_sha: 42429a482b65c72ebf6106d44f2968bfb4a9ad18
-last_reviewed_sha: a2ab9520d5499cb96afdf5f2e6a809c88cdb2fbf
-status: CHATGPT_REVIEWING_FOR_DEVELOP
-previous_task_status: null
-previous_pr_number: null
-previous_develop_merge_sha: null
-cursor_attempt_count: 3
+task_id: phase-04d-tabular-validation-001
+phase: "Phase 4D — tabular import validation foundation"
+active_branch: feature/phase-04d-tabular-validation-foundation
+base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
+cursor_implementation_sha: null
+last_reviewed_sha: null
+status: READY_FOR_CURSOR
+previous_task_status: MERGED
+previous_pr_number: 10
+previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
+cursor_attempt_count: 0
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 42429a482b65c72ebf6106d44f2968bfb4a9ad18
+last_cursor_activity_sha: null
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: "2026-08-15T05:06:00Z"
-cursor_completed_at: "2026-08-15T05:14:00Z"
+cursor_claimed_at: null
+cursor_completed_at: null
 cursor_report: |
-  Attempt 3 of 3 completed at implementation SHA 42429a482b65c72ebf6106d44f2968bfb4a9ad18 (claim 94881a9e9d12164553e6d9aa35730d990644d569). Objective: reject stale failOrRetryDocumentJob results after a newer archive or claim identity has won.
-  Requirements/acceptance: after organization → source → version → document → job locks, failOrRetryDocumentJob now revalidates unarchived DOCUMENT source, PROCESSING version, live RUNNING job lease/owner/attempt identity, and worker-owned SCANNING/EXTRACTING document state. Stale results return outcome "stale" with no job/document/version overwrite, no runnable RETRY/QUEUED requeue, and no KNOWLEDGE_DOCUMENT_PROCESSING_FAILED audit. Leftover claims remain for bounded lease/recovery.
-  Files changed: lib/orgs/knowledge-documents.ts; tests/integration/knowledge.documents.concurrency.test.ts; docs/phase-4b-private-document-processing.md (stale no-op sentence). No migrations added or changed.
-  Tests added/updated: archive-first stale failure/retry race; worker-first/archive-second precise RETRY+ARCHIVED assertion; stale lease/attempt/owner replacement. Existing sweeper, claim/archive, tenant isolation, and retry tests preserved.
-  Commands and exact results on this implementation head:
-  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
-  - npm run format:check: All matched files use Prettier code style
-  - npm run lint: exit 0
-  - npm run typecheck: next typegen + tsc --noEmit succeeded
-  - npm run prisma:validate: schema valid
-  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - npm test: 23 files, 132 passed
-  - npm run test:integration: 40 files, 477 passed
-  - focused tests/integration/knowledge.documents.concurrency.test.ts: 8 passed (3 new/rewritten cases failed before the fix: archive-first returned retry; replaced claim threw ConflictError; worker-first error-code assertion then passed after using processing_remote)
-  - npm run build: Next.js 16.3.0 compiled successfully
-  - CI=true npm run test:e2e: 16 passed (29.5s)
-  - npm audit --omit=dev: found 0 vulnerabilities
-  - git diff --check: clean
-  Authorization/tenant isolation: no permission or tenant-scope changes. Existing tenant-scoped exhausted-lease test still passed. Archive and failure/retry remain organization-lock serialized.
-  Security/privacy: no credentials, tokens, or customer data exposed. Stale workers can no longer requeue archived document work or write a misleading terminal failure audit.
-  Failure/recovery: stale no-op leaves RUNNING/SCANNING claim in place; later lease expiry/recovery can release or terminalize it. Worker HTTP route records outcome "stale" instead of 503.
-  Manual configuration still required: none for this defect.
-  Assumptions: MalwareScanUnavailableError remains retryable as processing_remote; archive still locks documents/jobs without changing their processing/job states.
-  Remaining risks: adjacent scan/publish/terminalize paths were audited and left unchanged because they already reject archived/non-PROCESSING graphs or are outside this defect. Attempt 3 is the final Cursor attempt.
-  Deferred work: none for this task. Phase 4D remains untouched.
+  Phase 4B was squash-merged through PR #10 into develop at d446ca52c1c8397d8b24bf7c2dc009b14800808d after exact-head push CI and PR CI passed. Post-merge develop CI run 31867499078 passed.
+  A fresh Phase 4C audit against the merged develop tree found no blocking compatibility, authorization, migration, pricing, lifecycle, retrieval, or tenant-isolation issue. The complete 477-test integration suite and 16 E2E tests passed with Phase 4B and 4C combined.
+  README project-status wording is stale and should be corrected in this Phase 4D task.
 review_findings: |
-  BLOCKING attempt-2 defect: failOrRetryDocumentJob acquires the documented organization → source → version → document → job locks, but after locking it revalidates only the job state/owner/IDs. It does not reject an archived source, a non-PROCESSING version, a document no longer in the worker-owned in-flight state, an expired/replaced lease, or a changed attempt count. It can therefore update the job to RETRY and the document to QUEUED after a newer archive/lifecycle transition has already won.
-  Evidence: lib/orgs/knowledge-documents.ts failOrRetryDocumentJob checks graph.job only, then updates the job and updates the document when leaseOwner matches OR the document is merely in any in-flight state. docs/phase-4b-private-document-processing.md explicitly requires retry/failure graph mutation to revalidate lease expiry, attempt count, document state, version state, and tenant identifiers, and forbids stale workers from overwriting archive/restore transitions.
-  Missing regression proof: tests/integration/knowledge.documents.concurrency.test.ts "serializes worker failure/retry and archive without deadlock" deliberately holds the failure transaction first, so the worker always wins and archive runs second. It accepts RETRY or FAILED and never exercises archive-first followed by stale failure/retry. Thus it cannot fail on the defect above.
-  Attempt-2 fixes for two-stage reservation, concurrent exhausted sweepers, upload authorization-before-parser, and CLEAN checksum-mismatch download denial are otherwise supported by code/test evidence. The temporary checksum-constraint test is serialized by fileParallelism:false and restores the exact migration constraint in finally.
+  No blocking Phase 4C audit findings.
+  Phase 4D begins with a bounded validation/preview foundation so later mapping and persistence work can consume one safe normalized tabular representation.
 required_tests: |
-  Add a deterministic archive-first (or equivalent newer lifecycle-first) failure/retry race using barriers/hooks. Prove the stale worker does not change the newer source/version/document lifecycle, does not requeue runnable work, and does not write a misleading terminal failure audit.
-  Add focused coverage for failOrRetryDocumentJob revalidation of job lease ownership/expiry and attempt identity plus source, version, and worker-owned document state after all graph locks are held.
-  Preserve and rerun the existing concurrent sweeper, claim/archive, tenant isolation, upload pre-parse authorization, checksum mismatch, successful processing, retry, compensation, archive/restore, and Phase 4C tests.
-  Run the full required format, lint, typecheck, Prisma validation/fresh migration deploy, unit, integration, build, E2E, audit, and diff checks.
-next_action: "ChatGPT is reviewing the exact attempt-3 branch head for the final develop merge gate. Cursor must not modify or push."
+  Unit fixtures for valid CSV and XLSX plus malformed, unsupported, mislabeled, oversized, excessive-row/column/cell, duplicate/blank-header, formula-like, hidden-sheet, and workbook ambiguity cases.
+  Deterministic normalization tests for BOM, CRLF, quoted fields/newlines, whitespace, stable sheet/header/row ordering, and bounded safe error output.
+  Security tests proving no formulas/macros/external links execute and no file content or sensitive row values enter logs/errors.
+  Full format, lint, typecheck, unit, integration, Prisma validation, build, E2E, audit, and diff checks.
+next_action: "Cursor should claim Phase 4D task 1 on this branch, increment cursor_attempt_count to 1 exactly once, implement only the safe tabular validation and normalized preview foundation plus stale README/docs updates, report READY_FOR_REVIEW, push, and stop."
 ```
 
-## Cursor corrective implementation prompt — final attempt
+## Cursor implementation prompt — Phase 4D task 1
 
 ### Objective
 
-Make the Phase 4B failure/retry graph mutation reject stale worker results after a newer archive or other lifecycle transition has won. Add deterministic regression coverage for the losing-worker ordering. This is attempt 3 of 3.
+Create the server-only, bounded validation and normalized-preview foundation for Phase 4D CSV/XLSX knowledge and offering imports. Authorized upload/UI, mapping persistence, database import records, activation, jobs, and final confirmation will be separate tasks. This task must make unsafe or ambiguous files fail closed before later import logic can consume them.
 
-Work only on `feature/phase-04b-private-document-processing`. Do not touch `main` or `develop`, open or merge a PR, rebase, force-push, reset history, add Phase 4D work, or perform unrelated refactoring.
+Work only on `feature/phase-04d-tabular-validation-foundation`, which was created from verified `develop` SHA `d446ca52c1c8397d8b24bf7c2dc009b14800808d`.
 
-### Exact defect and evidence
+Read `requirements.md` KNOW-001, KNOW-002, KNOW-003, KNOW-004, KNOW-005 and required journey 12; read the Phase 4D section and Phase 4 completion gate in `outreach-implementation-phases.md`; read `docs/phase-4a-business-knowledge-core.md`, `docs/phase-4b-private-document-processing.md`, and `docs/phase-4c-structured-offerings.md`. Create `docs/phase-4d-tabular-import-hardening.md` for the Phase 4D contract and task boundaries.
 
-- In `lib/orgs/knowledge-documents.ts`, `failOrRetryDocumentJob` correctly obtains `organization-knowledge:<organizationId>` and then source → version → document → job locks.
-- Its post-lock guard validates only the job state, lease owner, and graph IDs.
-- It does not validate that the source is still unarchived DOCUMENT knowledge, the version is still PROCESSING, the document is still in the precise worker-owned in-flight state, the lease is still valid for this worker/result, or the attempt identity is unchanged.
-- The subsequent document predicate is too broad: `graph.document.leaseOwner === workerId || isInFlightDocumentProcessingState(...)`. A stale worker can therefore write `RETRY`/ `QUEUED` (or terminal failure state/audit) after archive or another newer lifecycle mutation.
-- The new worker failure/archive test holds the failure transaction first and therefore covers only worker-first serialization. It must also cover archive/newer-lifecycle-first serialization.
+### Deliverable
 
-### Required fix
+Implement a reusable server-only tabular validation module that accepts caller-supplied bytes plus original filename and declared MIME type, then returns a deterministic normalized preview model suitable for a later customer-reviewed column-mapping flow.
 
-- After all graph locks are held, revalidate the complete mutation precondition required by the documented protocol:
-  - tenant and source/version/document/job ancestry all match;
-  - source exists, is unarchived, and has DOCUMENT input kind;
-  - version remains PROCESSING;
-  - job remains RUNNING for this worker and the same claimed attempt, with the expected live lease semantics;
-  - document remains in the expected worker-owned in-flight processing state and has not been superseded by archive, publication, retry, restore, or another worker/lifecycle transition.
-- If any precondition is stale, do not overwrite source/version/document state, do not requeue work, and do not emit a misleading processing-failure audit. Return or surface a safe stale/no-op outcome consistent with the caller contract, and leave later durable cleanup to the existing bounded lease/recovery protocol if needed.
-- Keep conditional update predicates aligned with the locked/revalidated values. Do not weaken tenant predicates or lock ordering.
-- Audit the immediately adjacent scan/publish/terminalization paths only for the same stale-write pattern. Change them only if the same concrete defect exists; avoid scope growth.
-- Update the Phase 4B worker documentation only if needed to describe the exact stale-result behavior.
+The normalized model should include only bounded metadata and cell values needed by later tasks, such as:
 
-### Required regression tests
+- validated file kind and byte size;
+- workbook/sheet identity and visibility metadata;
+- stable selected-sheet or explicit ambiguity result;
+- normalized headers with source column positions;
+- bounded preview rows with stable source row numbers;
+- total row/column counts when safely known;
+- warnings and row/cell validation issues using safe codes and locations;
+- a deterministic file checksum suitable for idempotency in a later persistence task.
 
-Use deterministic gates/hooks, not sleeps:
+Keep the public contract explicit and provider-independent. Do not create fake connector abstractions or a general job framework.
 
-1. Archive wins and commits before a previously claimed worker enters failure/retry mutation. Assert the source/version remain archived, the document is not changed back to runnable QUEUED work, the job does not become a runnable retry, and no misleading failure audit is added.
-2. Preserve worker-first/archive-second coverage and assert its one valid serialized result precisely.
-3. Exercise stale lease/attempt or ownership replacement after claim and before failure mutation; prove the old worker cannot overwrite the newer job/document state.
-4. Keep all existing concurrent sweepers, claim/archive, tenant isolation, upload authorization-before-parser, checksum mismatch, processing, bounded retry, compensation, archive/restore, and Phase 4C compatibility checks passing.
+### Required validation and security behavior
 
-Every functional fix must have a regression test that fails before the fix and passes afterward.
+- Accept only `.csv` and non-macro `.xlsx`; reject legacy `.xls`, `.xlsm`, archives, encrypted/password-protected workbooks, executables, polyglots, and unsupported content.
+- Validate extension, declared MIME, and server-detected signature/content consistently. Browser MIME and filename are untrusted.
+- Apply explicit byte, workbook, worksheet, row, column, cell-length, aggregate-character, and processing-time limits before or during expansion. XLSX ZIP handling must be protected against excessive entries, expansion, compression ratios, nesting, and path traversal.
+- Parse CSV deterministically, including UTF-8 BOM, CRLF/LF, quoted delimiters, quoted newlines, escaped quotes, and trailing blank rows. Reject invalid encoding, NUL/binary-heavy content, inconsistent structures where unsafe, and unbounded records.
+- Treat formulas, cached formula results, hyperlinks, external workbook links, macros, hidden/very-hidden sheets, merged-cell ambiguity, duplicate/blank headers, and multiple candidate sheets explicitly. Never evaluate formulas or follow links. Formula-like values must remain inert and be identified for later mapping/export safety.
+- Do not silently choose an ambiguous worksheet or header row. Return a safe validation/needs-attention result that a later UI can resolve.
+- Preserve source row/column locations without exposing file bytes or full sensitive rows through exceptions, logs, audit metadata, or client-facing messages.
+- Keep parsing server-only and independent from production storage or credentials.
+- Reuse existing hashing, safe-error, document-validation, and size-boundary conventions where appropriate, but do not weaken Phase 4B validation or couple tabular formats to document extraction.
+
+### Dependency requirements
+
+Audit the current package set before adding dependencies. If a CSV/XLSX parser is required, choose the smallest maintained Node 22-compatible package(s) with acceptable license and current security posture; document why, pin through `package-lock.json`, and verify the production dependency audit. Do not add both overlapping libraries without a concrete need. Remove no unrelated dependency in this task.
+
+### Tests
+
+Add deterministic unit tests and small generated/checked-in fixtures that fail before implementation and pass afterward.
+
+At minimum cover:
+
+1. valid UTF-8 CSV and valid non-macro XLSX producing equivalent normalized headers and preview rows;
+2. BOM, CRLF, quoted commas/newlines, escaped quotes, blank trailing rows, and stable row numbers;
+3. extension/MIME/signature mismatch and unsupported `.xls`/`.xlsm`;
+4. malformed CSV/XLSX, invalid encoding, NUL/binary payload, encrypted workbook, archive/polyglot input, traversal names, and decompression/entry/count limits;
+5. byte, sheet, row, column, cell, aggregate text, and processing limits at the boundary and one past it;
+6. blank/duplicate headers, hidden sheets, multiple candidate sheets, merged cells, formulas, cached formula values, hyperlinks, and external links;
+7. deterministic checksum and output ordering across repeated parses;
+8. safe errors containing codes and source locations but not full row content, file bytes, formulas, URLs, or secrets;
+9. regression proof that existing PDF/DOCX/TXT document validation and Phase 4C offering behavior are unchanged.
+
+Avoid timing-only assertions and fixtures large enough to burden the repository; generate bounded adversarial archives/workbooks in tests where practical.
+
+### Documentation and stale wording
+
+- Add `docs/phase-4d-tabular-import-hardening.md` describing accepted formats, limits, trust boundaries, normalized preview contract, formula/link behavior, safe errors, dependency choice, deferred tasks, and recovery expectations.
+- Update the stale README project-status line and current-next-step section to state that Phases 4B and 4C are merged and Phase 4D tabular import hardening has begun on this branch.
+- Add the Phase 4C and new Phase 4D documents to the README developer/project document lists.
+- Do not claim the complete Phase 4D import journey or overall Phase 4 is finished.
+
+### Explicit exclusions
+
+- No database schema or Prisma migration.
+- No storage bucket changes, production credentials, production migrations, or external services.
+- No upload route, browser form, server action, mapping UI, saved mapping template, import record, background job, progress UI, retry workflow, persistence, offering creation, activation, confirmation, retrieval integration, or live commerce/CRM/inventory connector.
+- No Phase 5 work and no unrelated refactor.
+- Do not modify `main` or `develop`, open or merge a PR, rebase, force-push, reset history, or replace shared branches.
 
 ### Verification
 
@@ -118,31 +130,43 @@ Run and report exact results for:
 - `npm run lint`
 - `npm run typecheck`
 - `npm run prisma:validate`
-- fresh PostgreSQL `npm run prisma:migrate:deploy` through Phase 4C
+- a fresh PostgreSQL `npm run prisma:migrate:deploy` through the current Phase 4C migration
+- focused tabular validation/security tests
 - `npm test`
 - `npm run test:integration`
-- focused stale-worker/archive/lease tests
 - `npm run build`
 - `CI=true npm run test:e2e`
 - `npm audit --omit=dev`
 - `git diff --check`
 
-Skipped, pending, unavailable, flaky, or failing checks are not passes.
+A skipped, pending, unavailable, flaky, or failing required check is not a pass.
 
-### Acceptance and completion handoff
+### Acceptance criteria
 
-- A stale failure/retry result cannot overwrite a newer archive or lifecycle transition.
-- The implementation now matches every post-lock revalidation guarantee documented for retry/failure mutation.
-- Both worker-first and newer-lifecycle-first race orderings are deterministic, deadlock-free, tenant-scoped, and precisely asserted.
-- No unrelated behavior, migration, or Phase 4D work changes.
-- Full verification succeeds on the exact final implementation head.
+- Valid CSV/XLSX inputs produce the same stable, bounded normalized preview contract.
+- Unsupported, mismatched, ambiguous, malicious, or over-limit inputs fail closed with safe deterministic evidence.
+- No formula, macro, external link, archive path, or spreadsheet content is executed or fetched.
+- Parser resource use is bounded and sensitive file content is absent from logs and safe errors.
+- Existing Phase 4A–4C behavior and full verification remain green.
+- Documentation accurately states what this foundation implements and what later Phase 4D tasks must still add.
+- No excluded persistence, UI, activation, connector, job, or schema work is introduced.
 
-When claiming, increment `cursor_attempt_count` from 2 to 3 exactly once and set `CURSOR_WORKING`. Cursor must never claim a fourth attempt.
+### Completion handoff
 
-After implementation and verification, record the last non-report SHA in `cursor_implementation_sha`, update `cursor_report` with exact evidence, set `status: READY_FOR_REVIEW`, set the next action to ChatGPT complete-branch review, commit the report separately, push this same branch, and stop. If blocked, set `BLOCKED` with exact evidence and stop.
+When claiming this task, set `status: CURSOR_WORKING`, increment `cursor_attempt_count` from 0 to 1 exactly once, set `cursor_claimed_at`, and commit that state before implementation.
 
-## ChatGPT review result
+After implementation and verification:
 
-Attempt 2 is not approved for merge. The two-stage lock-order corrections and the two security regression cases are materially improved, but failure/retry still lacks the required post-lock lifecycle revalidation and its concurrency test does not cover the stale-worker losing order. This final corrective attempt is limited to that defect and proof.
+1. Commit application/tests/docs without the completion report.
+2. Record the last non-report implementation SHA in `cursor_implementation_sha`.
+3. Update `cursor_report` with files, dependencies, accepted formats/limits, validation behavior, tests, exact commands/results, migrations, security/privacy, assumptions, manual configuration, remaining risks, and deferred tasks.
+4. Set `status: READY_FOR_REVIEW`, reset `consecutive_unchanged_checks` to 0, update `last_cursor_activity_sha`, and set the next action to ChatGPT complete-branch review against current `develop`.
+5. Commit only the report/handoff as `chore: report Cursor task completion`, push this branch, and stop.
+
+If blocked, set `status: BLOCKED`, record exact safe evidence and `stop_reason`, push the handoff when safe, and stop.
+
+## ChatGPT Phase 4C audit result
+
+Phase 4C has no blocking follow-up after Phase 4B integration. PR #10 merged Phase 4B into `develop` at `d446ca52c1c8397d8b24bf7c2dc009b14800808d`; post-merge CI run 31867499078 passed the combined Phase 4B/4C suite. Phase 4D may proceed.
 
 <!-- END:outreach-automation -->
