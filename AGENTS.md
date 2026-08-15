@@ -19,11 +19,11 @@ active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
 cursor_implementation_sha: null
 last_reviewed_sha: null
-status: READY_FOR_CURSOR
+status: CURSOR_WORKING
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
-cursor_attempt_count: 0
+cursor_attempt_count: 1
 cursor_attempt_count_legacy: true
 blocker_set_revision: 0
 blocker_set_signature: []
@@ -33,6 +33,8 @@ consecutive_unchanged_checks: 0
 last_cursor_activity_sha: null
 stop_reason: null
 unchanged_check_times: []
+cursor_claimed_at: "2026-08-15T17:10:00Z"
+cursor_completed_at: null
 cursor_report: null
 review_findings: null
 required_tests: |
