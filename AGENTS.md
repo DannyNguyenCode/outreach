@@ -19,18 +19,18 @@ active_branch: feature/phase-04b-private-document-processing
 base_develop_sha: d06ec79f0d5ee7297e934aed2f692f13f472cfcf
 cursor_implementation_sha: 3f389873a05a7f214ddb57371651129697f16f66
 last_reviewed_sha: 8b63b5dfd68b3f335f449223b87996e5cab5aab9
-status: READY_FOR_CURSOR
+status: CURSOR_WORKING
 previous_task_status: null
 previous_pr_number: null
 previous_develop_merge_sha: null
-cursor_attempt_count: 1
+cursor_attempt_count: 2
 consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 503949db8ae8b0c34112a6a3c7b31b6d70e7595d
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: "2026-08-15T02:32:00Z"
-cursor_completed_at: "2026-08-15T02:36:30Z"
-cursor_report: "Attempt 1 merged develop and passed Cursor's reported local suite, but ChatGPT review found blocking lock-order and regression-test gaps."
+cursor_claimed_at: "2026-08-15T04:10:00Z"
+cursor_completed_at: null
+cursor_report: "Attempt 2 claimed. Implementing lock-order corrections and missing regression tests from ChatGPT review findings."
 review_findings: |
   Blocking: expired-lease terminalization locks and updates KnowledgeDocumentJob before dependent document/version rows and without the organization knowledge advisory lock, contrary to the documented writer protocol.
   Scope audit required: claimKnowledgeDocumentJob and failOrRetryDocumentJob also perform multi-row job/document/version transitions in job-first order. Reconcile every worker transition with the documented two-stage claim and organization/source/version/document/job lock protocol.
@@ -42,7 +42,7 @@ required_tests: |
   Route-level test proving unauthorized upload returns the safe denial without consuming/parsing the multipart body.
   Download regression test proving CLEAN but checksum-mismatched scan evidence cannot create a signed URL or download bytes.
   Full unit, integration, E2E, migration, build, formatting, lint, typecheck, audit, and diff checks.
-next_action: "Cursor must claim attempt 2, implement the lock-order correction and missing regression tests on this branch, run the full suite, and return READY_FOR_REVIEW."
+next_action: "Cursor attempt 2 is in progress. Implement lock-order corrections and missing regression tests, then return READY_FOR_REVIEW."
 ```
 
 ## Cursor corrective implementation prompt
