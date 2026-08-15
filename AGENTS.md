@@ -17,9 +17,9 @@ task_id: phase-04d-csv-mapping-foundation-001
 phase: "Phase 4D — CSV mapping foundation"
 active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
-cursor_implementation_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
+cursor_implementation_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 last_reviewed_sha: e46414f24810cacf8aec1f89b6a5abfdd14d2221
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
@@ -43,46 +43,46 @@ last_cursor_activity_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T19:06:18Z"
-cursor_completed_at: "2026-08-15T17:38:00Z"
+cursor_completed_at: "2026-08-15T19:13:39Z"
 cursor_claim_sha: e616b3db44e088fa3c7cda32e0c7843ef56ffa85
-cursor_lease_id: c8472057-ffa4-4e7e-b70d-db1b33d368da
-cursor_lease_expires_at: "2026-08-15T20:04:05Z"
-cursor_heartbeat_at: "2026-08-15T19:09:05Z"
+cursor_lease_id: null
+cursor_lease_expires_at: null
+cursor_heartbeat_at: "2026-08-15T19:13:39Z"
 cursor_checkpoint_sha: 50bb35a02ebd92edd6816e695a3d309c4ce6090e
 cursor_checkpoint_summary: "P4D-CSV-MAPPING-RUNTIME-001 parser is committed. parseCsvMappingInput accepts unknown, rejects malformed roots/columns/entries with static invalid_mapping, bounds columns at TABULAR_MAX_COLUMNS, and reuses the canonical mapping for semantic checks. Focused mapping+security tests: 2 files, 65 passed. Next: npm run format:check, lint, typecheck, prisma:validate, fresh migrate, npm test, test:integration, build, CI=true test:e2e, audit, git diff --check, exact-head GitHub Actions."
 cursor_resume_count: 0
 cursor_report: |
-  Attempt 1 completed at implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b (claim 5e9842267369dcba18fbf8ee220061e2b5b5deba). Objective: add a server-only CSV column-mapping and bounded dry-run mapped-preview foundation on top of the existing tabular validator without persisting, activating, or importing records.
-  Requirements/acceptance: mapCsvPreview accepts only kind=csv previews whose parser outcome is ready and that have no error-level or security-relevant parser issues. XLSX previews fail closed as unsupported_kind. Mapping identity is the parser's stable one-based sourceColumn. Every source column must be assigned to a knowledge or offering target or explicitly ignored. Duplicate source/target, unknown columns/targets, missing required targets, and cross-family targets are rejected. Knowledge required fields are title, section title, and passage body. Offering required fields are name, offering type, and pricing model. Preview rows keep sourceRowNumber, skip only completely blank rows, parse booleans/ISO dates/enums/decimals/ISO currencies/billing frequencies without locale guessing, distinguish missing vs invalid values, and emit payload-free row issues. Price amount/currency/frequency triples, quote-required vs QUOTE_REQUIRED, FIXED_ONE_TIME vs RECURRING frequency rules, and effectiveUntil-after-effectiveFrom are enforced. MULTI_OPTION and TIERED cannot form a complete single-row draft and receive incompatible_pricing_model. Exact-alias suggestions are returned separately only when unique and are never auto-applied. hasMoreRows is true when totalRowCount exceeds the bounded preview rows inspected. Inputs are not mutated. Mapped customer values appear only in explicit preview values. MR-4D-OOXML-001 remains OPEN; no XLSX mapping path was added.
-  Files changed: lib/orgs/tabular-mapping.ts; lib/orgs/tabular-mapping.test.ts; lib/orgs/tabular-mapping-security.test.ts; docs/phase-4d-csv-mapping-foundation.md; docs/phase-4d-tabular-import-hardening.md (pointer to task 2). No migrations added or changed. No new npm dependencies.
-  Tests added/updated: unit coverage for XLSX rejection, needs_attention/formula_like/hyperlink parser gating, unknown/missing/duplicate/cross-family mappings, sourceColumn identity after header rename, blank-row skip with original row numbers, required/enum/boolean/decimal/currency/frequency/date parsing, incomplete price pairs, invalid effective-date order, pricing-model and quote-required rules, exact-alias and ambiguous-alias suggestions, bounds/hasMoreRows, immutability, and a real validateTabularImport CSV round-trip. Security tests cover payload-free issues, XLSX static errors, and no fetch/database side effects. Existing Phase 4A-4D, tabular validation, and XLSX security tests were not modified and passed.
+  Corrective attempt for P4D-CSV-MAPPING-RUNTIME-001 completed at implementation SHA 50bb35a02ebd92edd6816e695a3d309c4ce6090e (claim e616b3db44e088fa3c7cda32e0c7843ef56ffa85). Objective: close the remaining false TypeError path so untrusted mapping JSON is structurally validated before any property dereference or semantic assignment, without changing KNOW-004 conflict semantics or the completed CSV-only mapping behavior.
+  Requirements/acceptance: parseCsvMappingInput accepts unknown and returns a canonical mapping. Null, undefined, primitive, and array mapping roots fail with static invalid_mapping. Missing, null, primitive, and non-array columns fail the same way. Null, undefined, sparse, primitive, and array column entries fail before sourceColumn is read. Missing or wrong-typed sourceColumn and target fail with invalid_mapping. Zero, negative, fractional, and non-finite numeric source columns keep invalid_source_column. Mapping arrays longer than the existing tabular column limit are rejected before semantic iteration. ISO/semantic mapping codes and precedence for validly shaped input are unchanged. CSV-only parser gating, sourceColumn identity, output shape, pricing/date rules, suggestions, immutability, server-only behavior, and XLSX rejection are preserved. MR-4D-OOXML-001 remains OPEN.
+  Files changed: lib/orgs/tabular-mapping.ts; lib/orgs/tabular-mapping.test.ts; lib/orgs/tabular-mapping-security.test.ts; docs/phase-4d-csv-mapping-foundation.md. No migrations added or changed. No new npm dependencies.
+  Tests added/updated: table-driven unit cases for malformed mapping roots, columns, sparse/null/primitive/array entries, missing and wrong-typed sourceColumn/target, oversized arrays, and numeric invalid_source_column values; byte-for-byte JSON equality for a valid knowledge mapping; security cases proving secret, URL, and formula targets never appear in thrown or serialized errors and that malformed input has no fetch/database side effects. Existing semantic error-code, parser-gate, offering/knowledge, suggestion, bounds, immutability, and Phase 4A-4D tests were not rewritten and passed.
   Commands and exact results on this implementation head:
   - npm ci: added 553 packages, audited 554, 0 vulnerabilities
-  - focused mapping tests: 32 passed; with tabular validation/security: 4 files, 56 passed
+  - focused mapping and mapping-security tests: 2 files, 65 passed
   - npm run format:check: All matched files use Prettier code style
   - npm run lint: exit 0
-  - npm run typecheck: next typegen + tsc --noEmit succeeded after typing the table-driven fixtures
+  - npm run typecheck: next typegen + tsc --noEmit succeeded
   - npm run prisma:validate: schema valid with DATABASE_URL/DIRECT_URL set
   - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - npm test: 30 files, 302 passed
+  - npm test: 30 files, 335 passed
   - npm run test:integration: 41 files, 488 passed
   - npm run build: Next.js 16.3.0 compiled successfully
-  - CI=true npm run test:e2e: 16 passed (27.4s)
+  - CI=true npm run test:e2e: 16 passed (30.2s)
   - npm audit --omit=dev: found 0 vulnerabilities
   - git diff --check: clean
-  - exact-head GitHub Actions run 31898696627 on 2ea6271d9959e0045861f760d3f55284c52a126b: success (format, lint, typecheck, unit/component, integration, production build, E2E)
-  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. This module is pure validation and does not query the database.
-  Security/privacy: mapping is server-only and does not import XLSX ZIP/XML helpers. Row issues and thrown errors use static codes/messages only. Malicious cell text, formulas, URLs, and secrets are not echoed. Suggestions never become an applied mapping. Parser formula/link issues fail closed before mapping.
-  Failure/recovery: unready or XLSX previews throw CsvMappingError. Invalid mapped rows remain in the dry-run preview with machine-readable issues and are not persisted. No jobs or storage objects are created.
-  Manual configuration still required: none for this foundation.
-  Assumptions: unmapped quoteRequired on a QUOTE_REQUIRED row defaults to true using existing Phase 4C semantics. Effective dates are strict YYYY-MM-DD calendar dates; timezone/DST conversion remains deferred. Completely blank means every header column is empty after trim.
+  - GitHub Actions run 31903113039 success on 663e2f3073715431425ae4333ff8b0dc95c871aa (checkpoint HEAD immediately after implementation 50bb35a02ebd92edd6816e695a3d309c4ce6090e; application tree differs only in AGENTS.md). Verify job: format, lint, typecheck, unit/component, integration, production build, E2E all success. Combined push meant GitHub did not start a separate run on 50bb35a itself.
+  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. This module remains pure validation and does not query the database.
+  Security/privacy: mapping is server-only and does not import XLSX ZIP/XML helpers. Structural and semantic errors use static codes/messages only. Secrets, URLs, and formulas in malformed mapping JSON are not echoed. Suggestions are unchanged and never auto-applied.
+  Failure/recovery: malformed mapping input now throws CsvMappingError with invalid_mapping instead of a raw TypeError/500. Unready or XLSX previews still throw CsvMappingError. Invalid mapped rows remain in the dry-run preview with machine-readable issues and are not persisted. No jobs or storage objects are created.
+  Manual configuration still required: none for this correction.
+  Assumptions: a validly shaped mapping whose family is not knowledge or offering still fails with incompatible_target_family before the parser gate, matching prior precedence. Empty columns arrays remain missing_required_target after a successful structural parse.
   Remaining risks: the mapper is deliberately non-semantic and does not validate the complete file beyond previewRows. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
-  Deferred work: complete-file row validation, mapping UI, saved templates, persistence, confirmation, activation, retrieval, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate.
+  Deferred work: complete-file row validation, mapping UI, saved templates, persistence, confirmation, activation, retrieval, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. Blocker-set revision, signature, attempt count, and history were preserved exactly.
 review_findings: |
   P4D-CSV-MAPPING-RUNTIME-001: The mapping contract is not structurally runtime-safe. validateCsvMapping() reads mapping.family before proving mapping is a non-null object, and iterates columns while reading column.sourceColumn before proving each entry is a non-null object. mapCsvPreview() inherits the same failure. Malformed JSON such as a null mapping, columns containing null, or sparse entries can therefore throw raw TypeError instead of the promised static, payload-free CsvMappingError. Existing tests cover semantic mapping errors only and do not exercise malformed runtime shapes.
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "Cursor must claim the focused runtime-structure correction, preserve the blocker epoch, implement and verify it, then return READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
