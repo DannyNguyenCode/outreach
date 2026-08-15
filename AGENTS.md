@@ -18,8 +18,8 @@ phase: "Phase 4D — tabular import validation foundation"
 active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
-last_reviewed_sha: null
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+last_reviewed_sha: 8b059037a9462efafa72adac0eec83e42b725d2a
+status: READY_FOR_CURSOR
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -58,138 +58,55 @@ cursor_report: |
   Remaining risks: later mapping/persistence must consume this preview rather than re-parsing with a second library; worksheet XML scanning is tag-based, not a full OOXML DOM.
   Deferred work: upload UI/routes, mapping templates, import records, jobs, persistence, offering/knowledge activation, confirmation, retrieval, and connectors remain later Phase 4D tasks. Phase 5 is untouched.
 review_findings: |
-  No blocking Phase 4C audit findings.
-  Phase 4D begins with a bounded validation/preview foundation so later mapping and persistence work can consume one safe normalized tabular representation.
+  REVIEW FAILED on exact remote review head 8b059037a9462efafa72adac0eec83e42b725d2a (Cursor implementation b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 is an ancestor; the two later commits modify AGENTS.md only). The branch is based on current develop d446ca52c1c8397d8b24bf7c2dc009b14800808d and is not behind.
+  BLOCKING — lib/orgs/tabular-csv.ts accepts malformed quoted fields. After a closing quote, parseCsvRecords returns to the ordinary state and accepts arbitrary bytes before a delimiter/end-of-record, so input such as Name\n\"safe\"attacker is normalized as a valid cell instead of failing closed. Track the post-quote state and permit only delimiter, CR/LF, or end-of-input after a closing quote. Add regression tests for junk after a closing quote, quotes in unquoted fields, escaped quotes, and valid delimiters/newlines after quoted fields.
+  BLOCKING SECURITY — lib/orgs/tabular-helpers.ts and lib/orgs/tabular-csv.ts do not identify the full spreadsheet-formula injection prefix set. The current + / - regex requires one of ()!|, so values such as +1+1 and -2+3 return ready; normalizeCell trims leading tab/CR/LF before classification, erasing indicators. Classify from the untrimmed source and flag leading =, +, -, @, tab, CR, or LF conservatively while keeping values inert. Cover CSV headers and data cells and equivalent XLSX string cells. The issue object must remain payload-free.
+  BLOCKING — lib/orgs/tabular-xlsx.ts scans XML with regular expressions without excluding comments, so well-formed OOXML comments containing fake <sheet>, <Relationship>, <c>, <f>, <hyperlink>, or <mergeCell> markup are treated as workbook data. A commented fake cell can overwrite a real coordinate or manufacture row/column/formula evidence. Sanitize/parse XML structurally within the existing resource limits so only real elements in the required OOXML locations are consumed; reject malformed or ambiguous duplicate cell coordinates instead of silently taking the last match. Add adversarial comment fixtures proving comments cannot alter sheets, cells, limits, or issues.
+  BLOCKING — XLSX aggregate text accounting ignores occupied cells outside the header-derived width. parseWorksheet records those cells but addAggregate only visits headers and columns through headerColumnCount; a workbook can exceed TABULAR_MAX_AGGREGATE_CHARS in extra columns and return needs_attention instead of hard-failing text_too_large. Count every populated cell exactly once, including extra columns and hidden sheets, while preserving bounded output. Add at-limit and one-past tests for XLSX aggregate text in both selected and extra columns.
+  BLOCKING CONTENT VALIDATION — the [Content_Types].xml test accepts any Override carrying the workbook main content type even when /xl/workbook.xml itself has a different type. Bind the required content type to the canonical workbook part and add a fixture where an unrelated part carries the main type; it must fail type_mismatch or malformed.
+  Exact-head GitHub Actions evidence is absent because no PR exists yet. Cursor reported the full local suite green on b1d9c35a44d71d008297acfa2a35d86ee91d3ae7, but missing exact-head CI cannot satisfy the merge gate. Do not open a PR; ChatGPT will open it after the corrective review passes.
 required_tests: |
-  Unit fixtures for valid CSV and XLSX plus malformed, unsupported, mislabeled, oversized, excessive-row/column/cell, duplicate/blank-header, formula-like, hidden-sheet, and workbook ambiguity cases.
-  Deterministic normalization tests for BOM, CRLF, quoted fields/newlines, whitespace, stable sheet/header/row ordering, and bounded safe error output.
-  Security tests proving no formulas/macros/external links execute and no file content or sensitive row values enter logs/errors.
-  Full format, lint, typecheck, unit, integration, Prisma validation, build, E2E, audit, and diff checks.
-next_action: "Cursor must pause. ChatGPT owns the branch while reviewing the exact remote head for the develop merge gate."
+  Add regression tests that fail against b1d9c35a44d71d008297acfa2a35d86ee91d3ae7 and pass after the fix for: malformed CSV bytes after a closing quote; complete formula-injection prefixes before normalization in CSV and XLSX; commented fake OOXML workbook/relationship/worksheet elements plus duplicate cell coordinates; XLSX aggregate text at and one past the limit including cells wider than the header; and workbook content type bound to /xl/workbook.xml.
+  Retain all existing tabular, document, offering, security, boundary, deterministic-preview, and safe-error tests.
+  Rerun npm ci, format:check, lint, typecheck, prisma:validate, a fresh PostgreSQL prisma:migrate:deploy, focused tabular tests, npm test, test:integration, build, CI=true test:e2e, npm audit --omit=dev, and git diff --check. Missing, skipped, pending, flaky, or failing checks are not a pass.
+next_action: "Cursor may claim corrective attempt 2 on this same branch, increment cursor_attempt_count once, implement only the review prompt below, run every required check, and return READY_FOR_REVIEW with the exact implementation SHA and report."
 ```
 
-## Cursor implementation prompt — Phase 4D task 1
+## Cursor corrective implementation prompt — Phase 4D task 1, attempt 2
 
 ### Objective
 
-Create the server-only, bounded validation and normalized-preview foundation for Phase 4D CSV/XLSX knowledge and offering imports. Authorized upload/UI, mapping persistence, database import records, activation, jobs, and final confirmation will be separate tasks. This task must make unsafe or ambiguous files fail closed before later import logic can consume them.
+Harden the existing server-only CSV/XLSX validation foundation so malformed CSV, spreadsheet-formula injection prefixes, OOXML comment injection, duplicate cell coordinates, aggregate-text bypasses, and misbound workbook content types all fail closed or produce the required safe attention issue. Work only on `feature/phase-04d-tabular-validation-foundation`. Do not broaden the task into upload, persistence, mapping UI, jobs, activation, connectors, schema, or migrations.
 
-Work only on `feature/phase-04d-tabular-validation-foundation`, which was created from verified `develop` SHA `d446ca52c1c8397d8b24bf7c2dc009b14800808d`.
+### Evidence and exact problems
 
-Read `requirements.md` KNOW-001, KNOW-002, KNOW-003, KNOW-004, KNOW-005 and required journey 12; read the Phase 4D section and Phase 4 completion gate in `outreach-implementation-phases.md`; read `docs/phase-4a-business-knowledge-core.md`, `docs/phase-4b-private-document-processing.md`, and `docs/phase-4c-structured-offerings.md`. Create `docs/phase-4d-tabular-import-hardening.md` for the Phase 4D contract and task boundaries.
+1. `parseCsvRecords` has no post-closing-quote state. `"safe"attacker` is accepted as a field. Only delimiter, CR/LF, or EOF is legal after a quoted field closes.
+2. `isFormulaLike` misses leading `+` and `-` unless later punctuation matches, while CSV trimming erases leading tab/CR/LF evidence. Classify the original value before destructive normalization and conservatively flag spreadsheet execution prefixes `=`, `+`, `-`, `@`, tab, CR, and LF. Keep values literal and issue objects payload-free.
+3. Regex scans consume markup inside XML comments as real OOXML. Comments must not create/replace sheets, relationships, cells, formulas, hyperlinks, merged ranges, or limit evidence. Use a bounded structural parser or a rigorously validated preprocessing/parsing approach; reject malformed ambiguity and duplicate cell coordinates.
+4. XLSX aggregate accounting skips populated cells beyond the header width. Enforce the aggregate character limit across every populated workbook cell exactly once, including extra columns and hidden sheets, without enlarging preview output.
+5. The workbook main content type is accepted when attached to an unrelated Override. Require the exact canonical `/xl/workbook.xml` part to carry the non-macro XLSX workbook main type.
 
-### Deliverable
+### Required fixes and regression tests
 
-Implement a reusable server-only tabular validation module that accepts caller-supplied bytes plus original filename and declared MIME type, then returns a deterministic normalized preview model suitable for a later customer-reviewed column-mapping flow.
-
-The normalized model should include only bounded metadata and cell values needed by later tasks, such as:
-
-- validated file kind and byte size;
-- workbook/sheet identity and visibility metadata;
-- stable selected-sheet or explicit ambiguity result;
-- normalized headers with source column positions;
-- bounded preview rows with stable source row numbers;
-- total row/column counts when safely known;
-- warnings and row/cell validation issues using safe codes and locations;
-- a deterministic file checksum suitable for idempotency in a later persistence task.
-
-Keep the public contract explicit and provider-independent. Do not create fake connector abstractions or a general job framework.
-
-### Required validation and security behavior
-
-- Accept only `.csv` and non-macro `.xlsx`; reject legacy `.xls`, `.xlsm`, archives, encrypted/password-protected workbooks, executables, polyglots, and unsupported content.
-- Validate extension, declared MIME, and server-detected signature/content consistently. Browser MIME and filename are untrusted.
-- Apply explicit byte, workbook, worksheet, row, column, cell-length, aggregate-character, and processing-time limits before or during expansion. XLSX ZIP handling must be protected against excessive entries, expansion, compression ratios, nesting, and path traversal.
-- Parse CSV deterministically, including UTF-8 BOM, CRLF/LF, quoted delimiters, quoted newlines, escaped quotes, and trailing blank rows. Reject invalid encoding, NUL/binary-heavy content, inconsistent structures where unsafe, and unbounded records.
-- Treat formulas, cached formula results, hyperlinks, external workbook links, macros, hidden/very-hidden sheets, merged-cell ambiguity, duplicate/blank headers, and multiple candidate sheets explicitly. Never evaluate formulas or follow links. Formula-like values must remain inert and be identified for later mapping/export safety.
-- Do not silently choose an ambiguous worksheet or header row. Return a safe validation/needs-attention result that a later UI can resolve.
-- Preserve source row/column locations without exposing file bytes or full sensitive rows through exceptions, logs, audit metadata, or client-facing messages.
-- Keep parsing server-only and independent from production storage or credentials.
-- Reuse existing hashing, safe-error, document-validation, and size-boundary conventions where appropriate, but do not weaken Phase 4B validation or couple tabular formats to document extraction.
-
-### Dependency requirements
-
-Audit the current package set before adding dependencies. If a CSV/XLSX parser is required, choose the smallest maintained Node 22-compatible package(s) with acceptable license and current security posture; document why, pin through `package-lock.json`, and verify the production dependency audit. Do not add both overlapping libraries without a concrete need. Remove no unrelated dependency in this task.
-
-### Tests
-
-Add deterministic unit tests and small generated/checked-in fixtures that fail before implementation and pass afterward.
-
-At minimum cover:
-
-1. valid UTF-8 CSV and valid non-macro XLSX producing equivalent normalized headers and preview rows;
-2. BOM, CRLF, quoted commas/newlines, escaped quotes, blank trailing rows, and stable row numbers;
-3. extension/MIME/signature mismatch and unsupported `.xls`/`.xlsm`;
-4. malformed CSV/XLSX, invalid encoding, NUL/binary payload, encrypted workbook, archive/polyglot input, traversal names, and decompression/entry/count limits;
-5. byte, sheet, row, column, cell, aggregate text, and processing limits at the boundary and one past it;
-6. blank/duplicate headers, hidden sheets, multiple candidate sheets, merged cells, formulas, cached formula values, hyperlinks, and external links;
-7. deterministic checksum and output ordering across repeated parses;
-8. safe errors containing codes and source locations but not full row content, file bytes, formulas, URLs, or secrets;
-9. regression proof that existing PDF/DOCX/TXT document validation and Phase 4C offering behavior are unchanged.
-
-Avoid timing-only assertions and fixtures large enough to burden the repository; generate bounded adversarial archives/workbooks in tests where practical.
-
-### Documentation and stale wording
-
-- Add `docs/phase-4d-tabular-import-hardening.md` describing accepted formats, limits, trust boundaries, normalized preview contract, formula/link behavior, safe errors, dependency choice, deferred tasks, and recovery expectations.
-- Update the stale README project-status line and current-next-step section to state that Phases 4B and 4C are merged and Phase 4D tabular import hardening has begun on this branch.
-- Add the Phase 4C and new Phase 4D documents to the README developer/project document lists.
-- Do not claim the complete Phase 4D import journey or overall Phase 4 is finished.
+- Add failing-before/passing-after unit and security tests for every problem above.
+- Include valid controls for escaped quotes and quoted-field delimiters/newlines.
+- Include commented fake `sheet`, `Relationship`, `c`, `f`, `hyperlink`, and `mergeCell` markup and a duplicate-coordinate fixture.
+- Cover formula prefixes in headers and rows for CSV and string cells for XLSX without leaking values into errors/issues/logs.
+- Cover XLSX aggregate limit at the boundary and one past it, including text only in columns wider than the header.
+- Cover an unrelated content-type Override carrying the workbook main type while `/xl/workbook.xml` is misdeclared.
+- Preserve existing public types and deterministic output unless a minimal safe contract correction is necessary and documented.
 
 ### Explicit exclusions
 
-- No database schema or Prisma migration.
-- No storage bucket changes, production credentials, production migrations, or external services.
-- No upload route, browser form, server action, mapping UI, saved mapping template, import record, background job, progress UI, retry workflow, persistence, offering creation, activation, confirmation, retrieval integration, or live commerce/CRM/inventory connector.
-- No Phase 5 work and no unrelated refactor.
-- Do not modify `main` or `develop`, open or merge a PR, rebase, force-push, reset history, or replace shared branches.
+No database/Prisma changes, production access, storage, routes, UI, mapping templates, import records, jobs, persistence, activation, retrieval, connectors, Phase 5 work, unrelated refactors, new PR, rebase, force-push, history reset, or changes to `develop`/`main`.
 
-### Verification
+### Verification and acceptance
 
-Run and report exact results for:
+Run every command in `required_tests` and provide exact results. Acceptance requires all new regressions and the complete existing suite to pass, no new dependency without documented necessity and audit evidence, safe bounded failures, no formula/link execution or fetch, no sensitive payload in errors/issues/logs, unchanged Phase 4A–4C behavior, and a clean branch still based on current `develop`.
 
-- `npm ci`
-- `npm run format:check`
-- `npm run lint`
-- `npm run typecheck`
-- `npm run prisma:validate`
-- a fresh PostgreSQL `npm run prisma:migrate:deploy` through the current Phase 4C migration
-- focused tabular validation/security tests
-- `npm test`
-- `npm run test:integration`
-- `npm run build`
-- `CI=true npm run test:e2e`
-- `npm audit --omit=dev`
-- `git diff --check`
+### Completion report
 
-A skipped, pending, unavailable, flaky, or failing required check is not a pass.
+Record the exact corrective implementation SHA, files changed, root cause and fix for each finding, regression tests, exact command results, dependency/audit status, authorization/tenant impact, security/privacy analysis, remaining risks, and deferred work. Set `status: READY_FOR_REVIEW`, reset `consecutive_unchanged_checks: 0`, and set `last_cursor_activity_sha` to the corrective implementation/report head. Do not claim or push while ChatGPT owns the branch.
 
-### Acceptance criteria
-
-- Valid CSV/XLSX inputs produce the same stable, bounded normalized preview contract.
-- Unsupported, mismatched, ambiguous, malicious, or over-limit inputs fail closed with safe deterministic evidence.
-- No formula, macro, external link, archive path, or spreadsheet content is executed or fetched.
-- Parser resource use is bounded and sensitive file content is absent from logs and safe errors.
-- Existing Phase 4A–4C behavior and full verification remain green.
-- Documentation accurately states what this foundation implements and what later Phase 4D tasks must still add.
-- No excluded persistence, UI, activation, connector, job, or schema work is introduced.
-
-### Completion handoff
-
-When claiming this task, set `status: CURSOR_WORKING`, increment `cursor_attempt_count` from 0 to 1 exactly once, set `cursor_claimed_at`, and commit that state before implementation.
-
-After implementation and verification:
-
-1. Commit application/tests/docs without the completion report.
-2. Record the last non-report implementation SHA in `cursor_implementation_sha`.
-3. Update `cursor_report` with files, dependencies, accepted formats/limits, validation behavior, tests, exact commands/results, migrations, security/privacy, assumptions, manual configuration, remaining risks, and deferred tasks.
-4. Set `status: READY_FOR_REVIEW`, reset `consecutive_unchanged_checks` to 0, update `last_cursor_activity_sha`, and set the next action to ChatGPT complete-branch review against current `develop`.
-5. Commit only the report/handoff as `chore: report Cursor task completion`, push this branch, and stop.
-
-If blocked, set `status: BLOCKED`, record exact safe evidence and `stop_reason`, push the handoff when safe, and stop.
-
-## ChatGPT Phase 4C audit result
-
-Phase 4C has no blocking follow-up after Phase 4B integration. PR #10 merged Phase 4B into `develop` at `d446ca52c1c8397d8b24bf7c2dc009b14800808d`; post-merge CI run 31867499078 passed the combined Phase 4B/4C suite. Phase 4D may proceed.
 
 <!-- END:outreach-automation -->
