@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-import-draft-persistence
 base_develop_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 cursor_implementation_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 last_reviewed_sha: null
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 15
 previous_develop_merge_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
