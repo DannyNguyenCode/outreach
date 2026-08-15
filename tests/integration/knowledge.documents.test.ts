@@ -3,9 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import type {
-  MalwareScanner,
-  MalwareScanResult,
+import {
+  MalwareScanUnavailableError,
+  type MalwareScanner,
+  type MalwareScanResult,
 } from "@/lib/orgs/document-malware";
 import { extractDocument } from "@/lib/orgs/document-extraction";
 import type {
@@ -28,6 +29,7 @@ import {
   failExpiredExhaustedKnowledgeDocumentJobs,
   getKnowledgeDocument,
   processNextKnowledgeDocumentJob,
+  requestKnowledgeDocumentRetry,
   restoreKnowledgeDocumentVersion,
   uploadValidatedKnowledgeDocument,
 } from "@/lib/orgs/knowledge-documents";
@@ -223,6 +225,46 @@ describe("Phase 4B private document processing", () => {
     expect(allowed.objectBucket).toBe(storage.bucketName);
   });
 
+  it("denies CLEAN scan evidence when scanned and binary checksums differ", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-checksum-mismatch");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "mismatch.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const mismatched = "b".repeat(64);
+    expect(mismatched).not.toBe(uploaded.value.document.binaryChecksum);
+    await prisma.knowledgeDocument.update({
+      where: { id: uploaded.value.document.id },
+      data: {
+        scanState: "CLEAN",
+        finalizedAt: new Date("2026-08-15T00:00:00.000Z"),
+        scannedChecksum: mismatched,
+      },
+    });
+
+    const signedBefore = storage.signedDownloadCalls;
+    const downloadBefore = storage.downloadCalls;
+    const denied = await createAuthorizedDocumentDownload({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+      storage,
+    });
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) {
+      expect(denied.reason).toBe("not_confirmable");
+    }
+    expect(storage.signedDownloadCalls).toBe(signedBefore);
+    expect(storage.downloadCalls).toBe(downloadBefore);
+  });
+
   it("terminalizes expired leases after the final attempt", async () => {
     const ctx = await createOrgWithOwner(prisma, "doc-lease-exhaust");
     const storage = new MemoryPrivateStorage();
@@ -293,6 +335,26 @@ describe("Phase 4B private document processing", () => {
       },
     });
     expect(next).toEqual({ claimed: false });
+
+    const retried = await requestKnowledgeDocumentRetry({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      sourceId: uploaded.value.source.id,
+      versionId: uploaded.value.version.id,
+    });
+    expect(retried.ok).toBe(true);
+    const recovered = await processNextKnowledgeDocumentJob({
+      workerId: "worker-after-retry",
+      dependencies: {
+        storage,
+        scanner: new CleanScanner(),
+        scannerName: "test-clean",
+        scannerVersion: "1",
+        extract: extractDocument,
+        now: () => new Date("2026-08-14T12:02:00.000Z"),
+      },
+    });
+    expect(recovered).toMatchObject({ claimed: true, outcome: "published" });
   });
 
   it("denies cross-tenant document status and atomically claims one job once", async () => {
@@ -584,6 +646,54 @@ describe("Phase 4B private document processing", () => {
     });
     expect(retry.ok).toBe(true);
   });
+
+  it("retries a bounded remote scanner failure without terminalizing the graph", async () => {
+    const ctx = await createOrgWithOwner(prisma, "doc-bounded-retry");
+    const storage = new MemoryPrivateStorage();
+    const uploaded = await uploadValidatedKnowledgeDocument({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      originalFilename: "retry.txt",
+      document: await sampleTxt(),
+      storage,
+    });
+    if (!uploaded.ok) throw new Error(uploaded.message);
+
+    const retried = await processNextKnowledgeDocumentJob({
+      workerId: "worker-retry",
+      dependencies: {
+        storage,
+        scanner: new UnavailableScanner(),
+        scannerName: "test-unavailable",
+        scannerVersion: "1",
+        extract: extractDocument,
+      },
+    });
+    expect(retried).toMatchObject({ claimed: true, outcome: "retry" });
+
+    const job = await prisma.knowledgeDocumentJob.findUniqueOrThrow({
+      where: { id: uploaded.value.job.id },
+    });
+    expect(job.state).toBe("RETRY");
+    expect(job.attempts).toBe(1);
+    expect(job.leaseOwner).toBeNull();
+    const document = await prisma.knowledgeDocument.findUniqueOrThrow({
+      where: { id: uploaded.value.document.id },
+    });
+    expect(document.processingState).toBe("QUEUED");
+    const version = await prisma.knowledgeVersion.findUniqueOrThrow({
+      where: { id: uploaded.value.version.id },
+    });
+    expect(version.state).toBe("PROCESSING");
+    expect(
+      await prisma.organizationAuditEvent.count({
+        where: {
+          organizationId: ctx.organizationId,
+          action: "KNOWLEDGE_DOCUMENT_PROCESSING_FAILED",
+        },
+      }),
+    ).toBe(0);
+  });
 });
 
 async function sampleTxt() {
@@ -667,6 +777,12 @@ class CleanScanner implements MalwareScanner {
   }
 }
 
+class UnavailableScanner implements MalwareScanner {
+  async scan(): Promise<MalwareScanResult> {
+    throw new MalwareScanUnavailableError("scanner offline");
+  }
+}
+
 class InfectedScanner implements MalwareScanner {
   async scan(
     _bytes: Uint8Array,
@@ -685,6 +801,8 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
   readonly bucketName = "test-private";
   private readonly objects = new Map<string, Uint8Array>();
   readonly deletedKeys: string[] = [];
+  signedDownloadCalls = 0;
+  downloadCalls = 0;
   failUpload = false;
   failDownload = false;
   failDelete = false;
@@ -702,6 +820,7 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
     ref: PrivateDocumentRef,
   ): Promise<SignedObjectUrl> {
     this.assertScoped(ref);
+    this.signedDownloadCalls += 1;
     return this.signed(ref);
   }
 
@@ -713,6 +832,7 @@ class MemoryPrivateStorage implements PrivateDocumentStorage {
 
   async download(ref: PrivateDocumentRef) {
     this.assertScoped(ref);
+    this.downloadCalls += 1;
     if (this.failDownload) throw new Error("download unavailable");
     const bytes = this.objects.get(ref.key);
     if (!bytes) throw new Error("missing");

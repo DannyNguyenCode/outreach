@@ -86,11 +86,16 @@ Staging configuration options:
 - Cron / scheduler calling the endpoint every minute
 - Manual operator trigger during verification
 
-Worker protocol:
+Worker protocol (two-stage; never invert lock order):
 
-1. Claim one job in a short committed transaction (`FOR UPDATE SKIP LOCKED`)
-2. Release the claim transaction before waiting on the organization knowledge advisory lock
-3. Download, scan, extract, then publish under the documented lock order
+1. Candidate reservation or claim may use a short committed `FOR UPDATE SKIP LOCKED` transaction that touches only `KnowledgeDocumentJob`
+2. That transaction must commit and release the job row before the worker waits on `organization-knowledge:<organizationId>`
+3. Graph mutation (document attach after claim, scan-state transition, publish, retry/failure, exhausted-lease terminalization) then:
+   - acquires the organization knowledge advisory lock
+   - locks source → version → document → job
+   - revalidates job state, lease owner/expiry, attempt count, document state, version state, and tenant identifiers
+   - applies a conditional, idempotent update so a stale worker cannot overwrite a newer retry, publication, archive, restore, or other lifecycle transition
+4. Concurrent exhausted-lease sweepers produce at most one terminal job/document/version result and one failure audit
 
 This is intentionally not Phase 12’s general-purpose job platform.
 
@@ -125,7 +130,7 @@ User writers (same Phase 4A family):
 4. Version rows in stable ID order
 5. Document / job / section / passage rows in documented stable order
 
-Background workers have no membership row. They acquire the organization knowledge lock first, then source → version → document → job → sections/passages. They never invert that order.
+Background workers have no membership row. After the short job reservation/claim is released, they acquire the organization knowledge lock first, then source → version → document → job → sections/passages. They never lock a job and then wait for source, version, or document locks.
 
 ## Retries and recovery
 

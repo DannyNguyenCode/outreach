@@ -54,6 +54,17 @@ export type KnowledgeMutationTestHooks = {
   testAfterTransactionCommit?: () => Promise<void>;
   /** Invoked after upload storage verification and before DB finalization. */
   testBeforeDocumentUploadFinalization?: () => Promise<void>;
+  /**
+   * Invoked after a short SKIP LOCKED job reservation/claim transaction
+   * commits and before the graph-mutation transaction waits on the
+   * organization knowledge advisory lock.
+   */
+  testAfterJobReservation?: () => Promise<void>;
+  /**
+   * Invoked after a worker holds organization → source → version →
+   * document → job locks and before it mutates those rows.
+   */
+  testAfterGraphLocks?: () => Promise<void>;
 };
 
 export function organizationKnowledgeLockKey(organizationId: string): string {
@@ -170,6 +181,7 @@ export async function lockKnowledgeDocumentForUpdate(
   id: string;
   processingState: string;
   scanState: string;
+  leaseOwner: string | null;
   binaryChecksum: string | null;
   scannedChecksum: string | null;
   normalizedContentChecksum: string | null;
@@ -181,6 +193,7 @@ export async function lockKnowledgeDocumentForUpdate(
       id: string;
       processingState: string;
       scanState: string;
+      leaseOwner: string | null;
       binaryChecksum: string | null;
       scannedChecksum: string | null;
       normalizedContentChecksum: string | null;
@@ -191,6 +204,7 @@ export async function lockKnowledgeDocumentForUpdate(
     SELECT id,
            "processingState"::text AS "processingState",
            "scanState"::text AS "scanState",
+           "leaseOwner",
            "binaryChecksum",
            "scannedChecksum",
            "normalizedContentChecksum",
@@ -213,29 +227,108 @@ export async function lockKnowledgeDocumentJobForUpdate(
   id: string;
   state: string;
   leaseOwner: string | null;
+  leaseExpiresAt: Date | null;
   attempts: number;
   maxAttempts: number;
+  sourceId: string;
+  versionId: string;
+  documentId: string;
 } | null> {
   const rows = await tx.$queryRaw<
     Array<{
       id: string;
       state: string;
       leaseOwner: string | null;
+      leaseExpiresAt: Date | null;
       attempts: number;
       maxAttempts: number;
+      sourceId: string;
+      versionId: string;
+      documentId: string;
     }>
   >`
     SELECT id,
            state::text AS state,
            "leaseOwner",
+           "leaseExpiresAt",
            attempts,
-           "maxAttempts"
+           "maxAttempts",
+           "sourceId",
+           "versionId",
+           "documentId"
     FROM "KnowledgeDocumentJob"
     WHERE id = ${input.jobId}
       AND "organizationId" = ${input.organizationId}
     FOR UPDATE
   `;
   return rows[0] ?? null;
+}
+
+export function isInFlightDocumentProcessingState(
+  state: string | null | undefined,
+): boolean {
+  return (
+    state === "QUEUED" || state === "SCANNING" || state === "EXTRACTING"
+  );
+}
+
+/**
+ * Worker graph-mutation lock protocol: organization advisory lock, then
+ * source → version → document → job. Callers must revalidate after locks
+ * are held. Never lock the job before source/version/document.
+ */
+export async function lockKnowledgeWorkerGraphForUpdate(
+  tx: Prisma.TransactionClient,
+  input: {
+    organizationId: string;
+    sourceId: string;
+    versionId: string;
+    documentId: string;
+    jobId: string;
+  },
+  hooks: KnowledgeMutationTestHooks = {},
+): Promise<{
+  source: Awaited<ReturnType<typeof lockKnowledgeSourceForUpdate>>;
+  version: Awaited<ReturnType<typeof lockKnowledgeVersionForUpdate>>;
+  document: Awaited<ReturnType<typeof lockKnowledgeDocumentForUpdate>>;
+  job: Awaited<ReturnType<typeof lockKnowledgeDocumentJobForUpdate>>;
+}> {
+  await acquireOrganizationKnowledgeLock(tx, input.organizationId, hooks);
+  const source = await lockKnowledgeSourceForUpdate(
+    tx,
+    {
+      organizationId: input.organizationId,
+      sourceId: input.sourceId,
+    },
+    hooks,
+  );
+  const version = source
+    ? await lockKnowledgeVersionForUpdate(tx, {
+        organizationId: input.organizationId,
+        sourceId: input.sourceId,
+        versionId: input.versionId,
+      })
+    : null;
+  const document =
+    source && version
+      ? await lockKnowledgeDocumentForUpdate(tx, {
+          organizationId: input.organizationId,
+          sourceId: input.sourceId,
+          versionId: input.versionId,
+          documentId: input.documentId,
+        })
+      : null;
+  const job =
+    source && version && document
+      ? await lockKnowledgeDocumentJobForUpdate(tx, {
+          organizationId: input.organizationId,
+          jobId: input.jobId,
+        })
+      : null;
+  if (hooks.testAfterGraphLocks) {
+    await hooks.testAfterGraphLocks();
+  }
+  return { source, version, document, job };
 }
 
 export async function lockKnowledgeDocumentsAndJobsForSourceForUpdate(
