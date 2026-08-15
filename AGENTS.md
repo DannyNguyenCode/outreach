@@ -13,71 +13,31 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 # Outreach Automation Handoff
 
 ```yaml
-task_id: phase-04d-source-runtime-composition-001
-phase: "Phase 4D — Source classification and runtime composition"
-active_branch: feature/phase-04d-source-runtime-composition-v2
-base_develop_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
-cursor_implementation_sha: 404ea8deff482d27416cbd05dfe62e22a5480909
-last_reviewed_sha: b5b213b799e769439f38926941fe1d9d6c938347
-status: CHATGPT_REVIEWING_FOR_DEVELOP
+task_id: phase-04d-csv-mapping-foundation-001
+phase: "Phase 4D — CSV mapping foundation"
+active_branch: feature/phase-04d-csv-mapping-foundation
+base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
+cursor_implementation_sha: null
+last_reviewed_sha: null
+status: READY_FOR_CURSOR
 previous_task_status: MERGED
-previous_pr_number: 12
-previous_develop_merge_sha: 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad
-cursor_attempt_count: 3
+previous_pr_number: 13
+previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
+cursor_attempt_count: 0
 cursor_attempt_count_legacy: true
-blocker_set_revision: 2
-blocker_set_signature:
-  - BLK-4D-RUNTIME-CURRENCY-TOKEN-BOUNDARY
-blocker_attempt_count: 1
-blocker_history: |
-  Revision 1 attempt 1 identified offering/currency precision, conflict-safe limiting, and prompt-boundary blockers.
-  Revision 1 attempt 2 verified those blockers resolved and identified one remaining currency-marker token-boundary blocker.
-  Verified progress reduced the set, so revision 2 reset the remaining blocker to attempt 1 under Bao's progress-sensitive policy.
+blocker_set_revision: 0
+blocker_set_signature: []
+blocker_attempt_count: 0
+blocker_history: []
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 404ea8deff482d27416cbd05dfe62e22a5480909
+last_cursor_activity_sha: null
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: "2026-08-15T16:09:00Z"
-cursor_completed_at: "2026-08-15T16:16:33Z"
-cursor_report: |
-  Attempt 3 of 3 completed at implementation SHA 404ea8deff482d27416cbd05dfe62e22a5480909 (claim 7eb2abfb72a0003e185e6a73332ae87fca6f1e07). Objective: close the remaining false-positive path so alphabetic-prefix national currency markers cannot match inside a larger Unicode letter/number/underscore token.
-  Requirements/acceptance: markerPattern now adds a left token boundary when a marker begins with a Unicode letter/number/underscore and a right token boundary when it ends with one. C$, CA$, US$, A$, AU$, and NZ$ therefore cannot match inside identifiers such as ABC$49 or BUS$49, while C$49 and amount-before-marker forms such as 49 C$ still prove their exact currencies. ISO codes remain case-insensitive and bounded on both sides. Bare dollar stays ambiguous. Reviewed marker sets are unchanged. Conflict-aware selection, prompt encoding, adapters, authorization, inspector UI, migrations, dependencies, and tabular imports were not altered.
-  Files changed: lib/orgs/runtime-composition-logic.ts; lib/orgs/runtime-composition.test.ts; docs/phase-4d-source-runtime-composition.md (explicit leading/trailing character-class boundaries). No migrations added or changed. No new npm dependencies.
-  Tests added/updated: table-driven negatives for CAD ABC$49/ABCA$49/ABCAU$49, USD BUS$49, AUD ABCAU$49/ABCA$49, underscore-prefixed C$49, bare dollar, and foreign euro vs USD; positives for standalone C$49, CA$49, US$49, A$49, AU$49, NZ$49, amount-before-marker forms, parenthesized C$49, and adjacent 49 euro. The six embedded-marker negatives failed on attempt-2 parser behavior (false STRUCTURED_PRICE_MISMATCH) and passed after the fix (31/31). Existing offering-name, ISO, conflict-safe selection, and Phase 4A-4D regressions preserved.
-  Commands and exact results on this implementation head:
-  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
-  - npm run format:check: All matched files use Prettier code style
-  - npm run lint: exit 0
-  - npm run typecheck: next typegen + tsc --noEmit succeeded
-  - npm run prisma:validate: schema valid
-  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
-  - focused lib/orgs/runtime-composition.test.ts: 31 passed after the fix; 6 embedded negatives failed before the fix
-  - focused tests/integration/runtime-composition.test.ts: 11 passed
-  - npm test: 28 files, 270 passed
-  - npm run test:integration: 41 files, 488 passed
-  - npm run build: Next.js 16.3.0 compiled successfully
-  - CI=true npm run test:e2e: 16 passed (30.5s)
-  - npm audit --omit=dev: found 0 vulnerabilities
-  - git diff --check: clean
-  - exact-head GitHub Actions run 31894834873 on 404ea8deff482d27416cbd05dfe62e22a5480909: success (format, lint, typecheck, unit/component, integration, production build, E2E)
-  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. Existing runtime composition integration authorization/tenant/source-filtering/provenance/UNKNOWN/audit coverage passed unchanged.
-  Security/privacy: no credentials, tokens, or customer data exposed. Inspector safeText is unchanged. promptSafeText encoding is unchanged. Identifiers that merely contain a national marker suffix cannot create a price conflict.
-  Failure/recovery: unmatched or unproven currency still yields no conflict rather than a false STRUCTURED_PRICE_MISMATCH. No jobs or storage objects are created.
-  Manual configuration still required: none for this defect.
-  Assumptions: a trailing dollar on C$/CA$/US$/A$/AU$/NZ$ remains a symbol side that may sit directly against the amount; a leading letter/number/underscore still requires a left token boundary, so 49C$ without a separator is not treated as a proven marker.
-  Remaining risks: the detector remains deliberately non-semantic and still ignores unreviewed markers. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
-  Deferred work: future source classes, embeddings, vector retrieval, generated answers, and tabular/XLSX consumption remain later Phase 4D tasks. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate. This is the final Cursor attempt.
-review_findings: |
-  BLOCKING — National currency abbreviations with a trailing dollar sign are not token-bounded. lib/orgs/runtime-composition-logic.ts markerPattern() applies Unicode token boundaries only to three-letter ISO codes; C$, CA$, US$, A$, AU$, and NZ$ are raw alternatives. Therefore a confirmed passage such as "Premium plan uses SKU ABC$49" can match the C$ marker inside ABC$ and falsely conflict with a CAD 59 structured price; "BUS$49" can similarly match US$ for USD. This violates the task's exact/narrow and proven-currency contract.
-  PASS — The prior short-name substring, foreign/ambiguous currency, truncation-hidden conflict, pair completeness, limit-below-two, and forged prompt-boundary defects are fixed with direct regressions.
-  PASS — Implementation SHA eff1730efc3f9364abe6e9e6ce347737ae3947e7 is an ancestor of review handoff b5b213b799e769439f38926941fe1d9d6c938347; later commits modify AGENTS.md only. The branch is 0 commits behind develop.
-  PASS — Authorization, tenant isolation, active/current source filtering, provenance, UNKNOWN behavior, audit privacy, inspector behavior, and MR-4D-OOXML-001 isolation remain intact.
-  WORKFLOW — The previously duplicated/corrupted corrective-prompt text in AGENTS.md was repaired in ChatGPT's review handoff without changing application code.
+cursor_report: null
+review_findings: null
 required_tests: |
-  Add a table-driven regression proving alphabetic-prefix national currency markers cannot match inside a larger Unicode letter/number/underscore token: at minimum CAD with ABC$49/ABCA$49/ABCAU$49 and USD with BUS$49. Prove standalone C$49, CA$49, US$49, A$49, AU$49, and NZ$49 still work for their exact currencies, including amount-before-marker forms where supported. Keep bare dollar ambiguous and foreign markers non-matching.
-  Preserve all attempt-2 offering-name, exact ISO currency, true/false conflict, conflict-safe selection, prompt-boundary, authorization, tenant, source-filtering, provenance, UNKNOWN, audit, accessibility, and Phase 4A–4D regressions.
-  Run focused runtime unit/integration tests; npm ci; format:check; lint; typecheck; prisma:validate; fresh PostgreSQL prisma:migrate:deploy; npm test; test:integration; build; CI=true test:e2e; npm audit --omit=dev; git diff --check; and successful exact-head GitHub Actions.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+  Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
+next_action: "Cursor must claim this task, implement only the bounded server-only CSV mapping foundation, verify it completely, and return READY_FOR_REVIEW."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
@@ -87,35 +47,130 @@ manual_review_flags:
     affected_branch: feature/phase-04d-tabular-validation-foundation
     reviewed_sha: aa8c0aae242f63c150ec8b92d7d623b08300df3c
     blocked_capability: XLSX tabular import mapping, persistence, activation, or any production path consuming its preview until Bao authorizes flag removal
-    safe_continuation_scope: Source classification/runtime composition using only existing confirmed Phase 4A manual/document knowledge and Phase 4C structured offerings; CSV-only work and later work that does not consume XLSX preview
+    safe_continuation_scope: This CSV-only mapping foundation and later work that rejects XLSX and does not consume an XLSX preview
     required_resolution: Bao must explicitly request removal after the independently verified corrective PR #12 merge; ChatGPT must then mark the flag RESOLVED with evidence rather than deleting its history.
     created_at: "2026-08-15"
     resolution_evidence: "Corrective implementation f49e3a54847a5317cde2fc1187b301da78636b0e; exact final-head CI run 31887553240; PR #12 squash-merged to develop at 01eb8b88a9b0cafa5bc07d0bd78359f9bc19ecad. Awaiting Bao explicit removal instruction."
 ```
 
-## Cursor corrective prompt — completed currency-boundary correction
+## Cursor implementation prompt — CSV mapping foundation
 
-Objective: close the remaining false-positive path in the deterministic currency matcher without broadening KNOW-004 conflict semantics.
+### Objective
 
-Evidence:
+Build the next small Phase 4D slice: a server-only, deterministic CSV column-mapping and mapped-preview foundation on top of the existing normalized tabular validator.
 
-- `lib/orgs/runtime-composition-logic.ts` lines 172–199 define alphabetic currency abbreviations such as `C$`, `CA$`, `US$`, `A$`, `AU$`, and `NZ$`.
-- `markerPattern()` adds token boundaries only when the entire marker is a three-letter ISO code. Alphabetic-prefix symbol markers are escaped but otherwise unbounded, so suffixes inside larger tokens can be consumed as currency evidence.
-- Existing attempt-2 tests cover foreign symbols/codes and bare dollar ambiguity, but do not cover national markers embedded in identifiers or words.
+This task defines and validates customer-reviewed mapping data and produces a bounded dry-run preview. It must not upload, store, persist, confirm, activate, retrieve, or import any record.
 
-Required fix:
+### Mandatory scope boundary
 
-1. Generate marker patterns based on the marker's leading and trailing character classes. If a marker begins with a Unicode letter/number/underscore, require a left token boundary; if it ends with one, require a right token boundary. Preserve direct adjacency between a trailing symbol and its amount, such as `C$49`, and between an amount and a leading marker where supported.
-2. Ensure a shorter marker cannot match as a suffix inside a longer token or malformed national marker. Sorting alternatives by length is not sufficient without boundaries.
-3. Keep ISO codes case-insensitive, bare `$` ambiguous/unrecognized, reviewed currency sets unchanged, and all matching deterministic/non-semantic.
-4. Update the Phase 4D documentation if its exact marker-boundary behavior is not already explicit.
+- Accept only a `TabularNormalizedPreview` whose `kind` is exactly `csv` and whose parser outcome is safe for mapping.
+- Reject every XLSX preview. Do not import or call XLSX helpers, consume XLSX rows, add an XLSX mapping path, or weaken `MR-4D-OOXML-001`.
+- Keep this module `server-only`.
+- Do not add routes, server actions, forms, UI, storage, Prisma models, migrations, jobs, saved templates, activation, confirmation, or runtime retrieval.
+- Do not change Phase 4A–4C persistence or the existing CSV/XLSX validation semantics.
+- Do not start Phase 5.
 
-Regression tests and acceptance:
+### Mapping contract
 
-- Add the table-driven negative and positive cases listed in `required_tests`. The embedded-marker negatives must fail against attempt 2 before the fix and pass afterward.
-- Do not alter conflict-aware selection, prompt encoding, adapters, authorization, inspector UI, migrations, dependencies, tabular imports, or future source classes.
-- Run and report every command in `required_tests`; missing/skipped/pending evidence is not a pass.
-- Legacy Cursor run numbering is non-authoritative. The remaining blocker is revision 2 attempt 1 under Bao's progress-sensitive policy. ChatGPT owns blocker-set counting; Cursor must preserve it.
-- On completion set `READY_FOR_REVIEW`, update `cursor_implementation_sha`, reset unchanged checks, and report the exact implementation SHA, changed files, before/after regression proof, full tests/CI, security/tenant evidence, remaining risks, and exclusions.
+Inspect `requirements.md`, `outreach-implementation-phases.md`, the Phase 4A/4C models and validators, and `docs/phase-4d-tabular-import-hardening.md`. Reuse established enums, normalization helpers, validation limits, and field semantics rather than creating a competing offering or knowledge schema.
+
+Create a typed, runtime-validated mapping contract for two explicit target families:
+
+1. customer-confirmed business knowledge draft rows;
+2. structured offering draft rows.
+
+The mapping must:
+
+- identify source columns by the parser's stable one-based `sourceColumn`, never only by header text;
+- permit an explicit ignored/unmapped source column;
+- reject unknown source columns, duplicate source assignments, duplicate target assignments, unknown targets, missing required targets, and mappings incompatible with the selected target family;
+- keep knowledge and offering targets distinct;
+- expose a stable target-field registry with user-facing labels, required/optional state, data type, and accepted values derived from existing Phase 4 contracts;
+- require explicit mapping for the minimum fields needed to form a useful draft row;
+- validate cross-field requirements such as price amount/currency pairs, pricing model, billing frequency, quote-required behavior, offering type, and effective-date ordering using existing Phase 4C semantics where applicable;
+- never silently guess a target from a header name. Deterministic suggestions may be returned separately only when exact normalized aliases are unique and must still require customer confirmation.
+
+If existing domain validation cannot safely support a field without persistence context, leave that field out of this bounded foundation and document the deferral instead of inventing behavior.
+
+### Dry-run mapped preview
+
+Add a pure mapping function that consumes the validated CSV preview plus the validated mapping and returns only the bounded preview rows already present in `previewRows`.
+
+Requirements:
+
+- preserve `sourceRowNumber`;
+- skip only completely blank rows and report the skipped count;
+- normalize whitespace deterministically;
+- parse booleans, strict ISO dates, enum values, decimal amounts, ISO currency codes, and billing frequencies without locale guessing;
+- reject exponent notation, non-finite numbers, invalid calendar dates, unknown enum values, malformed currency codes, and incomplete paired fields;
+- distinguish missing required values from invalid values;
+- return stable machine-readable row issues containing row number, source column, target field, and issue code;
+- error messages and issue objects must not echo cell contents, formulas, URLs, file bytes, or secrets;
+- keep mapped customer data only in the explicit bounded mapped-preview values intended for the later authorized UI;
+- report `hasMoreRows` whenever `totalRowCount` exceeds the bounded preview rows and never imply that the complete file has been validated against the mapping;
+- never mutate the parser preview or mapping input;
+- remain deterministically bounded by existing preview row/column/cell limits.
+
+A parser result with unresolved error-level or security-relevant attention issues must fail closed for this task. Do not add acknowledgment or override behavior yet.
+
+### Security and correctness tests
+
+Add direct regressions for at least:
+
+- XLSX preview rejection;
+- `needs_attention` and parser-issue gating;
+- unknown, missing, duplicate, and cross-family mappings;
+- stable one-based source-column identity with renamed or similar headers;
+- blank-row handling and preservation of original source row numbers;
+- required-field, enum, boolean, decimal, currency, billing-frequency, and strict-date parsing;
+- incomplete price/currency pairs and invalid effective-date order;
+- exact-alias suggestions that remain non-authoritative;
+- duplicate/ambiguous aliases producing no suggestion;
+- bounded output and `hasMoreRows`;
+- immutability and deterministic repeated output;
+- row issues that do not expose malicious cell text, formulas, URLs, or secrets;
+- no database, storage, network, file-system, formula-evaluation, or external-resource side effects;
+- existing Phase 4A knowledge, Phase 4B document, Phase 4C offering, runtime-composition, CSV validation, and XLSX security tests remaining unchanged and passing.
+
+### Documentation
+
+Create a focused Phase 4D CSV-mapping document, or add a clearly bounded task-2 section to the existing tabular hardening document. State:
+
+- this is a dry-run preview foundation only;
+- XLSX mapping remains prohibited by the open flag;
+- only preview rows are mapped;
+- complete-file row validation, authorization/upload UI, persistence, saved templates, idempotent jobs, confirmation, activation, and retrieval are deferred;
+- no imported customer data is persisted by this task.
+
+Do not claim Phase 4D or KNOW-002/003 complete.
+
+### Verification
+
+Run and report exact results for:
+
+- `npm ci`
+- focused mapping and tabular security tests
+- `npm run format:check`
+- `npm run lint`
+- `npm run typecheck`
+- `npm run prisma:validate`
+- fresh test-database `npm run prisma:migrate:deploy`
+- `npm test`
+- `npm run test:integration`
+- `npm run build`
+- `CI=true npm run test:e2e`
+- `npm audit --omit=dev`
+- `git diff --check`
+- successful exact-head GitHub Actions
+
+Missing, skipped, cancelled, unavailable, flaky, or failing checks are not passing.
+
+### Completion
+
+Commit implementation and tests before the completion report. Push only to this active branch. Set `READY_FOR_REVIEW`, record `cursor_implementation_sha`, and provide the files changed, mapping decisions, tests, exact command results, security/privacy evidence, assumptions, remaining risks, and deferred work.
+
+The legacy `cursor_attempt_count` is not the retry budget. ChatGPT owns blocker-set counting. Cursor must preserve `blocker_set_revision`, `blocker_set_signature`, `blocker_attempt_count`, and `blocker_history`.
+
+Do not open or merge a pull request.
 
 <!-- END:outreach-automation -->
