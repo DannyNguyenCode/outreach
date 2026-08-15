@@ -114,6 +114,20 @@ A `CURSOR_WORKING` claim is a renewable 55-minute lease. The remote branch is th
 - End only in one recoverable state: `READY_FOR_REVIEW` after full verification and exact-head CI; resumable `CURSOR_WORKING` with a pushed checkpoint and live lease; retryable `READY_FOR_CURSOR` after discarding unsafe ephemeral work and clearing the lease; or genuine `BLOCKED` for an external, permission, infrastructure, safety, or human-decision blocker.
 - ChatGPT reviews only `READY_FOR_REVIEW`. Preserve blocker-set fields exactly; ChatGPT owns blocker identity, epochs, counters, and history. The legacy `cursor_attempt_count` is not a retry budget.
 
+## Git verification preferences
+
+These rules apply to every implementation, correction, checkpoint, and completion report:
+
+- Treat the committed branch range as the review artifact. A clean working tree alone does not prove committed changes are clean.
+- Before committing, run `git diff --check` to inspect unstaged and staged working-tree changes.
+- After the final implementation commit, resolve the immutable base and final SHAs and run `git diff --check <base_sha>..<final_implementation_sha>`.
+- Use `base_develop_sha` from the active Outreach automation block as `<base_sha>` unless ChatGPT explicitly records a different review base. Use the committed application implementation SHA—not a later AGENTS-only report or review commit—as `<final_implementation_sha>`.
+- If the committed range check fails, fix the reported file, recommit, and rerun the check against the new final implementation SHA.
+- Never report a bare post-commit `git diff --check` as proof that the committed feature range passed; with no working-tree changes, that command can succeed without inspecting earlier commits.
+- Record the exact committed-range command, both SHAs, and its exit result in `cursor_report`.
+- Confirm `git status --short` is empty before setting `READY_FOR_REVIEW`. All meaningful application, test, and documentation work must already be committed and pushed.
+- Exact-head GitHub Actions supplements these local checks; it does not replace committed-range verification when the workflow does not run the same range check.
+
 ## Cursor corrective prompt — complete-file determinism and bounds
 
 ### Objective
