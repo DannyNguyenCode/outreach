@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-csv-import-draft-persistence
 base_develop_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 cursor_implementation_sha: null
 last_reviewed_sha: null
-status: READY_FOR_CURSOR
+status: CURSOR_WORKING
 previous_task_status: MERGED
 previous_pr_number: 15
 previous_develop_merge_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
@@ -33,12 +33,12 @@ consecutive_unchanged_checks: 0
 last_cursor_activity_sha: null
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: null
+cursor_claimed_at: "2026-08-15T22:05:43Z"
 cursor_completed_at: null
 cursor_claim_sha: null
-cursor_lease_id: null
-cursor_lease_expires_at: null
-cursor_heartbeat_at: null
+cursor_lease_id: 67a13c12-d486-44f4-af4d-d2aa03e14343
+cursor_lease_expires_at: "2026-08-15T23:00:43Z"
+cursor_heartbeat_at: "2026-08-15T22:05:43Z"
 cursor_checkpoint_sha: null
 cursor_checkpoint_summary: null
 cursor_resume_count: 0
