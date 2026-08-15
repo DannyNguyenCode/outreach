@@ -17,9 +17,9 @@ task_id: phase-04d-csv-mapping-foundation-001
 phase: "Phase 4D — CSV mapping foundation"
 active_branch: feature/phase-04d-csv-mapping-foundation
 base_develop_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
-cursor_implementation_sha: null
+cursor_implementation_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
 last_reviewed_sha: null
-status: CURSOR_WORKING
+status: READY_FOR_REVIEW
 previous_task_status: MERGED
 previous_pr_number: 13
 previous_develop_merge_sha: e22ad968f58118ffe440292fe575b8b92a4b1d09
@@ -30,16 +30,42 @@ blocker_set_signature: []
 blocker_attempt_count: 0
 blocker_history: []
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: null
+last_cursor_activity_sha: 2ea6271d9959e0045861f760d3f55284c52a126b
 stop_reason: null
 unchanged_check_times: []
 cursor_claimed_at: "2026-08-15T17:10:00Z"
-cursor_completed_at: null
-cursor_report: null
+cursor_completed_at: "2026-08-15T17:38:00Z"
+cursor_report: |
+  Attempt 1 completed at implementation SHA 2ea6271d9959e0045861f760d3f55284c52a126b (claim 5e9842267369dcba18fbf8ee220061e2b5b5deba). Objective: add a server-only CSV column-mapping and bounded dry-run mapped-preview foundation on top of the existing tabular validator without persisting, activating, or importing records.
+  Requirements/acceptance: mapCsvPreview accepts only kind=csv previews whose parser outcome is ready and that have no error-level or security-relevant parser issues. XLSX previews fail closed as unsupported_kind. Mapping identity is the parser's stable one-based sourceColumn. Every source column must be assigned to a knowledge or offering target or explicitly ignored. Duplicate source/target, unknown columns/targets, missing required targets, and cross-family targets are rejected. Knowledge required fields are title, section title, and passage body. Offering required fields are name, offering type, and pricing model. Preview rows keep sourceRowNumber, skip only completely blank rows, parse booleans/ISO dates/enums/decimals/ISO currencies/billing frequencies without locale guessing, distinguish missing vs invalid values, and emit payload-free row issues. Price amount/currency/frequency triples, quote-required vs QUOTE_REQUIRED, FIXED_ONE_TIME vs RECURRING frequency rules, and effectiveUntil-after-effectiveFrom are enforced. MULTI_OPTION and TIERED cannot form a complete single-row draft and receive incompatible_pricing_model. Exact-alias suggestions are returned separately only when unique and are never auto-applied. hasMoreRows is true when totalRowCount exceeds the bounded preview rows inspected. Inputs are not mutated. Mapped customer values appear only in explicit preview values. MR-4D-OOXML-001 remains OPEN; no XLSX mapping path was added.
+  Files changed: lib/orgs/tabular-mapping.ts; lib/orgs/tabular-mapping.test.ts; lib/orgs/tabular-mapping-security.test.ts; docs/phase-4d-csv-mapping-foundation.md; docs/phase-4d-tabular-import-hardening.md (pointer to task 2). No migrations added or changed. No new npm dependencies.
+  Tests added/updated: unit coverage for XLSX rejection, needs_attention/formula_like/hyperlink parser gating, unknown/missing/duplicate/cross-family mappings, sourceColumn identity after header rename, blank-row skip with original row numbers, required/enum/boolean/decimal/currency/frequency/date parsing, incomplete price pairs, invalid effective-date order, pricing-model and quote-required rules, exact-alias and ambiguous-alias suggestions, bounds/hasMoreRows, immutability, and a real validateTabularImport CSV round-trip. Security tests cover payload-free issues, XLSX static errors, and no fetch/database side effects. Existing Phase 4A-4D, tabular validation, and XLSX security tests were not modified and passed.
+  Commands and exact results on this implementation head:
+  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
+  - focused mapping tests: 32 passed; with tabular validation/security: 4 files, 56 passed
+  - npm run format:check: All matched files use Prettier code style
+  - npm run lint: exit 0
+  - npm run typecheck: next typegen + tsc --noEmit succeeded after typing the table-driven fixtures
+  - npm run prisma:validate: schema valid with DATABASE_URL/DIRECT_URL set
+  - fresh DROP/CREATE outreach_ci + npm run prisma:migrate:deploy: 11 migrations applied through Phase 4C
+  - npm test: 30 files, 302 passed
+  - npm run test:integration: 41 files, 488 passed
+  - npm run build: Next.js 16.3.0 compiled successfully
+  - CI=true npm run test:e2e: 16 passed (27.4s)
+  - npm audit --omit=dev: found 0 vulnerabilities
+  - git diff --check: clean
+  - exact-head GitHub Actions run 31898696627 on 2ea6271d9959e0045861f760d3f55284c52a126b: success (format, lint, typecheck, unit/component, integration, production build, E2E)
+  Authorization/tenant isolation: no permission, tenant-scope, upload-route, or storage changes. This module is pure validation and does not query the database.
+  Security/privacy: mapping is server-only and does not import XLSX ZIP/XML helpers. Row issues and thrown errors use static codes/messages only. Malicious cell text, formulas, URLs, and secrets are not echoed. Suggestions never become an applied mapping. Parser formula/link issues fail closed before mapping.
+  Failure/recovery: unready or XLSX previews throw CsvMappingError. Invalid mapped rows remain in the dry-run preview with machine-readable issues and are not persisted. No jobs or storage objects are created.
+  Manual configuration still required: none for this foundation.
+  Assumptions: unmapped quoteRequired on a QUOTE_REQUIRED row defaults to true using existing Phase 4C semantics. Effective dates are strict YYYY-MM-DD calendar dates; timezone/DST conversion remains deferred. Completely blank means every header column is empty after trim.
+  Remaining risks: the mapper is deliberately non-semantic and does not validate the complete file beyond previewRows. MR-4D-OOXML-001 remains OPEN pending Bao's explicit removal instruction.
+  Deferred work: complete-file row validation, mapping UI, saved templates, persistence, confirmation, activation, retrieval, multi-price rows, variants, features, eligibility, custom fields, intervalCount, DST disambiguation, and any XLSX mapping. Phase 5 is untouched. No PR opened; ChatGPT owns the develop merge gate.
 review_findings: null
 required_tests: |
   Add focused deterministic unit/security tests for CSV-only mapping validation, field parsing, row errors, bounds, parser-gate behavior, and output privacy. Run the complete repository verification suite and exact-head GitHub Actions.
-next_action: "Cursor must claim this task, implement only the bounded server-only CSV mapping foundation, verify it completely, and return READY_FOR_REVIEW."
+next_action: "ChatGPT must review the complete branch against the current develop branch."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
