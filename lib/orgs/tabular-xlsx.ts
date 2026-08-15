@@ -117,26 +117,17 @@ export async function parseXlsxWorkbook(
     workbookRels.async("string"),
   ]);
   enforceTabularDeadline(started);
-  rejectUnsafeXml(contentTypes);
-  rejectUnsafeXml(workbook);
-  rejectUnsafeXml(rels);
+  const safeContentTypes = prepareOoxmlXml(contentTypes);
+  const safeWorkbook = prepareOoxmlXml(workbook);
+  const safeRels = prepareOoxmlXml(rels);
 
-  if (/macroEnabled|vbaProject|application\/vnd\.ms-/i.test(contentTypes)) {
+  if (/macroEnabled|vbaProject|application\/vnd\.ms-/i.test(safeContentTypes)) {
     throw invalid("macros", "Macro-enabled spreadsheets are not supported.");
   }
-  if (/encrypted/i.test(contentTypes)) {
+  if (/encrypted/i.test(safeContentTypes)) {
     throw invalid("encrypted", "Encrypted spreadsheets are not supported.");
   }
-  if (
-    !new RegExp(
-      `<Override\\b[^>]*ContentType=["']${escapeRegExp(WORKBOOK_MAIN_TYPE)}["']`,
-      "i",
-    ).test(contentTypes) &&
-    !new RegExp(
-      `<Override\\b[^>]*PartName=["']/xl/workbook\\.xml["'][^>]*ContentType=["']${escapeRegExp(WORKBOOK_MAIN_TYPE)}["']`,
-      "i",
-    ).test(contentTypes)
-  ) {
+  if (!hasCanonicalWorkbookMainType(safeContentTypes)) {
     throw invalid("type_mismatch", "The ZIP is not a standard XLSX workbook.");
   }
 
@@ -152,8 +143,8 @@ export async function parseXlsxWorkbook(
     issues.push(issue("external_link", "warning"));
   }
 
-  const sheetTargets = parseWorkbookRelationships(rels);
-  const sheetRefs = parseWorkbookSheets(workbook, sheetTargets);
+  const sheetTargets = parseWorkbookRelationships(safeRels);
+  const sheetRefs = parseWorkbookSheets(safeWorkbook, sheetTargets);
   if (sheetRefs.length > TABULAR_MAX_SHEETS) {
     throw invalid(
       "too_many_sheets",
@@ -182,8 +173,12 @@ export async function parseXlsxWorkbook(
     }
     const sheetXml = await sheetFile.async("string");
     enforceTabularDeadline(started);
-    rejectUnsafeXml(sheetXml);
-    const parsed = parseWorksheet(sheetXml, info, sharedStrings, started);
+    const parsed = parseWorksheet(
+      prepareOoxmlXml(sheetXml),
+      info,
+      sharedStrings,
+      started,
+    );
     aggregateChars += parsed.aggregateChars;
     if (aggregateChars > TABULAR_MAX_AGGREGATE_CHARS) {
       throw invalid(
@@ -207,8 +202,9 @@ export async function parseXlsxWorkbook(
 
 function parseWorkbookRelationships(relsXml: string): Map<string, string> {
   const byId = new Map<string, string>();
+  const inner = extractElementInner(relsXml, "Relationships") ?? relsXml;
   const pattern = new RegExp(`<${TAG}Relationship\\b([^>]*)/?>`, "gi");
-  for (const match of relsXml.matchAll(pattern)) {
+  for (const match of inner.matchAll(pattern)) {
     const attrs = parseAttrs(match[1] ?? "");
     const type = attrs.Type ?? attrs.type ?? "";
     const id = attrs.Id ?? attrs.ID ?? "";
@@ -234,8 +230,12 @@ function parseWorkbookSheets(
   rels: Map<string, string>,
 ): Array<TabularSheetInfo & { path: string }> {
   const sheets: Array<TabularSheetInfo & { path: string }> = [];
+  const inner = extractElementInner(workbookXml, "sheets");
+  if (inner === null) {
+    return sheets;
+  }
   const pattern = new RegExp(`<${TAG}sheet\\b([^>]*)/?>`, "gi");
-  for (const match of workbookXml.matchAll(pattern)) {
+  for (const match of inner.matchAll(pattern)) {
     const attrs = parseAttrs(match[1] ?? "");
     const name = (attrs.name ?? "").trim();
     const rId = attrs["r:id"] ?? attrs.rId ?? attrs.id ?? "";
@@ -270,13 +270,13 @@ async function readSharedStrings(
   }
   const xml = await file.async("string");
   enforceTabularDeadline(started);
-  rejectUnsafeXml(xml);
+  const safeXml = prepareOoxmlXml(xml);
   const values: string[] = [];
   const siPattern = new RegExp(
     `<${TAG}si\\b[^>]*>([\\s\\S]*?)</${TAG}si>`,
     "gi",
   );
-  for (const match of xml.matchAll(siPattern)) {
+  for (const match of safeXml.matchAll(siPattern)) {
     enforceTabularDeadline(started);
     const body = (match[1] ?? "").replace(
       new RegExp(`<${TAG}rPh\\b[\\s\\S]*?</${TAG}rPh>`, "gi"),
@@ -315,12 +315,13 @@ function parseWorksheet(
   let maxRow = 0;
   let headerColumnCount = 0;
   let minRow = Number.POSITIVE_INFINITY;
+  const cellXml = extractElementInner(sheetXml, "sheetData") ?? "";
   const cellPattern = new RegExp(
     `<${TAG}c\\b([^>]*)(?:/>|>([\\s\\S]*?)</${TAG}c>)`,
     "gi",
   );
   let scanned = 0;
-  for (const match of sheetXml.matchAll(cellPattern)) {
+  for (const match of cellXml.matchAll(cellPattern)) {
     scanned += 1;
     if (scanned % 256 === 0) {
       enforceTabularDeadline(started);
@@ -343,17 +344,21 @@ function parseWorksheet(
     const inner = match[2] ?? "";
     const formula = new RegExp(`<${TAG}f\\b`, "i").test(inner);
     const type = (attrs.t ?? "").toLowerCase();
-    const cachedValue = extractCachedValue(inner, type, sharedStrings);
+    const rawValue = extractCachedValue(inner, type, sharedStrings);
     if (formula) {
       issues.push(
-        issue(cachedValue !== "" ? "cached_formula" : "formula", "warning", {
-          sheetIndex: info.index,
-          sheetName: info.name,
-          row,
-          column,
-        }),
+        issue(
+          rawValue.trim() !== "" ? "cached_formula" : "formula",
+          "warning",
+          {
+            sheetIndex: info.index,
+            sheetName: info.name,
+            row,
+            column,
+          },
+        ),
       );
-    } else if (isFormulaLike(cachedValue)) {
+    } else if (isFormulaLike(rawValue)) {
       issues.push(
         issue("formula_like", "warning", {
           sheetIndex: info.index,
@@ -363,13 +368,21 @@ function parseWorksheet(
         }),
       );
     }
+    const cachedValue = rawValue.trim();
     if (cachedValue.length > TABULAR_MAX_CELL_CHARS) {
       throw invalid(
         "cell_too_long",
         "A spreadsheet cell exceeds the permitted length.",
       );
     }
-    cells.set(`${row}:${column}`, cachedValue);
+    const coordinate = `${row}:${column}`;
+    if (cells.has(coordinate)) {
+      throw invalid(
+        "malformed",
+        "The spreadsheet contains duplicate cell coordinates.",
+      );
+    }
+    cells.set(coordinate, cachedValue);
     maxRow = Math.max(maxRow, row);
     minRow = Math.min(minRow, row);
   }
@@ -413,12 +426,14 @@ function parseWorksheet(
     };
   }
 
-  const headers: string[] = [];
   let aggregateChars = 0;
-  for (let column = 1; column <= headerColumnCount; column += 1) {
-    const value = cells.get(`${minRow}:${column}`) ?? "";
+  for (const value of cells.values()) {
     aggregateChars = addAggregate(aggregateChars, value);
-    headers.push(value);
+  }
+
+  const headers: string[] = [];
+  for (let column = 1; column <= headerColumnCount; column += 1) {
+    headers.push(cells.get(`${minRow}:${column}`) ?? "");
   }
 
   const rows: ParsedTabularRow[] = [];
@@ -427,9 +442,7 @@ function parseWorksheet(
     const rowCells: string[] = [];
     let wider = false;
     for (let column = 1; column <= headerColumnCount; column += 1) {
-      const value = cells.get(`${row}:${column}`) ?? "";
-      aggregateChars = addAggregate(aggregateChars, value);
-      rowCells.push(value);
+      rowCells.push(cells.get(`${row}:${column}`) ?? "");
     }
     for (
       let column = headerColumnCount + 1;
@@ -469,15 +482,15 @@ function extractCachedValue(
   sharedStrings: string[],
 ): string {
   if (type === "inlineStr" || new RegExp(`<${TAG}is\\b`, "i").test(inner)) {
-    return extractTextNodes(inner).trim();
+    return extractTextNodes(inner);
   }
   const valueMatch = new RegExp(
     `<${TAG}v\\b[^>]*>([\\s\\S]*?)</${TAG}v>`,
     "i",
   ).exec(inner);
-  const raw = decodeXmlText(valueMatch?.[1] ?? "").trim();
+  const raw = decodeXmlText(valueMatch?.[1] ?? "");
   if (type === "s") {
-    const index = Number.parseInt(raw, 10);
+    const index = Number.parseInt(raw.trim(), 10);
     if (
       !Number.isInteger(index) ||
       index < 0 ||
@@ -491,7 +504,8 @@ function extractCachedValue(
     return sharedStrings[index] ?? "";
   }
   if (type === "b") {
-    return raw === "1" || raw.toLowerCase() === "true" ? "TRUE" : "FALSE";
+    const flag = raw.trim();
+    return flag === "1" || flag.toLowerCase() === "true" ? "TRUE" : "FALSE";
   }
   return raw;
 }
@@ -583,6 +597,111 @@ function safeXmlChar(code: number): string {
   return String.fromCodePoint(code);
 }
 
+function extractElementInner(xml: string, localName: string): string | null {
+  const pattern = new RegExp(
+    `<${TAG}${localName}\\b[^>]*>([\\s\\S]*?)</${TAG}${localName}>`,
+    "i",
+  );
+  const match = pattern.exec(xml);
+  if (!match) {
+    return null;
+  }
+  return match[1] ?? "";
+}
+
+function hasCanonicalWorkbookMainType(contentTypes: string): boolean {
+  const pattern = new RegExp(`<Override\\b([^>]*)/?>`, "gi");
+  for (const match of contentTypes.matchAll(pattern)) {
+    const attrs = parseAttrs(match[1] ?? "");
+    const partName = (attrs.PartName ?? attrs.partName ?? "")
+      .replaceAll("\\", "/")
+      .toLowerCase();
+    if (partName !== "/xl/workbook.xml") {
+      continue;
+    }
+    const contentType = attrs.ContentType ?? attrs.contentType ?? "";
+    return contentType.toLowerCase() === WORKBOOK_MAIN_TYPE.toLowerCase();
+  }
+  return false;
+}
+
+function prepareOoxmlXml(xml: string): string {
+  const stripped = stripIgnorableXml(xml);
+  rejectUnsafeXml(stripped);
+  return stripped;
+}
+
+function stripIgnorableXml(xml: string): string {
+  let output = "";
+  let index = 0;
+  while (index < xml.length) {
+    if (xml.startsWith("<!--", index)) {
+      const end = xml.indexOf("-->", index + 4);
+      if (end < 0) {
+        throw invalid("malformed", "The spreadsheet XML is malformed.");
+      }
+      const inner = xml.slice(index + 4, end);
+      if (inner.includes("--")) {
+        throw invalid("malformed", "The spreadsheet XML is malformed.");
+      }
+      index = end + 3;
+      continue;
+    }
+    if (xml.startsWith("<![CDATA[", index)) {
+      const end = xml.indexOf("]]>", index + 9);
+      if (end < 0) {
+        throw invalid("malformed", "The spreadsheet XML is malformed.");
+      }
+      output += xml.slice(index, end + 3);
+      index = end + 3;
+      continue;
+    }
+    if (xml.startsWith("<?", index)) {
+      const end = xml.indexOf("?>", index + 2);
+      if (end < 0) {
+        throw invalid("malformed", "The spreadsheet XML is malformed.");
+      }
+      output += xml.slice(index, end + 2);
+      index = end + 2;
+      continue;
+    }
+    if (xml[index] === "<") {
+      const quoted = readXmlTag(xml, index);
+      output += quoted.text;
+      index = quoted.end;
+      continue;
+    }
+    output += xml[index] ?? "";
+    index += 1;
+  }
+  return output;
+}
+
+function readXmlTag(xml: string, start: number): { text: string; end: number } {
+  let index = start + 1;
+  let quote: '"' | "'" | null = null;
+  while (index < xml.length) {
+    const character = xml[index] ?? "";
+    if (quote) {
+      if (character === quote) {
+        quote = null;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      index += 1;
+      continue;
+    }
+    if (character === ">") {
+      return { text: xml.slice(start, index + 1), end: index + 1 };
+    }
+    index += 1;
+  }
+  throw invalid("malformed", "The spreadsheet XML is malformed.");
+}
+
 function rejectUnsafeXml(xml: string): void {
   if (/<!DOCTYPE|<!ENTITY|SYSTEM\s+["']/i.test(xml)) {
     throw invalid(
@@ -601,8 +720,4 @@ function addAggregate(current: number, cell: string): number {
     );
   }
   return next;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

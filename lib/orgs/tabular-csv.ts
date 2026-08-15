@@ -55,10 +55,7 @@ export function parseCsvSheet(
   const headers: string[] = [];
   for (const [index, raw] of headerRecord.entries()) {
     enforceTabularDeadline(started);
-    const cell = normalizeCell(raw);
-    aggregateChars = addAggregate(aggregateChars, cell);
-    headers.push(cell);
-    if (isFormulaLike(cell)) {
+    if (isFormulaLike(raw)) {
       issues.push(
         issue("formula_like", "warning", {
           sheetIndex: 0,
@@ -67,6 +64,9 @@ export function parseCsvSheet(
         }),
       );
     }
+    const cell = normalizeCell(raw);
+    aggregateChars = addAggregate(aggregateChars, cell);
+    headers.push(cell);
   }
 
   const rows: ParsedTabularRow[] = [];
@@ -93,10 +93,8 @@ export function parseCsvSheet(
     }
     const cells: string[] = [];
     for (let column = 0; column < headers.length; column += 1) {
-      const cell = normalizeCell(record[column] ?? "");
-      aggregateChars = addAggregate(aggregateChars, cell);
-      cells.push(cell);
-      if (isFormulaLike(cell)) {
+      const raw = record[column] ?? "";
+      if (isFormulaLike(raw)) {
         issues.push(
           issue("formula_like", "warning", {
             sheetIndex: 0,
@@ -105,6 +103,9 @@ export function parseCsvSheet(
           }),
         );
       }
+      const cell = normalizeCell(raw);
+      aggregateChars = addAggregate(aggregateChars, cell);
+      cells.push(cell);
     }
     rows.push({ sourceRowNumber: recordIndex + 1, cells });
   }
@@ -124,6 +125,7 @@ function parseCsvRecords(text: string, started: number): string[][] {
   let row: string[] = [];
   let field = "";
   let inQuotes = false;
+  let afterQuotedField = false;
   let i = 0;
 
   const pushField = () => {
@@ -157,6 +159,7 @@ function parseCsvRecords(text: string, started: number): string[][] {
           continue;
         }
         inQuotes = false;
+        afterQuotedField = true;
         i += 1;
         continue;
       }
@@ -169,6 +172,12 @@ function parseCsvRecords(text: string, started: number): string[][] {
       }
       i += 1;
       continue;
+    }
+    if (afterQuotedField) {
+      if (character !== "," && character !== "\n" && character !== "\r") {
+        throw invalid("malformed", "The CSV quoting is invalid.");
+      }
+      afterQuotedField = false;
     }
     if (character === '"') {
       if (field.length > 0) {

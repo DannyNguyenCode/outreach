@@ -49,6 +49,7 @@ export async function makeXlsx(options: {
   extras?: Record<string, string | Uint8Array>;
   macroEnabled?: boolean;
   comment?: string;
+  contentTypesXml?: string;
 }): Promise<Uint8Array> {
   const zip = new JSZip();
   const sheets = options.sheets;
@@ -64,7 +65,7 @@ export async function makeXlsx(options: {
 
   zip.file(
     "[Content_Types].xml",
-    contentTypesXml(sheets, options.macroEnabled),
+    options.contentTypesXml ?? contentTypesXml(sheets, options.macroEnabled),
   );
   zip.file(
     "_rels/.rels",
@@ -99,6 +100,25 @@ export async function sampleXlsx(): Promise<Uint8Array> {
       },
     ],
   });
+}
+
+export function misboundWorkbookContentTypesXml(sheetCount: number): string {
+  const sheetOverrides = Array.from({ length: sheetCount }, (_, index) => {
+    const part = `/xl/worksheets/sheet${index + 1}.xml`;
+    const type =
+      index === 0
+        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+    return `<Override PartName="${part}" ContentType="${type}"/>`;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/xml"/>
+  ${sheetOverrides}
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>`;
 }
 
 function contentTypesXml(

@@ -80,14 +80,16 @@ export function issue(
 }
 
 export function isFormulaLike(value: string): boolean {
-  const start = value.trimStart();
-  if (start.startsWith("=") || start.startsWith("@")) {
-    return true;
-  }
-  if (start.startsWith("\t")) {
-    return true;
-  }
-  return /^[+\-].*[()!|]/.test(start);
+  const first = value.charAt(0);
+  return (
+    first === "=" ||
+    first === "+" ||
+    first === "-" ||
+    first === "@" ||
+    first === "\t" ||
+    first === "\r" ||
+    first === "\n"
+  );
 }
 
 export function normalizeHeaderName(name: string): string {

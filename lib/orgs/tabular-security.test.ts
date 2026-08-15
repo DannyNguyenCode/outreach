@@ -50,6 +50,76 @@ describe("tabular validation security", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("flags complete formula-injection prefixes without leaking values", async () => {
+    const csv = await validateTabularImport({
+      bytes: csvBytes(`Name,Payload\nWidget,+1+1\nGadget,-2+3\n`),
+      filename: "prefix.csv",
+      declaredMimeType: CSV_MIME,
+    });
+    expect(csv.outcome).toBe("needs_attention");
+    expect(csv.previewRows.map((row) => row.cells[1])).toEqual([
+      "+1+1",
+      "-2+3",
+    ]);
+    expect(csv.issues.every((item) => item.code === "formula_like")).toBe(true);
+    expect(JSON.stringify(csv.issues)).not.toContain("+1+1");
+    expect(JSON.stringify(csv.issues)).not.toContain("-2+3");
+    expect(JSON.stringify(csv.issues)).not.toContain(SECRET);
+
+    const xlsx = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [
+          {
+            name: "Sheet1",
+            rows: [
+              ["Name", "Payload"],
+              ["Widget", "+1+1"],
+              ["Gadget", "-2+3"],
+              ["Tabbed", `\t${SECRET}`],
+            ],
+          },
+        ],
+      }),
+      filename: "prefix.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(xlsx.outcome).toBe("needs_attention");
+    expect(xlsx.previewRows[2]?.cells[1]).toBe(SECRET);
+    expect(JSON.stringify(xlsx.issues)).not.toContain(SECRET);
+    expect(JSON.stringify(xlsx.issues)).not.toContain("+1+1");
+    expect(xlsx.issues.some((item) => item.code === "formula_like")).toBe(true);
+  });
+
+  it("does not treat commented OOXML markup as workbook data", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const result = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+        extras: {
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>Widget</t></is></c></row>
+    <!-- <c r="A2" t="inlineStr"><is><t>${SECRET}</t></is></c> -->
+    <!-- <hyperlink ref="A2" r:id="rId9"/> -->
+    <!-- <c r="B2"><f>HYPERLINK("${EVIL_URL}","1")</f></c> -->
+  </sheetData>
+  <!-- <mergeCell ref="A1:Z1"/> -->
+</worksheet>`,
+        },
+      }),
+      filename: "comment-inject.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(result.outcome).toBe("ready");
+    expect(result.previewRows[0]?.cells).toEqual(["Widget"]);
+    expect(JSON.stringify(result.issues)).not.toContain(SECRET);
+    expect(JSON.stringify(result.issues)).not.toContain(EVIL_URL);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps safe errors and logs free of file bytes, formulas, URLs, and secrets", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);

