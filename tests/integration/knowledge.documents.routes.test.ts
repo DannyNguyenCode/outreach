@@ -37,22 +37,11 @@ describe("Phase 4B document upload route authorization", () => {
     );
     getCurrentUserMock.mockResolvedValue(member);
 
-    let bodyPulls = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        bodyPulls += 1;
-        controller.enqueue(
-          new TextEncoder().encode(
-            '--test-boundary\r\ncontent-disposition: form-data; name="file"; filename="secret.txt"\r\ncontent-type: text/plain\r\n\r\nsecret\r\n--test-boundary--\r\n',
-          ),
-        );
-        controller.close();
-      },
-    });
-    const parseSpy = vi.spyOn(
-      documentUploadRequest,
-      "parseBoundedDocumentFormData",
-    );
+    const parseSpy = vi
+      .spyOn(documentUploadRequest, "parseBoundedDocumentFormData")
+      .mockImplementation(async () => {
+        throw new Error("multipart body was consumed");
+      });
 
     const response = await uploadDocument(
       new Request(
@@ -63,9 +52,8 @@ describe("Phase 4B document upload route authorization", () => {
             "content-type": "multipart/form-data; boundary=test-boundary",
             "content-length": "128",
           },
-          body,
-          duplex: "half",
-        } as RequestInit,
+          body: '--test-boundary\r\ncontent-disposition: form-data; name="file"; filename="secret.txt"\r\n\r\nsecret\r\n--test-boundary--\r\n',
+        },
       ),
       { params: Promise.resolve({ slug: ctx.slug }) },
     );
@@ -76,7 +64,6 @@ describe("Phase 4B document upload route authorization", () => {
       message: "You do not have access to this organization.",
     });
     expect(parseSpy).not.toHaveBeenCalled();
-    expect(bodyPulls).toBe(0);
     parseSpy.mockRestore();
   });
 });

@@ -619,20 +619,15 @@ export async function claimKnowledgeDocumentJob(
   if (hooks.testAfterJobReservation) {
     await hooks.testAfterJobReservation();
   }
-  try {
-    return await attachClaimedKnowledgeDocumentJob(
-      reserved,
-      {
-        workerId: input.workerId,
-        now,
-        leaseExpiresAt,
-      },
-      hooks,
-    );
-  } catch (error) {
-    if (error instanceof ConflictError) return null;
-    throw error;
-  }
+  return attachClaimedKnowledgeDocumentJob(
+    reserved,
+    {
+      workerId: input.workerId,
+      now,
+      leaseExpiresAt,
+    },
+    hooks,
+  );
 }
 
 async function reserveKnowledgeDocumentJob(input: {
@@ -679,10 +674,11 @@ async function attachClaimedKnowledgeDocumentJob(
   input: { workerId: string; now: Date; leaseExpiresAt: Date },
   hooks: KnowledgeMutationTestHooks,
 ): Promise<
-  KnowledgeDocumentJob & {
-    document: KnowledgeDocument;
-    version: KnowledgeVersion;
-  }
+  | (KnowledgeDocumentJob & {
+      document: KnowledgeDocument;
+      version: KnowledgeVersion;
+    })
+  | null
 > {
   return prisma.$transaction(async (tx) => {
     const graph = await lockKnowledgeWorkerGraphForUpdate(
@@ -711,7 +707,7 @@ async function attachClaimedKnowledgeDocumentJob(
       isInFlightDocumentProcessingState(graph.document?.processingState);
 
     if (!jobStillOurs) {
-      throw new ConflictError();
+      return null;
     }
     if (!graphProcessable) {
       await releaseStaleReservedJob(tx, {
@@ -721,7 +717,7 @@ async function attachClaimedKnowledgeDocumentJob(
         documentState: graph.document?.processingState ?? null,
         versionState: graph.version?.state ?? null,
       });
-      throw new ConflictError();
+      return null;
     }
 
     const claimedDocument = await tx.knowledgeDocument.updateMany({
@@ -742,7 +738,16 @@ async function attachClaimedKnowledgeDocumentJob(
         retryAt: null,
       },
     });
-    if (claimedDocument.count !== 1) throw new ConflictError();
+    if (claimedDocument.count !== 1) {
+      await releaseStaleReservedJob(tx, {
+        reserved,
+        workerId: input.workerId,
+        now: input.now,
+        documentState: graph.document?.processingState ?? null,
+        versionState: graph.version?.state ?? null,
+      });
+      return null;
+    }
 
     return tx.knowledgeDocumentJob.findFirstOrThrow({
       where: {

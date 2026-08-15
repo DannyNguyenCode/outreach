@@ -239,30 +239,55 @@ describe("Phase 4B private document processing", () => {
 
     const mismatched = "b".repeat(64);
     expect(mismatched).not.toBe(uploaded.value.document.binaryChecksum);
-    await prisma.knowledgeDocument.update({
-      where: { id: uploaded.value.document.id },
-      data: {
-        scanState: "CLEAN",
-        finalizedAt: new Date("2026-08-15T00:00:00.000Z"),
-        scannedChecksum: mismatched,
-      },
-    });
+    await prisma.$executeRaw`
+      ALTER TABLE "KnowledgeDocument"
+      DROP CONSTRAINT "KnowledgeDocument_clean_checksum_check"
+    `;
+    try {
+      await prisma.knowledgeDocument.update({
+        where: { id: uploaded.value.document.id },
+        data: {
+          scanState: "CLEAN",
+          finalizedAt: new Date("2026-08-15T00:00:00.000Z"),
+          scannedAt: new Date("2026-08-15T00:00:00.000Z"),
+          scannerName: "test-clean",
+          scannerVersion: "1",
+          scannedChecksum: mismatched,
+        },
+      });
 
-    const signedBefore = storage.signedDownloadCalls;
-    const downloadBefore = storage.downloadCalls;
-    const denied = await createAuthorizedDocumentDownload({
-      actor: ctx.owner,
-      organizationId: ctx.organizationId,
-      sourceId: uploaded.value.source.id,
-      versionId: uploaded.value.version.id,
-      storage,
-    });
-    expect(denied.ok).toBe(false);
-    if (!denied.ok) {
-      expect(denied.reason).toBe("not_confirmable");
+      const signedBefore = storage.signedDownloadCalls;
+      const downloadBefore = storage.downloadCalls;
+      const denied = await createAuthorizedDocumentDownload({
+        actor: ctx.owner,
+        organizationId: ctx.organizationId,
+        sourceId: uploaded.value.source.id,
+        versionId: uploaded.value.version.id,
+        storage,
+      });
+      expect(denied.ok).toBe(false);
+      if (!denied.ok) {
+        expect(denied.reason).toBe("not_confirmable");
+      }
+      expect(storage.signedDownloadCalls).toBe(signedBefore);
+      expect(storage.downloadCalls).toBe(downloadBefore);
+    } finally {
+      await prisma.knowledgeDocument.update({
+        where: { id: uploaded.value.document.id },
+        data: {
+          scanState: "PENDING",
+          scannedChecksum: null,
+          scannedAt: null,
+          scannerName: null,
+          scannerVersion: null,
+        },
+      });
+      await prisma.$executeRaw`
+        ALTER TABLE "KnowledgeDocument"
+        ADD CONSTRAINT "KnowledgeDocument_clean_checksum_check"
+        CHECK ("scanState" <> 'CLEAN' OR ("scannedChecksum" IS NOT NULL AND "scannedChecksum" = "binaryChecksum"))
+      `;
     }
-    expect(storage.signedDownloadCalls).toBe(signedBefore);
-    expect(storage.downloadCalls).toBe(downloadBefore);
   });
 
   it("terminalizes expired leases after the final attempt", async () => {
@@ -351,7 +376,6 @@ describe("Phase 4B private document processing", () => {
         scannerName: "test-clean",
         scannerVersion: "1",
         extract: extractDocument,
-        now: () => new Date("2026-08-14T12:02:00.000Z"),
       },
     });
     expect(recovered).toMatchObject({ claimed: true, outcome: "published" });
