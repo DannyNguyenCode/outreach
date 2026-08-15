@@ -19,7 +19,7 @@ active_branch: feature/phase-04d-tabular-validation-foundation
 base_develop_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
 cursor_implementation_sha: b1d9c35a44d71d008297acfa2a35d86ee91d3ae7
 last_reviewed_sha: null
-status: READY_FOR_REVIEW
+status: CHATGPT_REVIEWING_FOR_DEVELOP
 previous_task_status: MERGED
 previous_pr_number: 10
 previous_develop_merge_sha: d446ca52c1c8397d8b24bf7c2dc009b14800808d
@@ -65,7 +65,7 @@ required_tests: |
   Deterministic normalization tests for BOM, CRLF, quoted fields/newlines, whitespace, stable sheet/header/row ordering, and bounded safe error output.
   Security tests proving no formulas/macros/external links execute and no file content or sensitive row values enter logs/errors.
   Full format, lint, typecheck, unit, integration, Prisma validation, build, E2E, audit, and diff checks.
-next_action: "ChatGPT must review the complete branch against the current develop branch."
+next_action: "Cursor must pause. ChatGPT owns the branch while reviewing the exact remote head for the develop merge gate."
 ```
 
 ## Cursor implementation prompt — Phase 4D task 1
