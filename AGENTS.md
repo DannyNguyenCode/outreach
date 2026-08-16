@@ -19,12 +19,12 @@ active_branch: feature/phase-04d-csv-import-draft-persistence
 base_develop_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 cursor_implementation_sha: null
 last_reviewed_sha: b5b22f7f9d6c497004a7be784475ca09903349b3
-status: READY_FOR_CURSOR
+status: CURSOR_WORKING
 previous_task_status: CHECKPOINT_APPROVED
 previous_pr_number: 15
 previous_develop_merge_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 current_pr_number: 16
-cursor_attempt_count: 0
+cursor_attempt_count: 1
 cursor_attempt_count_legacy: true
 blocker_set_revision: 0
 blocker_set_signature: []
@@ -34,12 +34,12 @@ consecutive_unchanged_checks: 0
 last_cursor_activity_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: null
+cursor_claimed_at: "2026-08-16T15:17:15Z"
 cursor_completed_at: null
 cursor_claim_sha: null
-cursor_lease_id: null
-cursor_lease_expires_at: null
-cursor_heartbeat_at: null
+cursor_lease_id: 212e3b23-8895-4dfb-af04-bbd524454fff
+cursor_lease_expires_at: "2026-08-16T16:12:15Z"
+cursor_heartbeat_at: "2026-08-16T15:17:15Z"
 cursor_checkpoint_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 cursor_checkpoint_summary: "Checkpoint approved: tenant-scoped immutable CSV staging at 50051ae5dc094bf06bb761686e39cb08e6ad5a2e; exact review head b5b22f7f9d6c497004a7be784475ca09903349b3; CI run 31912298810 passed all gates. Continue on the same branch and draft PR #16."
 cursor_resume_count: 0
@@ -49,7 +49,7 @@ review_findings: |
   PRODUCT DECISION: Keep the remaining related Phase 4D work on this same branch and draft PR #16. Outreach will validate structure and supported business formats, but it will not attempt semantic duplicate, near-duplicate, or factual truth arbitration for customer-provided CSV rows. The customer is responsible for reviewing and confirming accuracy. Technical duplicate submissions must still remain idempotent.
 required_tests: |
   Add Vitest unit tests, React Testing Library component tests, database-backed integration/security/concurrency tests, and Playwright E2E for the full customer journey: template download; CSV selection; server validation and preview before persistence; explicit mapping confirmation; complete-file validation; staging; accuracy/authority acknowledgment; atomic confirmation/activation; idempotent retry; active source-backed retrieval; invalid/incomplete recovery; permissions; tenant isolation; accessibility; and no partial activation. Preserve all prior Phase 4 tests and run every repository gate plus exact-head CI.
-next_action: "Cursor must claim the existing branch and implement the combined Phase 4D customer workflow below without opening or merging another PR."
+next_action: "Cursor is implementing the combined Phase 4D CSV customer workflow on feature/phase-04d-csv-import-draft-persistence without opening or merging another PR."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
