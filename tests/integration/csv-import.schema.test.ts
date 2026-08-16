@@ -231,4 +231,76 @@ describe("Phase 4D CSV import schema constraints", () => {
       }),
     ).rejects.toThrow(/immutable/i);
   });
+
+  it("enforces one immutable confirmation receipt per import", async () => {
+    const ctx = await createOrgWithOwner(prisma, "csv-confirm-schema");
+    const mappingJson = JSON.stringify(knowledgeMapping());
+    const created = await prisma.csvImport.create({
+      data: {
+        organizationId: ctx.organizationId,
+        importIdentity: "d".repeat(64),
+        targetFamily: "KNOWLEDGE",
+        status: "READY_TO_CONFIRM",
+        filename: "knowledge.csv",
+        mimeType: "text/csv",
+        byteLength: 12,
+        sourceChecksum: "e".repeat(64),
+        mappingJson,
+        mappingIdentity: mappingJson,
+        validationContractVersion: "csv-import.v1",
+        totalRowCount: 0,
+        nonblankRowCount: 0,
+        validRowCount: 0,
+        invalidRowCount: 0,
+        skippedBlankRowCount: 0,
+        processedRowCount: 0,
+        issueCount: 0,
+        createdByUserId: ctx.owner.id,
+      },
+    });
+    const confirmation = await prisma.csvImportConfirmation.create({
+      data: {
+        organizationId: ctx.organizationId,
+        importId: created.id,
+        importIdentity: created.importIdentity,
+        sourceChecksum: created.sourceChecksum,
+        actorUserId: ctx.owner.id,
+        confirmedAt: new Date(),
+        confirmationLanguageVersion: "csv.import.confirm.v1",
+        targetFamily: "KNOWLEDGE",
+        createdRowCount: 0,
+        resultSummaryJson: JSON.stringify({
+          family: "knowledge",
+          createdRowCount: 0,
+          createdIdentityChecksum: "f".repeat(64),
+        }),
+      },
+    });
+    await expect(
+      prisma.csvImportConfirmation.create({
+        data: {
+          organizationId: ctx.organizationId,
+          importId: created.id,
+          importIdentity: created.importIdentity,
+          sourceChecksum: created.sourceChecksum,
+          actorUserId: ctx.owner.id,
+          confirmedAt: new Date(),
+          confirmationLanguageVersion: "csv.import.confirm.v1",
+          targetFamily: "KNOWLEDGE",
+          createdRowCount: 0,
+          resultSummaryJson: JSON.stringify({
+            family: "knowledge",
+            createdRowCount: 0,
+            createdIdentityChecksum: "f".repeat(64),
+          }),
+        },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.csvImportConfirmation.update({
+        where: { id: confirmation.id },
+        data: { createdRowCount: 9 },
+      }),
+    ).rejects.toThrow(/immutable/i);
+  });
 });

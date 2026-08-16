@@ -1,146 +1,143 @@
-# Phase 4D — CSV Import Draft Persistence Foundation
+# Phase 4D — CSV Import Customer Workflow
 
-Status: Import-stage persistence foundation in progress on `feature/phase-04d-csv-import-draft-persistence`
-Depends on: Phase 4D complete-file mapped validation (`docs/phase-4d-csv-complete-file-validation.md`)
+Status: CSV preview, mapping, immutable staging, confirmation, and activation on `feature/phase-04d-csv-import-draft-persistence`
+Depends on: complete-file mapped validation (`docs/phase-4d-csv-complete-file-validation.md`) and the approved staging checkpoint
 
-This document is the Phase 4D contract for **task 4 only**: a server-only, tenant-scoped, retry-safe snapshot of one complete CSV mapped-validation result. It does not complete Phase 4D, confirmation, activation, or the overall Phase 4 gate.
+This document is the Phase 4D contract for the supported CSV customer journey:
 
-## Task boundary
+`template → upload → preview → explicit mapping → complete validation → stage → review → acknowledgment → confirm/activate → active data`
 
-This foundation:
+Outreach validates file structure, supported CSV format, required fields, mapping, supported field types, price/date/frequency compatibility, authorization, tenant isolation, and confirmation integrity. Outreach does **not** independently determine whether customer-provided business information is factually true. There is no semantic duplicate, near-duplicate, pricing-policy, or factual-verification gate.
 
-- Accepts original CSV bytes, a filename, a declared MIME type, and an untrusted mapping
-- Revalidates those bytes inside `stageCsvImport` by calling `validateMappedCsvFile`
-- Persists one organization-owned import and its immutable ordered row snapshots when validation completed
-- Returns the same import for sequential or concurrent retries of the same organization, source, mapping, and contract
+## Preview versus persistence
 
-It does **not** confirm, activate, edit, list, upload, store raw bytes, or create knowledge/offering domain records.
+`Preview file` sends the original bytes to the server. The server validates them and returns a bounded preview. Preview does **not** create `CsvImport`, `CsvImportRow`, confirmation, knowledge, offering, audit, storage, or job records.
 
-Explicitly deferred:
+Displayed at preview: filename, headers, up to `TABULAR_PREVIEW_ROWS` (50) sample rows, row/column counts, parser issues, required and optional target fields, and mapping controls.
 
-- Customer UI, upload/download routes, and mapping UI
-- Raw-file object storage
-- Saved mapping templates
-- Row editing or issue resolution
-- Duplicate and existing-record conflict detection
-- Confirmation and atomic knowledge/offering activation
-- Background jobs, live connectors, and Phase 5 work
-- XLSX consumption while `MR-4D-OOXML-001` remains OPEN
+XLSX is rejected before any workbook parse. `MR-4D-OOXML-001` remains OPEN. XLSX cannot enter staging, confirmation, or activation.
 
-## Trust boundary
+## Explicit mapping
 
-Callers may supply only:
+Header-name suggestions may be shown. They are never auto-applied. The customer must choose a target or **Ignore this column** for every source column. Required fields must be mapped before complete-file validation. Reordered columns are supported because mapping uses stable one-based source column indexes.
 
-- Authenticated actor context
-- Selected `organizationId`
-- Original CSV bytes
-- Filename and declared MIME type
-- Explicit untrusted mapping
+The server never infers a confirmed mapping from matching header names.
 
-The service must not trust a caller-supplied preview, checksum, import identity, counts, rows, issues, status, or `persistenceEligible` value. `validateMappedCsvFile` is invoked internally. XLSX fails before persistence.
+## Complete-file validation
 
-`csv-parse` still does not validate Outreach business semantics. Zod and the current mapped knowledge/offering validators remain responsible for cell values. Persistence only stores a completed validation snapshot.
+Validate mapped file re-submits the **original bytes plus the explicit mapping**. The server ignores browser preview rows, counts, checksums, issue lists, and mapping identity. `validateMappedCsvFile()` is the only validation path.
 
-## Status meanings
+If validation is incomplete, times out, exceeds file/row/column/cell/aggregate/issue bounds, or has unresolved parser problems, staging and confirmation stay unavailable.
+
+## Immutable staging
+
+`stageCsvImport()` revalidates original bytes, derives source checksum, canonical mapping identity, and import identity, and persists one organization-owned snapshot when validation completed.
 
 | Status | Meaning |
 |---|---|
-| `READY_TO_CONFIRM` | Validation reached EOF with zero row issues. Eligible for a later confirmation task, not confirmed here. |
-| `NEEDS_ATTENTION` | Validation reached EOF with one or more row issues. Reviewable, not confirmable, not activatable. |
+| `READY_TO_CONFIRM` | EOF with zero row issues. Confirmable if under the activation cap. |
+| `NEEDS_ATTENTION` | EOF with row issues. Inspectable, never activatable. |
 
-Incomplete results are never persisted:
+Incomplete results create no records. Duplicate technical submissions return the existing snapshot. The staged header and rows cannot be updated (database triggers). Correcting a CSV or mapping creates a **new** snapshot.
 
-- Timeout, malformed bytes, parser-attention issues, over-limit files, XLSX, or thrown mapping/parser errors
-- `validationComplete === false` or `hasMoreIssues === true`, including issue-cap early stop
+Raw bytes are not stored. Resume uses the persisted snapshot; the original local file is not required after staging.
 
-Those failures create no import, row, or audit record. Partial counts from an incomplete validator result are not stored and must not be treated as exact totals.
+## Resume
 
-## Identity formula and contract version
+Owners/admins with `org.knowledge.manage` can leave and return. Recent imports list filename, target, created date, status, counts, and a continue link without loading every historical row. Detail loads one import's persisted mapping, rows, issues, confirmation, and created records.
 
-The current validation-contract version is `csv-import.v1`.
+A foreign import ID is indistinguishable from missing (`not_found`).
 
-Server-owned import identity is SHA-256 hex of these UTF-8 lines, in order:
+## Acknowledgment and confirmation language
 
-1. Organization ID
-2. Canonical target family (`knowledge` or `offering`)
-3. SHA-256 hex of the original bytes
-4. Canonical mapping identity from `canonicalizeCsvMapping`
-5. Validation-contract version
+The review page requires an unchecked acknowledgment:
 
-Customer cell values, filenames, and caller-supplied identity strings are not part of the identity. Equivalent mappings that differ only in incoming column-array order produce the same identity.
+`I confirm that I am authorized to provide this information and have reviewed it for accuracy.`
 
-A changed file, family, mapping, contract version, or organization produces a different identity. The same file in a different organization is isolated.
+Language version: `csv.import.confirm.v1` (`CSV_IMPORT_CONFIRMATION_LANGUAGE_VERSION`). The accepted version is stored on `CsvImportConfirmation` and on each created knowledge/offering version.
 
-## Schema
+## Confirmation receipt and row provenance
 
-`CsvImport` is the organization-owned header. `CsvImportRow` stores immutable ordered snapshots.
+Forward-only migration `20260816120000_phase_04d_csv_import_confirmation` adds:
 
-Persisted header fields: sanitized filename, canonical `text/csv` MIME, byte length, source checksum, family, canonical mapping JSON/identity, contract version, exact complete counts, status, creator, and created timestamp.
+- `CsvImportConfirmation` — one immutable receipt per staged import
+- `CsvImportKnowledgeRowActivation` — staged row → KnowledgeSource + KnowledgeVersion
+- `CsvImportOfferingRowActivation` — staged row → Offering + OfferingVersion
 
-Persisted row fields: `displayOrder`, `sourceRowNumber`, canonical mapped values JSON, and static machine-readable issues JSON.
+Receipt fields: organizationId, importId, import identity, source checksum, actor, confirmed timestamp, confirmation-language version, target family, created row count, and a canonical result summary (family, count, created-identity checksum). No raw CSV cells.
 
-Raw upload bytes, formulas that failed the parser gate, storage credentials, secrets, stack traces, fetched URLs, and fuzzy suggestions are not stored.
-
-Mapping and row payloads are stored as `TEXT`, not JSONB, because PostgreSQL JSONB does not preserve object insertion order. The service recanonicalizes mapping, values, and issues at the read trust boundary.
-
-Database constraints prevent:
-
-- Cross-organization row attachment (composite FK on `(importId, organizationId)`)
-- Duplicate `displayOrder` or `sourceRowNumber` within one import
-- Impossible status/count combinations
-- Non-CSV MIME types
-- Updates to staged import or row content after creation
-
-Deletes remain available for organization cascade and test reset only.
+Provenance uses organization-scoped composite foreign keys, not an unconstrained JSON array of IDs.
 
 ## Transaction and lock order
 
-CSV import writers use advisory lock `organization-csv-import:<organizationId>` and do **not** acquire Phase 3A readiness, Phase 3B config, Phase 4A/4B knowledge, or Phase 4C offerings locks.
+Confirmation/activation writers:
 
-Write order:
+1. Authenticate; require `org.knowledge.manage`
+2. Require the acknowledgment and expected import identity
+3. Begin transaction (60s timeout)
+4. `organization-csv-import:<organizationId>` advisory lock
+5. Family domain lock: `organization-knowledge:` **or** `organization-offerings:` (never both)
+6. Membership `FOR UPDATE` + permission recheck
+7. `CsvImport` `FOR UPDATE`
+8. Reparse/revalidate stored mapping JSON and row JSON; fail closed if corrupt
+9. Create all domain records as ACTIVE with confirmation evidence
+10. Insert provenance, confirmation receipt, and one `CSV_IMPORT_ACTIVATED` audit
+11. Commit
 
-1. Pre-transaction authorization: authenticated, verified, selected organization, active membership, `org.knowledge.manage`
-2. Internal `validateMappedCsvFile`
-3. Reject incomplete results with no database writes
-4. Open a transaction
-5. Acquire the CSV import advisory lock
-6. Recheck membership and permission with `FOR UPDATE`
-7. Lookup `(organizationId, importIdentity)`
-8. Return the existing import without an audit event, or insert the import, rows, and one `CSV_IMPORT_STAGED` audit event
-9. On a unique-constraint conflict, re-read the existing organization-scoped import and return it without a second audit event
+If any row fails, the transaction rolls back. No partial activation.
 
-## Retry and conflict recovery
+Staging writers still take **only** the CSV import lock and never knowledge/offering locks.
 
-Idempotency is enforced by the unique `(organizationId, importIdentity)` constraint plus the organization-scoped advisory lock. There is no in-memory mutex and no client-provided canonical identity.
+## Activation cap
 
-Sequential retries and truly concurrent retries of the same organization/source/mapping/contract return the same import, the same row set, and a single audit event.
+`CSV_IMPORT_ACTIVATION_MAX_ROWS = 100`
 
-No new serialization library is used. Official `JSON.stringify` on objects rebuilt with a fixed property order is sufficient because mapping entries are sorted by `sourceColumn` (then `target`) before serialization.
+The parser may accept up to `TABULAR_MAX_ROWS - 1` (9,999) data rows for staging. Atomic synchronous activation of that bound is not safe: each knowledge row creates source, version, section, and passage records inside one interactive transaction. 100 matches `CSV_RECORD_BATCH_SIZE` and stays within the 60-second activation transaction. Imports above the cap are rejected **before domain writes**. The staged snapshot remains immutable. Tests cover exact max and max + 1.
 
-## Immutable row representation
+There is no background-job importer in this task.
 
-Rows are stored in source order as `displayOrder` 0..n-1. `sourceRowNumber` remains the original one-based CSV row number. Mapped values are rebuilt in canonical mapping-target order with `{ kind, value }` properties. Issues are rebuilt as `{ sourceRowNumber, sourceColumn, targetField, code }`.
+## Idempotency
 
-Get returns those recanonicalized rows. There is no organization-wide unbounded list in this task.
+Repeated or concurrent confirmation of the same staged import returns the same receipt, the same created IDs, and a single `CSV_IMPORT_ACTIVATED` event. Changed acknowledgment or identity after confirmation cannot mutate the result. Unique `(importId)` on the receipt plus the CSV advisory lock are the concurrency barriers.
 
-## Privacy and audit
+## Audit and privacy
 
-`CSV_IMPORT_STAGED` is emitted only when a new import is created. Metadata may include import ID, family, status, counts, checksum/identity prefixes, and contract version. It must not include raw rows, mapped values, mapping payloads, unsafe path filenames, secrets, or error payloads.
+| Event | When |
+|---|---|
+| `CSV_IMPORT_STAGED` | New staged snapshot only |
+| `CSV_IMPORT_ACTIVATED` | New confirmation receipt only |
 
-Thrown and returned errors stay static and payload-free.
+Activation metadata may include import ID, family, row count, confirmation ID, and truncated identity/checksum prefixes. It must not include raw CSV values, filenames, mapping JSON, or row contents. Customer cells are not placed in URLs, logs, stack traces, or redirect parameters. Formulas are not evaluated. URLs in cells are not fetched.
 
-## Failure recovery
+## Domain activation
 
-| Failure | Persistence | Recovery |
-|---|---|---|
-| Unauthenticated / unverified / inactive / forbidden / wrong organization | None | Correct actor or membership |
-| Timeout / malformed / parser-attention / over-limit / XLSX | None | Supply a new file or mapping |
-| Incomplete / issue-cap early stop | None | File is already invalid; do not treat counts as exact |
-| Unique identity retry | Existing import | Return the original snapshot |
-| Mid-insert exception | Rolled back | No partial import or rows remain |
+**Knowledge.** Each CSV row becomes a new `MANUAL` `CUSTOMER_CONFIRMED_BUSINESS_FACTS` source with one ACTIVE version, one section, and one passage. Checksum, confirmer, timestamp, confirmation-language version, and citation keys are set. Active retrieval uses the existing Phase 4A path immediately.
 
-## Next confirmation dependency
+Supported knowledge fields: title, section title, passage body, optional effective from/until.
 
-A later Phase 4D confirmation task may load one authorized import through `getCsvImport`, require `READY_TO_CONFIRM`, and then create knowledge or offering drafts. That task does not exist yet. Staged `NEEDS_ATTENTION` imports are not confirmable. Incomplete validator results are not reviewable snapshots.
+**Offerings.** Each CSV row becomes a new offering and ACTIVE version using Phase 4C decimal/currency/frequency rules. At most one base price. JavaScript numbers are not authoritative money storage.
 
-`MR-4D-OOXML-001` remains OPEN. This module rejects XLSX and does not consume an XLSX preview.
+Supported offering fields: name, description, offering type, pricing model, quote-required, effective dates, price amount, currency, billing frequency.
+
+Unsupported in this import: multiple prices, variants, features, eligibility, custom fields, interval-count structures, XLSX.
+
+Staged, NEEDS_ATTENTION, failed, and unconfirmed content remain invisible to retrieval.
+
+## Customer factual responsibility
+
+Confirmation publishes the customer's reviewed data. Outreach does not arbitrate whether two rows describe the same real-world offering or policy, whether a price is lawful, or whether a statement is true.
+
+## HTTP/UI
+
+Authenticated route `POST /api/orgs/[slug]/knowledge/csv` handles preview, validate, and stage with a 5 MiB + multipart overhead bound enforced before parsing. Confirm is a server action. Permission: `org.knowledge.manage`.
+
+UI states: empty upload, validating, malformed/size/parser errors, mapping incomplete, complete valid mapping, staging, NEEDS_ATTENTION, READY_TO_CONFIRM, missing acknowledgment, confirming, success, authorization loss, missing import, idempotent retry.
+
+## Exclusions
+
+- XLSX production import (`MR-4D-OOXML-001` OPEN)
+- Semantic duplicate detection
+- Background jobs
+- Saved mapping templates
+- Raw-file object storage
+- Phase 5 connectors

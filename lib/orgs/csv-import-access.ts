@@ -34,6 +34,15 @@ export type CsvImportMutationTestHooks = {
   testAfterTransactionCommit?: () => Promise<void>;
 };
 
+export type CsvImportActivationTestHooks = CsvImportMutationTestHooks & {
+  testBeforeDomainLock?: () => Promise<void>;
+  testAfterDomainLock?: () => Promise<void>;
+  testAfterExistingConfirmationLookup?: () => Promise<void>;
+  testBeforeDomainWrites?: () => Promise<void>;
+  testBeforeActivateRow?: (index: number) => Promise<void>;
+  testBeforeConfirmationInsert?: () => Promise<void>;
+};
+
 export function organizationCsvImportLockKey(organizationId: string): string {
   return `organization-csv-import:${organizationId}`;
 }
@@ -69,4 +78,79 @@ export class CsvImportIncompleteError extends Error {
     super(message);
     this.name = "CsvImportIncompleteError";
   }
+}
+
+export class CsvImportCorruptSnapshotError extends Error {
+  readonly code = "corrupt_snapshot" as const;
+
+  constructor(
+    message = "This import snapshot is inconsistent and cannot be confirmed.",
+  ) {
+    super(message);
+    this.name = "CsvImportCorruptSnapshotError";
+  }
+}
+
+export class CsvImportNotConfirmableError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "CsvImportNotConfirmableError";
+    this.code = code;
+  }
+}
+
+export async function lockCsvImportForUpdate(
+  tx: Prisma.TransactionClient,
+  input: { organizationId: string; importId: string },
+): Promise<{
+  id: string;
+  importIdentity: string;
+  status: string;
+  sourceChecksum: string;
+  targetFamily: string;
+  mappingJson: string;
+  mappingIdentity: string;
+  validationContractVersion: string;
+  validRowCount: number;
+  invalidRowCount: number;
+  issueCount: number;
+  totalRowCount: number;
+} | null> {
+  const rows = await tx.$queryRaw<
+    Array<{
+      id: string;
+      importIdentity: string;
+      status: string;
+      sourceChecksum: string;
+      targetFamily: string;
+      mappingJson: string;
+      mappingIdentity: string;
+      validationContractVersion: string;
+      validRowCount: number;
+      invalidRowCount: number;
+      issueCount: number;
+      totalRowCount: number;
+    }>
+  >`
+    SELECT
+      id,
+      "importIdentity",
+      status::text AS status,
+      "sourceChecksum",
+      "targetFamily"::text AS "targetFamily",
+      "mappingJson",
+      "mappingIdentity",
+      "validationContractVersion",
+      "validRowCount",
+      "invalidRowCount",
+      "issueCount",
+      "totalRowCount"
+    FROM "CsvImport"
+    WHERE id = ${input.importId}
+      AND "organizationId" = ${input.organizationId}
+    FOR UPDATE
+  `;
+  return rows[0] ?? null;
 }

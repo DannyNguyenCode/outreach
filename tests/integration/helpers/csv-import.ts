@@ -124,6 +124,27 @@ export async function countCsvImportAudits(
   });
 }
 
+export async function countCsvActivationAudits(
+  prisma: PrismaClient,
+  organizationId: string,
+) {
+  return prisma.organizationAuditEvent.count({
+    where: { organizationId, action: "CSV_IMPORT_ACTIVATED" },
+  });
+}
+
+export async function seedOrganizationTimeZone(
+  prisma: PrismaClient,
+  organizationId: string,
+  timeZone = "America/Toronto",
+) {
+  await prisma.businessProfile.upsert({
+    where: { organizationId },
+    create: { organizationId, timeZone },
+    update: { timeZone },
+  });
+}
+
 export async function countDomainEntities(
   prisma: PrismaClient,
   organizationId: string,

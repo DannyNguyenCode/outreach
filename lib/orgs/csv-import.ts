@@ -32,6 +32,7 @@ import {
   serializeCanonicalMapping,
   serializeMappedRow,
 } from "@/lib/orgs/csv-import-identity";
+import { CSV_IMPORT_RECENT_LIMIT } from "@/lib/orgs/csv-import-confirmation";
 import {
   validateMappedCsvFile,
   type CsvMappedFileResult,
@@ -62,6 +63,24 @@ export type CsvImportFailure = {
   fieldErrors?: Record<string, string[]>;
 };
 
+export type CsvImportRowView = CsvMappedPreviewRow & {
+  id: string;
+  displayOrder: number;
+};
+
+export type CsvImportListItem = {
+  id: string;
+  filename: string;
+  family: CsvMappingTargetFamily;
+  status: CsvImportStatus;
+  createdAt: Date;
+  totalRowCount: number;
+  validRowCount: number;
+  invalidRowCount: number;
+  issueCount: number;
+  confirmed: boolean;
+};
+
 export type CsvImportView = {
   id: string;
   organizationId: string;
@@ -84,7 +103,7 @@ export type CsvImportView = {
   issueCount: number;
   createdByUserId: string;
   createdAt: Date;
-  rows: CsvMappedPreviewRow[];
+  rows: CsvImportRowView[];
   issues: CsvMappedRowIssue[];
 };
 
@@ -133,6 +152,7 @@ function statusFromCompleteResult(
 function toView(
   record: CsvImportRowModel,
   rowRecords: Array<{
+    id: string;
     displayOrder: number;
     sourceRowNumber: number;
     valuesJson: string;
@@ -144,6 +164,8 @@ function toView(
   const rows = [...rowRecords]
     .sort((left, right) => left.displayOrder - right.displayOrder)
     .map((row) => ({
+      id: row.id,
+      displayOrder: row.displayOrder,
       sourceRowNumber: row.sourceRowNumber,
       values: parseStoredMappedValues(row.valuesJson, mapping),
       issues: parseStoredMappedIssues(row.issuesJson),
@@ -196,6 +218,7 @@ async function loadImportView(
     },
     orderBy: { displayOrder: "asc" },
     select: {
+      id: true,
       displayOrder: true,
       sourceRowNumber: true,
       valuesJson: true,
@@ -509,6 +532,60 @@ export async function getCsvImport(
         ok: false,
         reason: "failed",
         message: "Could not load the CSV import.",
+      }
+    );
+  }
+}
+
+export async function listRecentCsvImports(input: {
+  actor: SafeUser | null;
+  organizationId: string;
+}): Promise<{ ok: true; imports: CsvImportListItem[] } | CsvImportFailure> {
+  try {
+    const actor = requireActor(input.actor);
+    await requireOrganizationPermission({
+      user: actor,
+      organizationId: input.organizationId,
+      permission: MANAGE_PERMISSION,
+    });
+    const records = await prisma.csvImport.findMany({
+      where: { organizationId: input.organizationId },
+      orderBy: { createdAt: "desc" },
+      take: CSV_IMPORT_RECENT_LIMIT,
+      select: {
+        id: true,
+        filename: true,
+        targetFamily: true,
+        status: true,
+        createdAt: true,
+        totalRowCount: true,
+        validRowCount: true,
+        invalidRowCount: true,
+        issueCount: true,
+        confirmation: { select: { id: true } },
+      },
+    });
+    return {
+      ok: true,
+      imports: records.map((record) => ({
+        id: record.id,
+        filename: record.filename,
+        family: toMappingFamily(record.targetFamily),
+        status: record.status,
+        createdAt: record.createdAt,
+        totalRowCount: record.totalRowCount,
+        validRowCount: record.validRowCount,
+        invalidRowCount: record.invalidRowCount,
+        issueCount: record.issueCount,
+        confirmed: Boolean(record.confirmation),
+      })),
+    };
+  } catch (error) {
+    return (
+      mapCsvImportError(error) ?? {
+        ok: false,
+        reason: "failed",
+        message: "Could not load recent CSV imports.",
       }
     );
   }

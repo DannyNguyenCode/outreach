@@ -38,8 +38,8 @@ cursor_claimed_at: "2026-08-16T15:17:15Z"
 cursor_completed_at: null
 cursor_claim_sha: null
 cursor_lease_id: 212e3b23-8895-4dfb-af04-bbd524454fff
-cursor_lease_expires_at: "2026-08-16T16:12:15Z"
-cursor_heartbeat_at: "2026-08-16T15:17:15Z"
+cursor_lease_expires_at: "2026-08-16T16:53:09Z"
+cursor_heartbeat_at: "2026-08-16T15:58:09Z"
 cursor_checkpoint_sha: 50051ae5dc094bf06bb761686e39cb08e6ad5a2e
 cursor_checkpoint_summary: "Checkpoint approved: tenant-scoped immutable CSV staging at 50051ae5dc094bf06bb761686e39cb08e6ad5a2e; exact review head b5b22f7f9d6c497004a7be784475ca09903349b3; CI run 31912298810 passed all gates. Continue on the same branch and draft PR #16."
 cursor_resume_count: 0

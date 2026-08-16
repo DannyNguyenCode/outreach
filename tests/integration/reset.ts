@@ -10,7 +10,9 @@ export async function resetApplicationData(
   await prisma.user.updateMany({ data: { activeOrganizationId: null } });
   await prisma.organizationAuditEvent.deleteMany();
 
-  // Phase 4D CSV import staging (before organization delete)
+  await prisma.csvImportKnowledgeRowActivation.deleteMany();
+  await prisma.csvImportOfferingRowActivation.deleteMany();
+  await prisma.csvImportConfirmation.deleteMany();
   await prisma.csvImportRow.deleteMany();
   await prisma.csvImport.deleteMany();
 
