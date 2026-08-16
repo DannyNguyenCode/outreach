@@ -6,7 +6,7 @@ export function KnowledgeNav({
   canCreate = false,
 }: {
   organizationSlug: string;
-  current: "list" | "new" | "detail" | "offerings" | "sources";
+  current: "list" | "new" | "detail" | "offerings" | "sources" | "import";
   canCreate?: boolean;
 }) {
   const base = `/app/orgs/${organizationSlug}/knowledge`;
@@ -55,6 +55,21 @@ export function KnowledgeNav({
             Runtime sources
           </Link>
         </li>
+        {canCreate ? (
+          <li>
+            <Link
+              href={`${base}/import`}
+              className={[
+                "inline-flex items-center rounded-sm border px-3 py-1.5 text-sm",
+                current === "import"
+                  ? "border-[var(--foreground)] bg-[var(--surface)] font-medium"
+                  : "border-[var(--border)] hover:bg-[var(--background)]",
+              ].join(" ")}
+            >
+              CSV import
+            </Link>
+          </li>
+        ) : null}
         {canCreate ? (
           <li>
             <Link

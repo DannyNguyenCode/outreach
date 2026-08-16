@@ -10,6 +10,12 @@ export async function resetApplicationData(
   await prisma.user.updateMany({ data: { activeOrganizationId: null } });
   await prisma.organizationAuditEvent.deleteMany();
 
+  await prisma.csvImportKnowledgeRowActivation.deleteMany();
+  await prisma.csvImportOfferingRowActivation.deleteMany();
+  await prisma.csvImportConfirmation.deleteMany();
+  await prisma.csvImportRow.deleteMany();
+  await prisma.csvImport.deleteMany();
+
   // Phase 4C (before custom-field definitions and organization delete)
   await prisma.offeringVariantPrice.deleteMany();
   await prisma.offeringCustomValue.deleteMany();

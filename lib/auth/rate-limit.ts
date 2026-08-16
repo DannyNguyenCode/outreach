@@ -40,7 +40,8 @@ export type RateLimitRoute =
   | "config-update"
   | "template-update"
   | "config-3b-update"
-  | "knowledge-update";
+  | "knowledge-update"
+  | "csv-import";
 
 export type RateLimitDecision =
   | { ok: true; remaining: number; resetAt: Date }
@@ -70,6 +71,7 @@ export const ROUTE_LIMITS: Record<RateLimitRoute, RateLimitConfig> = {
   "template-update": { limit: 40, windowMs: 15 * 60 * 1000 },
   "config-3b-update": { limit: 60, windowMs: 15 * 60 * 1000 },
   "knowledge-update": { limit: 60, windowMs: 15 * 60 * 1000 },
+  "csv-import": { limit: 60, windowMs: 15 * 60 * 1000 },
 };
 
 function hmacIdentifier(value: string): string {

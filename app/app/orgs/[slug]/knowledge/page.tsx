@@ -91,6 +91,16 @@ export default async function KnowledgeListPage({
         canCreate={canManage}
       />
 
+      {canManage ? (
+        <p className="text-sm">
+          <Link
+            href={`/app/orgs/${slug}/knowledge/import`}
+            className="underline-offset-2 hover:underline"
+          >
+            Import knowledge or offerings from CSV
+          </Link>
+        </p>
+      ) : null}
       <p className="text-sm">
         <Link
           href={`/app/orgs/${slug}/knowledge/offerings`}

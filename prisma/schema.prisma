@@ -46,6 +46,8 @@ model User {
   offeringsArchived          Offering[]                       @relation("OfferingArchiver")
   offeringVersionsCreated    OfferingVersion[]                @relation("OfferingVersionCreator")
   offeringVersionsConfirmed  OfferingVersion[]                @relation("OfferingVersionConfirmer")
+  csvImportsCreated          CsvImport[]                      @relation("CsvImportCreator")
+  csvImportConfirmations     CsvImportConfirmation[]          @relation("CsvImportConfirmationActor")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -163,6 +165,8 @@ enum OrganizationAuditAction {
   OFFERING_SUPERSEDED
   OFFERING_ARCHIVED
   OFFERING_RESTORED
+  CSV_IMPORT_STAGED
+  CSV_IMPORT_ACTIVATED
 }
 
 enum BusinessType {
@@ -314,6 +318,11 @@ model Organization {
   knowledgeDocumentJobs   KnowledgeDocumentJob[]
   knowledgeDocumentIssues KnowledgeDocumentIssue[]
   offerings               Offering[]
+  csvImports              CsvImport[]
+  csvImportRows           CsvImportRow[]
+  csvImportConfirmations  CsvImportConfirmation[]
+  csvImportKnowledgeRowActivations CsvImportKnowledgeRowActivation[]
+  csvImportOfferingRowActivations  CsvImportOfferingRowActivation[]
 
   @@index([createdAt])
 }
@@ -831,6 +840,7 @@ model KnowledgeSource {
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
   versions         KnowledgeVersion[]
+  csvImportRowActivations CsvImportKnowledgeRowActivation[]
 
   @@unique([id, organizationId])
   @@index([organizationId, archivedAt])
@@ -881,6 +891,7 @@ model KnowledgeVersion {
   document                    KnowledgeDocument?
   documentJobs                KnowledgeDocumentJob[]
   documentIssues              KnowledgeDocumentIssue[]
+  csvImportRowActivations     CsvImportKnowledgeRowActivation[]
 
   @@unique([id, organizationId])
   @@unique([id, organizationId, sourceId])
@@ -1093,6 +1104,7 @@ model Offering {
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   versions         OfferingVersion[]
+  csvImportRowActivations CsvImportOfferingRowActivation[]
 
   @@unique([id, organizationId])
   @@unique([organizationId, legacyServiceId])
@@ -1137,6 +1149,7 @@ model OfferingVersion {
   variants                    OfferingVariant[]
   eligibility                 OfferingEligibility?
   customValues                OfferingCustomValue[]
+  csvImportRowActivations     CsvImportOfferingRowActivation[]
 
   @@unique([id, organizationId])
   @@unique([id, organizationId, offeringId])
@@ -1277,4 +1290,162 @@ model OfferingCustomValue {
   @@unique([versionId, definitionKey])
   @@index([organizationId, versionId])
   @@index([organizationId, definitionId])
+}
+
+/// Phase 4D CSV import staging status. Incomplete/capped/timeout results
+/// are never persisted. Confirmation is recorded on CsvImportConfirmation;
+/// this status is immutable after staging.
+enum CsvImportStatus {
+  READY_TO_CONFIRM
+  NEEDS_ATTENTION
+}
+
+enum CsvImportTargetFamily {
+  KNOWLEDGE
+  OFFERING
+}
+
+/// Organization-owned immutable snapshot of one complete CSV mapped validation.
+/// Identity is server-derived from org, family, source checksum, canonical
+/// mapping identity, and validation-contract version. Raw bytes are not stored.
+/// PostgreSQL also enforces count/status consistency and rejects updates.
+model CsvImport {
+  id                         String                @id @default(cuid())
+  organizationId             String
+  organization               Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  /// SHA-256 hex of the server-owned identity material. Unique per organization.
+  importIdentity             String
+  targetFamily               CsvImportTargetFamily
+  status                     CsvImportStatus
+  filename                   String
+  mimeType                   String
+  byteLength                 Int
+  sourceChecksum             String
+  /// Canonical mapping JSON text. Not JSONB — insertion order is part of the contract.
+  mappingJson                String                @db.Text
+  mappingIdentity            String
+  validationContractVersion  String
+  totalRowCount              Int
+  nonblankRowCount           Int
+  validRowCount              Int
+  invalidRowCount            Int
+  skippedBlankRowCount       Int
+  processedRowCount          Int
+  issueCount                 Int
+  createdByUserId            String
+  createdBy                  User                  @relation("CsvImportCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdAt                  DateTime              @default(now())
+  rows                       CsvImportRow[]
+  confirmation               CsvImportConfirmation?
+  knowledgeRowActivations    CsvImportKnowledgeRowActivation[]
+  offeringRowActivations     CsvImportOfferingRowActivation[]
+
+  @@unique([id, organizationId])
+  @@unique([organizationId, importIdentity])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+}
+
+/// Immutable ordered row snapshot for one staged CSV import.
+/// valuesJson/issuesJson are canonical JSON text so PostgreSQL JSONB cannot
+/// reorder object keys. Composite FK prevents cross-organization attachment.
+model CsvImportRow {
+  id             String      @id @default(cuid())
+  organizationId String
+  importId       String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  import         CsvImport    @relation(fields: [importId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  displayOrder   Int
+  sourceRowNumber Int
+  valuesJson     String      @db.Text
+  issuesJson     String      @db.Text
+  createdAt      DateTime    @default(now())
+  knowledgeActivation CsvImportKnowledgeRowActivation?
+  offeringActivation  CsvImportOfferingRowActivation?
+
+  @@unique([importId, displayOrder])
+  @@unique([importId, sourceRowNumber])
+  @@unique([id, organizationId, importId])
+  @@index([organizationId, importId, displayOrder])
+}
+
+/// Immutable one-to-one confirmation receipt for a staged CSV import.
+/// Domain activation is recorded here and in row provenance; the staged
+/// CsvImport snapshot is never mutated.
+model CsvImportConfirmation {
+  id                          String                @id @default(cuid())
+  organizationId              String
+  importId                    String
+  organization                Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  import                      CsvImport             @relation(fields: [importId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  importIdentity              String
+  sourceChecksum              String
+  actorUserId                 String
+  actor                       User                  @relation("CsvImportConfirmationActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  confirmedAt                 DateTime
+  confirmationLanguageVersion String
+  targetFamily                CsvImportTargetFamily
+  createdRowCount             Int
+  /// Canonical JSON text. Not JSONB — insertion order is part of the contract.
+  resultSummaryJson           String                @db.Text
+  createdAt                   DateTime              @default(now())
+  knowledgeRowActivations     CsvImportKnowledgeRowActivation[]
+  offeringRowActivations      CsvImportOfferingRowActivation[]
+
+  @@unique([importId])
+  @@unique([id, organizationId])
+  @@unique([importId, organizationId])
+  @@index([organizationId, confirmedAt])
+}
+
+/// Organization-scoped provenance from one staged knowledge row to the
+/// exact KnowledgeSource and KnowledgeVersion created at confirmation.
+model CsvImportKnowledgeRowActivation {
+  id                 String                @id @default(cuid())
+  organizationId     String
+  importId           String
+  importRowId        String
+  confirmationId     String
+  knowledgeSourceId  String
+  knowledgeVersionId String
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  import             CsvImport             @relation(fields: [importId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  importRow          CsvImportRow          @relation(fields: [importRowId, organizationId, importId], references: [id, organizationId, importId], onDelete: Cascade)
+  confirmation       CsvImportConfirmation @relation(fields: [confirmationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  knowledgeSource    KnowledgeSource       @relation(fields: [knowledgeSourceId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  knowledgeVersion   KnowledgeVersion      @relation(fields: [knowledgeVersionId, organizationId, knowledgeSourceId], references: [id, organizationId, sourceId], onDelete: Restrict)
+  createdAt          DateTime              @default(now())
+
+  @@unique([importRowId])
+  @@unique([importId, importRowId])
+  @@unique([importRowId, organizationId, importId])
+  @@unique([id, organizationId])
+  @@index([organizationId, importId])
+  @@index([organizationId, knowledgeSourceId])
+}
+
+/// Organization-scoped provenance from one staged offering row to the
+/// exact Offering and OfferingVersion created at confirmation.
+model CsvImportOfferingRowActivation {
+  id                String                @id @default(cuid())
+  organizationId    String
+  importId          String
+  importRowId       String
+  confirmationId    String
+  offeringId        String
+  offeringVersionId String
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  import            CsvImport             @relation(fields: [importId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  importRow         CsvImportRow          @relation(fields: [importRowId, organizationId, importId], references: [id, organizationId, importId], onDelete: Cascade)
+  confirmation      CsvImportConfirmation @relation(fields: [confirmationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  offering          Offering              @relation(fields: [offeringId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  offeringVersion   OfferingVersion       @relation(fields: [offeringVersionId, organizationId, offeringId], references: [id, organizationId, offeringId], onDelete: Restrict)
+  createdAt         DateTime              @default(now())
+
+  @@unique([importRowId])
+  @@unique([importId, importRowId])
+  @@unique([importRowId, organizationId, importId])
+  @@unique([id, organizationId])
+  @@index([organizationId, importId])
+  @@index([organizationId, offeringId])
 }
