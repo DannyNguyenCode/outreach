@@ -18,9 +18,12 @@ import {
   validateCsvImportMapping,
 } from "@/lib/orgs/csv-import-preview";
 import {
+  assertCsvImportContentLength,
   CsvImportRequestError,
   getCsvImportFile,
   parseBoundedCsvImportFormData,
+  parseCsvImportFamily,
+  parseCsvImportIntent,
 } from "@/lib/orgs/csv-import-request";
 import { TABULAR_MIME_BY_KIND } from "@/lib/orgs/tabular-types";
 import { prisma } from "@/lib/prisma";
@@ -29,12 +32,21 @@ export const runtime = "nodejs";
 
 const MANAGE_PERMISSION = "org.knowledge.manage" as const;
 
+/**
+ * CSV preview/validate/stage. Authentication, membership, permission, and
+ * rate limiting run before the multipart body is read so an unauthenticated
+ * or already-limited caller cannot force Outreach to allocate up to ~5 MiB.
+ *
+ * Content-Length is a cheap declared-size gate only. The streaming reader in
+ * `parseBoundedCsvImportFormData` is the authoritative bound.
+ */
 export async function POST(
   request: Request,
   context: { params: Promise<{ slug: string }> },
 ) {
   try {
-    const formData = await parseBoundedCsvImportFormData(request);
+    assertCsvImportContentLength(request);
+
     const user = await getCurrentUser();
     if (!user || !user.emailVerifiedAt) {
       return NextResponse.json(
@@ -94,12 +106,11 @@ export async function POST(
       );
     }
 
+    const formData = await parseBoundedCsvImportFormData(request);
     const file = getCsvImportFile(formData);
+    const intent = parseCsvImportIntent(String(formData.get("intent") ?? ""));
+    const family = parseCsvImportFamily(String(formData.get("family") ?? ""));
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const intent = String(formData.get("intent") ?? "");
-    const familyRaw = String(formData.get("family") ?? "");
-    const family =
-      familyRaw === "offering" ? ("offering" as const) : ("knowledge" as const);
     const declaredMimeType = declaredCsvMime(file);
 
     if (intent === "preview") {
@@ -154,32 +165,28 @@ export async function POST(
       });
     }
 
-    if (intent === "stage") {
-      const result = await stageCsvImport({
-        actor: user,
-        organizationId: membership.organizationId,
-        bytes,
-        filename: file.name,
-        declaredMimeType,
-        mapping,
-      });
-      if (!result.ok) {
-        return failure(result.reason, result.message);
-      }
-      return NextResponse.json({
-        ok: true,
-        created: result.created,
-        importId: result.import.id,
-        status: result.import.status,
-        family: result.import.family,
-        totalRowCount: result.import.totalRowCount,
-        validRowCount: result.import.validRowCount,
-        invalidRowCount: result.import.invalidRowCount,
-        issueCount: result.import.issueCount,
-      });
+    const result = await stageCsvImport({
+      actor: user,
+      organizationId: membership.organizationId,
+      bytes,
+      filename: file.name,
+      declaredMimeType,
+      mapping,
+    });
+    if (!result.ok) {
+      return failure(result.reason, result.message);
     }
-
-    return failure("invalid_request", "The CSV import request is invalid.");
+    return NextResponse.json({
+      ok: true,
+      created: result.created,
+      importId: result.import.id,
+      status: result.import.status,
+      family: result.import.family,
+      totalRowCount: result.import.totalRowCount,
+      validRowCount: result.import.validRowCount,
+      invalidRowCount: result.import.invalidRowCount,
+      issueCount: result.import.issueCount,
+    });
   } catch (error) {
     if (error instanceof CsvImportRequestError) {
       return NextResponse.json(

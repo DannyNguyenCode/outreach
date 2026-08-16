@@ -129,7 +129,13 @@ Confirmation publishes the customer's reviewed data. Outreach does not arbitrate
 
 ## HTTP/UI
 
-Authenticated route `POST /api/orgs/[slug]/knowledge/csv` handles preview, validate, and stage with a 5 MiB + multipart overhead bound enforced before parsing. Confirm is a server action. Permission: `org.knowledge.manage`.
+Authenticated route `POST /api/orgs/[slug]/knowledge/csv` handles preview, validate, and stage. Confirm is a server action. Permission: `org.knowledge.manage`.
+
+Request-boundary order is intentional: a cheap `Content-Length` sanity check runs first, then authentication, organization membership, `org.knowledge.manage`, and the `csv-import` rate limit. Only after those inexpensive gates does the route read, buffer, and parse multipart form data. Unauthenticated or already-limited callers cannot force Outreach to allocate up to the ~5 MiB request maximum.
+
+`Content-Length` is not the actual size bound. Missing, chunked, or spoofed lengths are enforced by the streaming byte counter in `parseBoundedCsvImportFormData`, which stops at `CSV_IMPORT_REQUEST_MAX_BYTES` (`TABULAR_MAX_BYTES` 5 MiB plus 256 KiB multipart overhead). The extracted file is then capped at 5 MiB.
+
+`intent` accepts exactly `preview`, `validate`, and `stage`. `family` accepts exactly `knowledge` and `offering`. Any other value returns static `invalid_request`. Unrecognized family values are not coerced to knowledge.
 
 UI states: empty upload, validating, malformed/size/parser errors, mapping incomplete, complete valid mapping, staging, NEEDS_ATTENTION, READY_TO_CONFIRM, missing acknowledgment, confirming, success, authorization loss, missing import, idempotent retry.
 

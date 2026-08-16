@@ -6,6 +6,12 @@ export const CSV_IMPORT_MULTIPART_OVERHEAD_BYTES = 256 * 1024;
 export const CSV_IMPORT_REQUEST_MAX_BYTES =
   TABULAR_MAX_BYTES + CSV_IMPORT_MULTIPART_OVERHEAD_BYTES;
 
+export const CSV_IMPORT_INTENTS = ["preview", "validate", "stage"] as const;
+export type CsvImportIntent = (typeof CSV_IMPORT_INTENTS)[number];
+
+export const CSV_IMPORT_FAMILIES = ["knowledge", "offering"] as const;
+export type CsvImportFamily = (typeof CSV_IMPORT_FAMILIES)[number];
+
 export class CsvImportRequestError extends Error {
   constructor(
     readonly code: "invalid_request" | "request_too_large",
@@ -18,6 +24,11 @@ export class CsvImportRequestError extends Error {
   }
 }
 
+/**
+ * Cheap declared-size rejection. Missing Content-Length is allowed; the
+ * streaming reader in `parseBoundedCsvImportFormData` is the authoritative
+ * bound for chunked, spoofed, or omitted lengths.
+ */
 export function assertCsvImportContentLength(request: Request): void {
   const raw = request.headers.get("content-length");
   if (raw === null) return;
@@ -41,6 +52,33 @@ export function assertCsvImportContentLength(request: Request): void {
   }
 }
 
+export function parseCsvImportIntent(raw: string): CsvImportIntent {
+  if ((CSV_IMPORT_INTENTS as readonly string[]).includes(raw)) {
+    return raw as CsvImportIntent;
+  }
+  throw new CsvImportRequestError(
+    "invalid_request",
+    400,
+    "The CSV import request is invalid.",
+  );
+}
+
+export function parseCsvImportFamily(raw: string): CsvImportFamily {
+  if ((CSV_IMPORT_FAMILIES as readonly string[]).includes(raw)) {
+    return raw as CsvImportFamily;
+  }
+  throw new CsvImportRequestError(
+    "invalid_request",
+    400,
+    "The CSV import request is invalid.",
+  );
+}
+
+/**
+ * Read at most the CSV request maximum before invoking the platform multipart
+ * parser. Call this only after authentication, membership, permission, and
+ * rate limiting. Content-Length is not the actual body bound.
+ */
 export async function parseBoundedCsvImportFormData(
   request: Request,
 ): Promise<FormData> {
