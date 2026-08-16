@@ -31,7 +31,13 @@ const DATA_TYPES = [
   "PHONE",
 ] as const;
 
-const SCOPES = ["BUSINESS", "OFFERING", "PROSPECT", "KNOWLEDGE"] as const;
+const SCOPES = [
+  "BUSINESS",
+  "OFFERING",
+  "PROSPECT",
+  "CONTACT",
+  "KNOWLEDGE",
+] as const;
 
 export type CustomFieldRow = {
   id: string;

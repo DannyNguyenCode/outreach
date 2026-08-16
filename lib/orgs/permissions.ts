@@ -12,6 +12,9 @@ import type { OrganizationRole } from "@prisma/client";
  *
  * Phase 4A: OWNER/ADMIN get org.knowledge.manage / confirm / archive.
  * MEMBER gets org.knowledge.read (active confirmed knowledge only).
+ *
+ * Phase 5A: OWNER/ADMIN get org.prospects.manage (create, update, archive,
+ * restore, merge). MEMBER gets org.prospects.read only.
  */
 
 export type OrganizationPermission =
@@ -45,7 +48,9 @@ export type OrganizationPermission =
   | "org.knowledge.read"
   | "org.knowledge.manage"
   | "org.knowledge.confirm"
-  | "org.knowledge.archive";
+  | "org.knowledge.archive"
+  | "org.prospects.read"
+  | "org.prospects.manage";
 
 const ROLE_PERMISSIONS: Record<
   OrganizationRole,
@@ -83,6 +88,8 @@ const ROLE_PERMISSIONS: Record<
     "org.knowledge.manage",
     "org.knowledge.confirm",
     "org.knowledge.archive",
+    "org.prospects.read",
+    "org.prospects.manage",
   ]),
   ADMIN: new Set([
     "org.view",
@@ -115,6 +122,8 @@ const ROLE_PERMISSIONS: Record<
     "org.knowledge.manage",
     "org.knowledge.confirm",
     "org.knowledge.archive",
+    "org.prospects.read",
+    "org.prospects.manage",
   ]),
   MEMBER: new Set([
     "org.view",
@@ -126,6 +135,7 @@ const ROLE_PERMISSIONS: Record<
     "org.config.read",
     "org.templates.read",
     "org.knowledge.read",
+    "org.prospects.read",
   ]),
 };
 

@@ -1,12 +1,20 @@
 import { PrismaClient } from "@prisma/client";
 
 /**
- * Wipe Phase 1–4C tables in FK-safe order for integration tests.
+ * Wipe Phase 1–5A tables in FK-safe order for integration tests.
  * Child tables are deleted before Organization.
  */
 export async function resetApplicationData(
   prisma: PrismaClient,
 ): Promise<void> {
+  await prisma.prospectContactCustomValue.deleteMany();
+  await prisma.prospectCustomValue.deleteMany();
+  await prisma.prospectChannel.deleteMany();
+  await prisma.prospectMerge.deleteMany();
+  await prisma.prospectContact.deleteMany();
+  await prisma.prospect.deleteMany({ where: { lifecycle: "MERGED" } });
+  await prisma.prospect.deleteMany();
+
   await prisma.user.updateMany({ data: { activeOrganizationId: null } });
   await prisma.organizationAuditEvent.deleteMany();
 

@@ -57,6 +57,7 @@ export const CUSTOM_FIELD_SCOPES = [
   "BUSINESS",
   "OFFERING",
   "PROSPECT",
+  "CONTACT",
   "KNOWLEDGE",
 ] as const;
 

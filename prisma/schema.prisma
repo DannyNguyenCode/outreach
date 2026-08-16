@@ -48,6 +48,13 @@ model User {
   offeringVersionsConfirmed  OfferingVersion[]                @relation("OfferingVersionConfirmer")
   csvImportsCreated          CsvImport[]                      @relation("CsvImportCreator")
   csvImportConfirmations     CsvImportConfirmation[]          @relation("CsvImportConfirmationActor")
+  prospectsCreated           Prospect[]                       @relation("ProspectCreator")
+  prospectsUpdated           Prospect[]                       @relation("ProspectUpdater")
+  prospectsArchived          Prospect[]                       @relation("ProspectArchiver")
+  prospectsRestored          Prospect[]                       @relation("ProspectRestorer")
+  prospectContactsCreated    ProspectContact[]                @relation("ProspectContactCreator")
+  prospectContactsUpdated    ProspectContact[]                @relation("ProspectContactUpdater")
+  prospectMergesActor        ProspectMerge[]                  @relation("ProspectMergeActor")
 
   @@index([emailVerifiedAt])
   @@index([activeOrganizationId])
@@ -78,7 +85,7 @@ model AuthToken {
 }
 
 /// Database-backed rate-limit counters suitable for serverless runtimes.
-/// bucketKey is a hashed composite identity — never raw email or IP alone.
+/// bucketKey is a hashed composite identity â€” never raw email or IP alone.
 model RateLimitBucket {
   id          String   @id @default(cuid())
   bucketKey   String   @unique
@@ -167,6 +174,14 @@ enum OrganizationAuditAction {
   OFFERING_RESTORED
   CSV_IMPORT_STAGED
   CSV_IMPORT_ACTIVATED
+  PROSPECT_CREATED
+  PROSPECT_UPDATED
+  PROSPECT_ARCHIVED
+  PROSPECT_RESTORED
+  PROSPECT_MERGED
+  CONTACT_CREATED
+  CONTACT_UPDATED
+  CONTACT_ARCHIVED
 }
 
 enum BusinessType {
@@ -240,6 +255,7 @@ enum CustomFieldScope {
   BUSINESS
   OFFERING
   PROSPECT
+  CONTACT
   KNOWLEDGE
 }
 
@@ -323,6 +339,12 @@ model Organization {
   csvImportConfirmations  CsvImportConfirmation[]
   csvImportKnowledgeRowActivations CsvImportKnowledgeRowActivation[]
   csvImportOfferingRowActivations  CsvImportOfferingRowActivation[]
+  prospects               Prospect[]
+  prospectContacts        ProspectContact[]
+  prospectChannels        ProspectChannel[]
+  prospectCustomValues    ProspectCustomValue[]
+  prospectContactCustomValues ProspectContactCustomValue[]
+  prospectMerges          ProspectMerge[]
 
   @@index([createdAt])
 }
@@ -405,7 +427,7 @@ model BusinessProfile {
   /// IANA time zone identifier (e.g. America/Toronto). Never a raw UTC offset.
   timeZone               String?
   businessType           BusinessType?
-  /// Optional remote logo URL only — no file upload in Phase 3A.
+  /// Optional remote logo URL only â€” no file upload in Phase 3A.
   logoUrl                String?
   /// Optimistic concurrency token for profile updates.
   version                Int                     @default(0)
@@ -569,7 +591,7 @@ model OrganizationLocaleSettings {
 }
 
 /// Organization-defined field definitions for later knowledge/CRM phases.
-/// Phase 3B stores definitions only — never prospect or knowledge values.
+/// Phase 3B stores definitions only â€” never prospect or knowledge values.
 model CustomFieldDefinition {
   id              String              @id @default(cuid())
   organizationId  String
@@ -595,6 +617,8 @@ model CustomFieldDefinition {
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
   offeringValues  OfferingCustomValue[]
+  prospectValues  ProspectCustomValue[]
+  contactValues   ProspectContactCustomValue[]
 
   @@unique([organizationId, scope, key])
   @@unique([id, organizationId])
@@ -705,7 +729,7 @@ model OrganizationCallbackPolicy {
 }
 
 /// Recording / transcription / retention / consent policy defaults.
-/// Configuration only — not legal approval; recording/transcription default OFF.
+/// Configuration only â€” not legal approval; recording/transcription default OFF.
 model OrganizationRecordingConsentPolicy {
   id                        String                 @id @default(cuid())
   organizationId            String                 @unique
@@ -713,7 +737,7 @@ model OrganizationRecordingConsentPolicy {
   recordingEnabled          Boolean                @default(false)
   transcriptionEnabled      Boolean                @default(false)
   consentCaptureRequired    Boolean                @default(true)
-  /// Placeholder text for later disclosure workflows — not legal advice.
+  /// Placeholder text for later disclosure workflows â€” not legal advice.
   disclosureTextPlaceholder String?
   /// Retention duration in days within reviewed bounds.
   retentionDays             Int                    @default(30)
@@ -850,7 +874,7 @@ model KnowledgeSource {
 
 /// Immutable confirmed content identity. Drafts may be updated until confirmation.
 /// PostgreSQL (not Prisma) also enforces:
-/// - composite FKs `supersedesVersionId`/`restoredFromVersionId` → (id, organizationId, sourceId)
+/// - composite FKs `supersedesVersionId`/`restoredFromVersionId` â†’ (id, organizationId, sourceId)
 ///   ON DELETE NO ACTION, same organization and same source only
 /// - effectiveUntil > effectiveFrom when both are set
 /// - confirmation fields are all-null or all-present
@@ -1321,7 +1345,7 @@ model CsvImport {
   mimeType                   String
   byteLength                 Int
   sourceChecksum             String
-  /// Canonical mapping JSON text. Not JSONB — insertion order is part of the contract.
+  /// Canonical mapping JSON text. Not JSONB â€” insertion order is part of the contract.
   mappingJson                String                @db.Text
   mappingIdentity            String
   validationContractVersion  String
@@ -1386,7 +1410,7 @@ model CsvImportConfirmation {
   confirmationLanguageVersion String
   targetFamily                CsvImportTargetFamily
   createdRowCount             Int
-  /// Canonical JSON text. Not JSONB — insertion order is part of the contract.
+  /// Canonical JSON text. Not JSONB â€” insertion order is part of the contract.
   resultSummaryJson           String                @db.Text
   createdAt                   DateTime              @default(now())
   knowledgeRowActivations     CsvImportKnowledgeRowActivation[]
@@ -1448,4 +1472,222 @@ model CsvImportOfferingRowActivation {
   @@unique([id, organizationId])
   @@index([organizationId, importId])
   @@index([organizationId, offeringId])
+}
+
+/// Phase 5A prospect identity kind. Not an industry taxonomy.
+enum ProspectKind {
+  BUSINESS
+  INDIVIDUAL
+  HOUSEHOLD
+  ORGANIZATION
+}
+
+/// Phase 5A lifecycle. MERGED is a durable losing-record state, not a delete.
+enum ProspectLifecycle {
+  ACTIVE
+  ARCHIVED
+  MERGED
+}
+
+/// How the prospect entered Outreach. Phase 5A persists MANUAL only.
+/// Later phases may add enum values without redesigning identity columns.
+enum ProspectSourceKind {
+  MANUAL
+}
+
+enum ProspectChannelKind {
+  PHONE
+  EMAIL
+}
+
+enum ProspectContactLifecycle {
+  ACTIVE
+  ARCHIVED
+}
+
+/// Organization-scoped canonical CRM prospect. Not every row is a business.
+model Prospect {
+  id                     String             @id @default(cuid())
+  organizationId         String
+  organization           Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  kind                   ProspectKind       @default(BUSINESS)
+  displayName            String
+  /// Lowercased, punctuation-stripped name used for deterministic matching.
+  searchName             String
+  websiteDisplay         String?
+  /// Lowercased hostname without a leading www. Null when no website.
+  websiteNormalized      String?
+  locationLabel          String?
+  addressLine1           String?
+  addressLine2           String?
+  city                   String?
+  region                 String?
+  postalCode             String?
+  countryCode            String?
+  timeZone               String?
+  sourceKind             ProspectSourceKind @default(MANUAL)
+  /// Reserved for later provenance keys (import id, connector id). Never freeform notes.
+  sourceDetail           String?
+  lifecycle              ProspectLifecycle  @default(ACTIVE)
+  version                Int                @default(0)
+  createdByUserId        String
+  createdBy              User               @relation("ProspectCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUserId        String
+  updatedBy              User               @relation("ProspectUpdater", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  archivedAt             DateTime?
+  archivedByUserId       String?
+  archivedBy             User?              @relation("ProspectArchiver", fields: [archivedByUserId], references: [id], onDelete: SetNull)
+  restoredAt             DateTime?
+  restoredByUserId       String?
+  restoredBy             User?              @relation("ProspectRestorer", fields: [restoredByUserId], references: [id], onDelete: SetNull)
+  mergedAt               DateTime?
+  mergedIntoProspectId   String?
+  mergedInto             Prospect?          @relation("ProspectMergeSurvivor", fields: [mergedIntoProspectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  mergedFrom             Prospect[]         @relation("ProspectMergeSurvivor")
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  contacts               ProspectContact[]
+  channels               ProspectChannel[]
+  customValues           ProspectCustomValue[]
+  contactCustomValues    ProspectContactCustomValue[]
+  mergesAsSurvivor       ProspectMerge[]    @relation("ProspectMergeSurvivorRecord")
+  mergesAsDuplicate      ProspectMerge[]    @relation("ProspectMergeDuplicateRecord")
+  /// Self-merge and MERGED-without-survivor checks live in the migration.
+
+  @@unique([id, organizationId])
+  @@index([organizationId, lifecycle, updatedAt])
+  @@index([organizationId, searchName])
+  @@index([organizationId, websiteNormalized])
+  @@index([organizationId, sourceKind])
+  @@index([mergedIntoProspectId, organizationId])
+}
+
+/// Person associated with a prospect. One prospect may have many contacts.
+model ProspectContact {
+  id                  String                    @id @default(cuid())
+  organizationId      String
+  prospectId          String
+  organization        Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospect            Prospect                  @relation(fields: [prospectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  firstName           String
+  lastName            String
+  displayName         String
+  title               String?
+  /// BCP 47 language tag when provided.
+  preferredLanguage   String?
+  lifecycle           ProspectContactLifecycle  @default(ACTIVE)
+  isPrimary           Boolean                   @default(false)
+  version             Int                       @default(0)
+  createdByUserId     String
+  createdBy           User                      @relation("ProspectContactCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  updatedByUserId     String
+  updatedBy           User                      @relation("ProspectContactUpdater", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  archivedAt          DateTime?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  channels            ProspectChannel[]
+  customValues        ProspectContactCustomValue[]
+
+  @@unique([id, organizationId])
+  @@unique([id, organizationId, prospectId])
+  @@index([organizationId, prospectId, isPrimary])
+  @@index([organizationId, prospectId, lifecycle])
+}
+
+/// Canonical phone or email point. Future channel kinds can extend the enum.
+/// A null contactId means the channel belongs to the prospect itself.
+model ProspectChannel {
+  id               String               @id @default(cuid())
+  organizationId   String
+  prospectId       String
+  contactId        String?
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospect         Prospect             @relation(fields: [prospectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact          ProspectContact?     @relation(fields: [contactId, organizationId, prospectId], references: [id, organizationId, prospectId], onDelete: Restrict)
+  kind             ProspectChannelKind
+  /// User-facing label such as work, mobile, or main office.
+  label            String?
+  displayValue     String
+  normalizedValue  String
+  isPrimary        Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([id, organizationId])
+  @@index([organizationId, kind, normalizedValue])
+  @@index([organizationId, prospectId])
+  @@index([organizationId, contactId])
+}
+
+/// Typed custom values bound to Phase 3B PROSPECT-scoped field definitions.
+model ProspectCustomValue {
+  id             String                 @id @default(cuid())
+  organizationId String
+  prospectId     String
+  definitionId   String
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospect       Prospect               @relation(fields: [prospectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  definition     CustomFieldDefinition  @relation(fields: [definitionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  definitionKey  String
+  stringValue    String?
+  numberValue    Decimal?               @db.Decimal(19, 4)
+  booleanValue   Boolean?
+  dateValue      DateTime?              @db.Timestamptz(3)
+  jsonValue      Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([prospectId, definitionId])
+  @@unique([id, organizationId])
+  @@index([organizationId, prospectId])
+  @@index([organizationId, definitionId])
+}
+
+/// Typed custom values bound to CONTACT-scoped field definitions.
+model ProspectContactCustomValue {
+  id             String                 @id @default(cuid())
+  organizationId String
+  prospectId     String
+  contactId      String
+  definitionId   String
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prospect       Prospect               @relation(fields: [prospectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  contact        ProspectContact        @relation(fields: [contactId, organizationId, prospectId], references: [id, organizationId, prospectId], onDelete: Restrict)
+  definition     CustomFieldDefinition  @relation(fields: [definitionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  definitionKey  String
+  stringValue    String?
+  numberValue    Decimal?               @db.Decimal(19, 4)
+  booleanValue   Boolean?
+  dateValue      DateTime?              @db.Timestamptz(3)
+  jsonValue      Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@unique([contactId, definitionId])
+  @@unique([id, organizationId])
+  @@index([organizationId, contactId])
+  @@index([organizationId, prospectId])
+  @@index([organizationId, definitionId])
+}
+
+/// Immutable merge receipt. The losing prospect row is preserved as MERGED.
+model ProspectMerge {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  survivorProspectId   String
+  mergedProspectId     String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  survivor             Prospect     @relation("ProspectMergeSurvivorRecord", fields: [survivorProspectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  merged               Prospect     @relation("ProspectMergeDuplicateRecord", fields: [mergedProspectId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  actorUserId          String
+  actor                User         @relation("ProspectMergeActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  /// Canonical JSON text of explicit field resolutions. Not JSONB.
+  fieldResolutionsJson String       @db.Text
+  createdAt            DateTime     @default(now())
+
+  @@unique([mergedProspectId])
+  @@unique([id, organizationId])
+  @@unique([organizationId, mergedProspectId])
+  @@index([organizationId, survivorProspectId])
+  @@index([organizationId, createdAt])
 }

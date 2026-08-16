@@ -139,4 +139,13 @@ describe("organization permissions", () => {
     expect(roleHasPermission("MEMBER", "org.knowledge.confirm")).toBe(false);
     expect(roleHasPermission("MEMBER", "org.knowledge.archive")).toBe(false);
   });
+
+  it("grants Phase 5A prospect permissions by role", () => {
+    expect(roleHasPermission("OWNER", "org.prospects.read")).toBe(true);
+    expect(roleHasPermission("OWNER", "org.prospects.manage")).toBe(true);
+    expect(roleHasPermission("ADMIN", "org.prospects.read")).toBe(true);
+    expect(roleHasPermission("ADMIN", "org.prospects.manage")).toBe(true);
+    expect(roleHasPermission("MEMBER", "org.prospects.read")).toBe(true);
+    expect(roleHasPermission("MEMBER", "org.prospects.manage")).toBe(false);
+  });
 });
