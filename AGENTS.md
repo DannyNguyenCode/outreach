@@ -19,59 +19,37 @@ active_branch: feature/phase-04d-csv-import-draft-persistence
 base_develop_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 cursor_implementation_sha: 737cfc7204237a6513477b5c6709ad719b041c37
 last_reviewed_sha: b5b22f7f9d6c497004a7be784475ca09903349b3
-status: READY_FOR_REVIEW
+status: CURSOR_WORKING
 previous_task_status: CHECKPOINT_APPROVED
 previous_pr_number: 15
 previous_develop_merge_sha: 60ceecfbc472835faf6212601a0732f4f1b12371
 current_pr_number: 16
-cursor_attempt_count: 1
+cursor_attempt_count: 2
 cursor_attempt_count_legacy: true
 blocker_set_revision: 0
 blocker_set_signature: []
 blocker_attempt_count: 0
 blocker_history: []
 consecutive_unchanged_checks: 0
-last_cursor_activity_sha: 737cfc7204237a6513477b5c6709ad719b041c37
+last_cursor_activity_sha: 29a08e8337670447c521314a2200bbbcf498a2d8
 stop_reason: null
 unchanged_check_times: []
-cursor_claimed_at: "2026-08-16T15:17:15Z"
-cursor_completed_at: "2026-08-16T16:06:00Z"
-cursor_claim_sha: e28620d20e91128adcc62a143bd19b49d20d69cc
-cursor_lease_id: 212e3b23-8895-4dfb-af04-bbd524454fff
-cursor_lease_expires_at: "2026-08-16T16:53:09Z"
-cursor_heartbeat_at: "2026-08-16T16:06:00Z"
+cursor_claimed_at: "2026-08-16T18:23:51Z"
+cursor_completed_at: null
+cursor_claim_sha: 29a08e8337670447c521314a2200bbbcf498a2d8
+cursor_lease_id: 1e78c0c3-6fcc-4ba6-8114-d98ef94c3b1d
+cursor_lease_expires_at: "2026-08-16T19:18:51Z"
+cursor_heartbeat_at: "2026-08-16T18:23:51Z"
 cursor_checkpoint_sha: 737cfc7204237a6513477b5c6709ad719b041c37
-cursor_checkpoint_summary: "CSV customer workflow implemented on the approved immutable staging snapshot: preview without persistence, explicit mapping, complete-file validation, stageCsvImport, acknowledgment, CsvImportConfirmation plus row provenance, atomic knowledge/offering activation with cap 100, and exact-head CI success on 737cfc7204237a6513477b5c6709ad719b041c37 (push run 31957343158, PR run 31957347694)."
+cursor_checkpoint_summary: "CSV customer workflow implemented on the approved immutable staging snapshot at 737cfc7204237a6513477b5c6709ad719b041c37. Attempt 2: reorder CSV multipart consumption after authentication, membership, permission, and rate limiting; reject invalid family/intent fail-closed."
 cursor_resume_count: 0
-cursor_report: |
-  Attempt 1 completed at implementation SHA 737cfc7204237a6513477b5c6709ad719b041c37. Objective: complete the remaining Phase 4D CSV customer journey on the approved immutable staging architecture without redesigning persistence or opening another PR.
-  Requirements/acceptance: template → preview original bytes (no persistence) → explicit mapping (suggestions not auto-applied) → complete-file validation via validateMappedCsvFile → stageCsvImport → resume/review snapshot → unchecked acknowledgment csv.import.confirm.v1 → atomic confirm/activate with CsvImportConfirmation and organization-scoped row provenance → ACTIVE knowledge/offering retrieval. NEEDS_ATTENTION never activatable. XLSX rejected. Activation cap 100. Foreign import IDs indistinguishable from missing.
-  Files changed: prisma/schema.prisma and migration 20260816120000_phase_04d_csv_import_confirmation; lib/orgs/csv-import-preview.ts, csv-import-request.ts, csv-import-activation.ts, csv-import-knowledge.ts, csv-import-offering.ts, csv-import-confirmation.ts, csv-import-access.ts, csv-import.ts; app/api/orgs/[slug]/knowledge/csv/route.ts; app/actions/csv-import.ts; import UI pages and workflow/review/recent-list components; tests (unit, RTL, integration, concurrency, E2E); docs/phase-4d-csv-import-draft-persistence.md. Staging migration 20260815220000 unchanged. No new npm dependencies.
-  Commands and exact results on this implementation head:
-  - npm ci: added 553 packages, audited 554, 0 vulnerabilities
-  - npx prisma generate: Prisma Client v6.19.3
-  - npm run format:check: CI Format check success (local Windows checkout reports CRLF on unchanged files; Linux CI is the gate)
-  - npm run lint: exit 0
-  - npm run typecheck: next typegen + tsc --noEmit succeeded
-  - npm run prisma:validate: schema valid
-  - fresh DROP SCHEMA public CASCADE + CREATE SCHEMA public + npm run prisma:migrate:deploy: 13 migrations applied through 20260816120000_phase_04d_csv_import_confirmation
-  - npm test: 37 files, 372 passed
-  - npm run test:integration: 48 files, 513 passed
-  - npm run build: Next.js 16.3.0 compiled successfully; /knowledge/import and /knowledge/import/[importId] routes present
-  - CI=true npm run test:e2e: 17 passed (30.1s) including csv-import.spec.ts
-  - npm audit --omit=dev: found 0 vulnerabilities
-  - git diff --check 60ceecfb..737cfc7: clean
-  - Exact-head CI push run 31957343158 SUCCESS; PR run 31957347694 SUCCESS
-  Authorization/tenant isolation: org.knowledge.manage outside and inside the transaction; foreign import IDs return the same not_found as missing; inactive membership and wrong permission denied; no partial activation.
-  Security/privacy: original bytes revalidated; mapping identity server-derived; audit metadata has IDs/counts/prefixes only; XLSX rejected before workbook parse; formulas not evaluated; URLs not fetched. MR-4D-OOXML-001 remains OPEN.
-  Remaining risks: dated CSV rows require an organization time zone at activation (missing timezone is not_confirmable, not a corrupt snapshot). Synchronous activation is capped at 100 rows. No additional blocking correctness/security issues were discovered.
-  No PR opened or merged; draft PR #16 remains. This is the Cursor completion report for the customer workflow.
+cursor_report: null
 review_findings: |
   PASS: CSV persistence checkpoint 50051ae5dc094bf06bb761686e39cb08e6ad5a2e is a clean ancestor of review head b5b22f7f9d6c497004a7be784475ca09903349b3; later commits changed AGENTS.md only; the branch is 0 behind develop. Original bytes are revalidated server-side; incomplete, malformed, capped, timeout, parser-attention, over-limit, and XLSX inputs create no records. Organization-scoped composite keys, immutable triggers, permission rechecks, deterministic concurrent idempotency, audit deduplication, rollback, and zero active knowledge/offering visibility are covered. Committed-range git diff --check passed. Exact-head CI run 31912298810 passed dependency install, Prisma generation/validation/migrations, format, lint, typecheck, unit/component, integration, build, and 16 E2E tests.
   PRODUCT DECISION: Keep the remaining related Phase 4D work on this same branch and draft PR #16. Outreach will validate structure and supported business formats, but it will not attempt semantic duplicate, near-duplicate, or factual truth arbitration for customer-provided CSV rows. The customer is responsible for reviewing and confirming accuracy. Technical duplicate submissions must still remain idempotent.
 required_tests: |
   Add Vitest unit tests, React Testing Library component tests, database-backed integration/security/concurrency tests, and Playwright E2E for the full customer journey: template download; CSV selection; server validation and preview before persistence; explicit mapping confirmation; complete-file validation; staging; accuracy/authority acknowledgment; atomic confirmation/activation; idempotent retry; active source-backed retrieval; invalid/incomplete recovery; permissions; tenant isolation; accessibility; and no partial activation. Preserve all prior Phase 4 tests and run every repository gate plus exact-head CI.
-next_action: "ChatGPT owns review of draft PR #16 at implementation SHA 737cfc7204237a6513477b5c6709ad719b041c37. Do not merge. Do not open another PR."
+next_action: "Cursor is fixing CSV multipart request-boundary ordering and fail-closed family/intent validation on feature/phase-04d-csv-import-draft-persistence without opening or merging another PR."
 manual_review_flags:
   - id: MR-4D-OOXML-001
     status: OPEN
