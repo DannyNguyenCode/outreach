@@ -1,8 +1,8 @@
 # Phase 5A — Prospect and contact core
 
-Status: implemented on `feature/phase-05a-prospect-contact-core`  
-Started from `develop` `cc5d1490ffbce817c86ac68a6809bea463fb5ead`  
-Related: `requirements.md` CRM-001; `outreach-implementation-phases.md` Phase 5A
+Status: implemented on `feature/phase-05a-prospect-contact-core`.
+Started from `develop` `cc5d1490ffbce817c86ac68a6809bea463fb5ead`.
+Related: `requirements.md` CRM-001; `outreach-implementation-phases.md` Phase 5A.
 
 Phase 5A establishes organization-scoped CRM identity. It does **not** decide whether Outreach may call, SMS, or email anyone. A stored phone or email is a record, not consent. Phase 5B owns contact policy.
 
