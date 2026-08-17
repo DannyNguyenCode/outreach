@@ -290,4 +290,51 @@ describe("Phase 5A prospect merge", () => {
     ]);
     expect([mergeResult.ok, updateResult.ok].filter(Boolean).length).toBe(1);
   });
+
+  it("rejects updates to a merge receipt and leaves the stored row unchanged", async () => {
+    const { ctx, survivorId, duplicateId } = await seedPair();
+    const merged = await mergeProspects({
+      actor: ctx.owner,
+      organizationId: ctx.organizationId,
+      survivorProspectId: survivorId,
+      duplicateProspectId: duplicateId,
+      expectedSurvivorVersion: 0,
+      expectedDuplicateVersion: 0,
+      resolutions: { displayName: "survivor", website: "survivor" },
+    });
+    expect(merged.ok).toBe(true);
+    const receipt = await prisma.prospectMerge.findFirstOrThrow({
+      where: {
+        organizationId: ctx.organizationId,
+        mergedProspectId: duplicateId,
+      },
+    });
+    const before = {
+      id: receipt.id,
+      organizationId: receipt.organizationId,
+      survivorProspectId: receipt.survivorProspectId,
+      mergedProspectId: receipt.mergedProspectId,
+      actorUserId: receipt.actorUserId,
+      fieldResolutionsJson: receipt.fieldResolutionsJson,
+      createdAt: receipt.createdAt.toISOString(),
+    };
+    await expect(
+      prisma.prospectMerge.update({
+        where: { id: receipt.id },
+        data: { fieldResolutionsJson: "{}" },
+      }),
+    ).rejects.toThrow();
+    const after = await prisma.prospectMerge.findUniqueOrThrow({
+      where: { id: receipt.id },
+    });
+    expect({
+      id: after.id,
+      organizationId: after.organizationId,
+      survivorProspectId: after.survivorProspectId,
+      mergedProspectId: after.mergedProspectId,
+      actorUserId: after.actorUserId,
+      fieldResolutionsJson: after.fieldResolutionsJson,
+      createdAt: after.createdAt.toISOString(),
+    }).toEqual(before);
+  });
 });

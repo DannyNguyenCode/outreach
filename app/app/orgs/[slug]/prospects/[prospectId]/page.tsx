@@ -5,8 +5,11 @@ import { notFound } from "next/navigation";
 import {
   AddChannelForm,
   AddContactForm,
+  ArchiveChannelForm,
+  ArchiveContactForm,
   ProspectArchiveForm,
   ProspectRestoreForm,
+  RestoreContactForm,
 } from "@/components/orgs/prospects/prospect-lifecycle-forms";
 import { ProspectNav } from "@/components/orgs/prospects/prospect-nav";
 import { requireVerifiedUser } from "@/lib/auth/session";
@@ -153,15 +156,35 @@ export default async function ProspectDetailPage({ params }: PageProps) {
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Prospect communication points</h2>
+        <p className="text-sm text-[var(--muted)]">
+          A stored phone or email is a record, not permission to call, SMS, or
+          email. Retiring a communication point archives it so later consent
+          history can keep the same identity.
+        </p>
         {prospect.channels.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">None.</p>
         ) : (
           <ul className="text-sm">
             {prospect.channels.map((channel) => (
-              <li key={channel.id}>
-                {channel.kind.toLowerCase()}
-                {channel.label ? ` (${channel.label})` : ""}:{" "}
-                {channel.displayValue}
+              <li
+                key={channel.id}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <span>
+                  {channel.kind.toLowerCase()}
+                  {channel.label ? ` (${channel.label})` : ""}:{" "}
+                  {channel.displayValue}
+                  {channel.lifecycle === "ARCHIVED" ? " (archived)" : ""}
+                </span>
+                {editable && channel.lifecycle === "ACTIVE" ? (
+                  <ArchiveChannelForm
+                    organizationSlug={slug}
+                    prospectId={prospect.id}
+                    channelId={channel.id}
+                    expectedVersion={prospect.version}
+                    label="Retire communication point"
+                  />
+                ) : null}
               </li>
             ))}
           </ul>
@@ -178,31 +201,101 @@ export default async function ProspectDetailPage({ params }: PageProps) {
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Contacts</h2>
+        <p className="text-sm text-[var(--muted)]">
+          Archived contacts stay visible as history. Restore a contact before
+          editing it. At most one active contact can be primary; archiving the
+          primary leaves the prospect without a primary until one is set.
+        </p>
         {prospect.contacts.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">No contacts yet.</p>
         ) : (
           <ul className="space-y-4">
-            {prospect.contacts.map((contact) => (
-              <li
-                key={contact.id}
-                className="rounded-sm border border-[var(--border)] p-3"
-              >
-                <p className="font-medium">
-                  {contact.displayName}
-                  {contact.title ? ` — ${contact.title}` : ""}
-                  {contact.isPrimary ? " (primary)" : ""}
-                </p>
-                <ul className="mt-2 text-sm">
-                  {contact.channels.map((channel) => (
-                    <li key={channel.id}>
-                      {channel.kind.toLowerCase()}
-                      {channel.label ? ` (${channel.label})` : ""}:{" "}
-                      {channel.displayValue}
-                    </li>
-                  ))}
-                </ul>
-              </li>
-            ))}
+            {prospect.contacts.map((contact) => {
+              const contactEditable =
+                editable && contact.lifecycle === "ACTIVE";
+              return (
+                <li
+                  key={contact.id}
+                  className="rounded-sm border border-[var(--border)] p-3"
+                >
+                  <p className="font-medium">
+                    {contact.displayName}
+                    {contact.title ? ` — ${contact.title}` : ""}
+                    {contact.isPrimary ? " (primary)" : ""}
+                    {contact.lifecycle === "ARCHIVED" ? " (archived)" : ""}
+                  </p>
+                  {contact.customValues.length > 0 ? (
+                    <ul className="mt-2 text-sm">
+                      {contact.customValues.map((value) => (
+                        <li key={value.definitionKey}>
+                          {value.label}: {value.displayValue}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  <ul className="mt-2 text-sm">
+                    {contact.channels.map((channel) => (
+                      <li
+                        key={channel.id}
+                        className="flex flex-wrap items-center gap-2"
+                      >
+                        <span>
+                          {channel.kind.toLowerCase()}
+                          {channel.label ? ` (${channel.label})` : ""}:{" "}
+                          {channel.displayValue}
+                          {channel.lifecycle === "ARCHIVED"
+                            ? " (archived)"
+                            : ""}
+                        </span>
+                        {contactEditable && channel.lifecycle === "ACTIVE" ? (
+                          <ArchiveChannelForm
+                            organizationSlug={slug}
+                            prospectId={prospect.id}
+                            channelId={channel.id}
+                            expectedVersion={contact.version}
+                            label="Retire communication point"
+                          />
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  {contactEditable ? (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-sm">
+                        <Link
+                          href={`/app/orgs/${slug}/prospects/${prospect.id}/contacts/${contact.id}/edit`}
+                          className="underline-offset-2 hover:underline"
+                        >
+                          Edit contact
+                        </Link>
+                      </p>
+                      <AddChannelForm
+                        organizationSlug={slug}
+                        prospectId={prospect.id}
+                        expectedVersion={contact.version}
+                        contactId={contact.id}
+                      />
+                      <ArchiveContactForm
+                        organizationSlug={slug}
+                        prospectId={prospect.id}
+                        contactId={contact.id}
+                        expectedVersion={contact.version}
+                      />
+                    </div>
+                  ) : null}
+                  {editable && contact.lifecycle === "ARCHIVED" ? (
+                    <div className="mt-3">
+                      <RestoreContactForm
+                        organizationSlug={slug}
+                        prospectId={prospect.id}
+                        contactId={contact.id}
+                        expectedVersion={contact.version}
+                      />
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         )}
         {editable ? (
@@ -211,6 +304,7 @@ export default async function ProspectDetailPage({ params }: PageProps) {
             organizationSlug={slug}
             prospectId={prospect.id}
             expectedVersion={prospect.version}
+            contactFields={prospect.contactFieldControls}
           />
         ) : null}
       </section>

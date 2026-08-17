@@ -29,10 +29,13 @@ import {
   type DuplicateCandidate,
 } from "@/lib/orgs/prospect-duplicates";
 import {
+  canonicalCustomStoredValue,
   contactDisplayName,
   contactCreateInputSchema,
   contactUpdateInputSchema,
   channelCreateInputSchema,
+  customFieldOptionsFromJson,
+  isExplicitCustomClear,
   mapValidatedCustomValue,
   normalizeProspectSearchName,
   normalizeProspectWebsite,
@@ -46,7 +49,11 @@ import {
   requireExpectedVersion,
   safeWebsiteHref,
   sanitizeSearchQuery,
+  storedCustomValueToFormValue,
   zodFieldErrors,
+  PROSPECT_MAX_CHANNELS,
+  PROSPECT_MAX_CONTACTS,
+  type CustomFieldFormControl,
   type PreparedChannel,
   type PreparedCustomValue,
   type ProspectCoreInput,
@@ -68,6 +75,7 @@ const PROSPECT_AUDIT_ACTIONS: OrganizationAuditAction[] = [
   "CONTACT_CREATED",
   "CONTACT_UPDATED",
   "CONTACT_ARCHIVED",
+  "CONTACT_RESTORED",
 ];
 
 async function recordProspectAudit(
@@ -115,38 +123,156 @@ function validationFailure(
   };
 }
 
+type CustomPrepareFailure = {
+  ok: false;
+  message: string;
+  fieldErrors?: Record<string, string[]>;
+};
+
+function customFieldFailure(
+  key: string,
+  message: string,
+): CustomPrepareFailure {
+  return {
+    ok: false,
+    message,
+    fieldErrors: { [`customValues.${key}`]: [message] },
+  };
+}
+
+function isPrismaUniqueViolation(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: string }).code === "P2002",
+  );
+}
+
+function diffCustomValuePatches(
+  stored: Array<{
+    definitionId: string;
+    stringValue: string | null;
+    numberValue: { toString(): string } | string | null;
+    booleanValue: boolean | null;
+    dateValue: Date | null;
+    jsonValue: unknown;
+  }>,
+  sets: PreparedCustomValue[],
+  clearDefinitionIds: string[],
+): {
+  sets: PreparedCustomValue[];
+  clearDefinitionIds: string[];
+  changed: boolean;
+} {
+  const storedById = new Map(
+    stored.map((row) => [row.definitionId, row] as const),
+  );
+  const nextSets = sets.filter((value) => {
+    const current = storedById.get(value.definitionId);
+    if (!current) return true;
+    return (
+      canonicalCustomStoredValue(current) !== canonicalCustomStoredValue(value)
+    );
+  });
+  const nextClears = clearDefinitionIds.filter((id) => storedById.has(id));
+  return {
+    sets: nextSets,
+    clearDefinitionIds: nextClears,
+    changed: nextSets.length > 0 || nextClears.length > 0,
+  };
+}
+
 async function loadDefinitions(
   tx: ProspectTx,
   organizationId: string,
   scope: "PROSPECT" | "CONTACT",
+  activeOnly = true,
 ): Promise<CustomFieldDefinition[]> {
   return tx.customFieldDefinition.findMany({
-    where: { organizationId, scope, isActive: true },
+    where: {
+      organizationId,
+      scope,
+      ...(activeOnly ? { isActive: true } : {}),
+    },
     orderBy: [{ displayOrder: "asc" }, { key: "asc" }],
   });
+}
+
+function toCustomFieldControls(
+  definitions: CustomFieldDefinition[],
+  stored: Array<{
+    definitionKey: string;
+    definitionId: string;
+    stringValue: string | null;
+    numberValue: { toString(): string } | string | null;
+    booleanValue: boolean | null;
+    dateValue: Date | null;
+    jsonValue: unknown;
+  }> = [],
+): CustomFieldFormControl[] {
+  const storedByKey = new Map(stored.map((row) => [row.definitionKey, row]));
+  const controls: CustomFieldFormControl[] = [];
+  const seen = new Set<string>();
+  for (const definition of definitions) {
+    const row = storedByKey.get(definition.key);
+    if (!definition.isActive && !row) continue;
+    seen.add(definition.key);
+    controls.push({
+      key: definition.key,
+      label: definition.label,
+      description: definition.description,
+      dataType: definition.dataType,
+      required: definition.required,
+      isActive: definition.isActive,
+      options: customFieldOptionsFromJson(definition.options),
+      value: row
+        ? storedCustomValueToFormValue({
+            dataType: definition.dataType,
+            stringValue: row.stringValue,
+            numberValue: row.numberValue,
+            booleanValue: row.booleanValue,
+            dateValue: row.dateValue,
+            jsonValue: row.jsonValue,
+          })
+        : null,
+    });
+  }
+  return controls;
 }
 
 function prepareCustomValues(
   definitions: CustomFieldDefinition[],
   raw: Array<{ definitionKey: string; value: unknown }> | undefined,
   scope: "PROSPECT" | "CONTACT",
-):
-  { ok: true; values: PreparedCustomValue[] } | { ok: false; message: string } {
+): { ok: true; values: PreparedCustomValue[] } | CustomPrepareFailure {
   const byKey = new Map(definitions.map((item) => [item.key, item]));
   const values: PreparedCustomValue[] = [];
   const seen = new Set<string>();
   for (const item of raw ?? []) {
     const definition = byKey.get(item.definitionKey);
-    if (!definition) {
-      return {
-        ok: false,
-        message: `Custom field is not an active ${scope} field in this organization.`,
-      };
+    if (!definition || !definition.isActive) {
+      return customFieldFailure(
+        item.definitionKey,
+        `Custom field is not an active ${scope} field in this organization.`,
+      );
     }
     if (seen.has(definition.id)) {
-      return { ok: false, message: "Duplicate custom field value." };
+      return customFieldFailure(
+        item.definitionKey,
+        "Duplicate custom field value.",
+      );
     }
     seen.add(definition.id);
+    if (isExplicitCustomClear(item.value)) {
+      if (definition.required) {
+        return customFieldFailure(
+          definition.key,
+          `Required custom field "${definition.label}" is missing.`,
+        );
+      }
+      continue;
+    }
     const mapped = mapValidatedCustomValue({
       definitionId: definition.id,
       definitionKey: definition.key,
@@ -155,19 +281,87 @@ function prepareCustomValues(
       value: item.value,
     });
     if (!mapped.ok) {
-      return mapped;
+      return customFieldFailure(definition.key, mapped.message);
     }
     values.push(mapped.value);
   }
   for (const definition of definitions) {
-    if (definition.required && !seen.has(definition.id)) {
-      return {
-        ok: false,
-        message: `Required custom field "${definition.label}" is missing.`,
-      };
+    if (
+      definition.required &&
+      definition.isActive &&
+      !seen.has(definition.id)
+    ) {
+      return customFieldFailure(
+        definition.key,
+        `Required custom field "${definition.label}" is missing.`,
+      );
     }
   }
   return { ok: true, values };
+}
+
+function prepareCustomValuePatches(
+  definitions: CustomFieldDefinition[],
+  raw: Array<{ definitionKey: string; value: unknown }> | undefined,
+  scope: "PROSPECT" | "CONTACT",
+):
+  | {
+      ok: true;
+      sets: PreparedCustomValue[];
+      clearDefinitionIds: string[];
+    }
+  | CustomPrepareFailure {
+  if (!raw || raw.length === 0) {
+    return { ok: true, sets: [], clearDefinitionIds: [] };
+  }
+  const byKey = new Map(definitions.map((item) => [item.key, item]));
+  const sets: PreparedCustomValue[] = [];
+  const clearDefinitionIds: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const definition = byKey.get(item.definitionKey);
+    if (!definition) {
+      return customFieldFailure(
+        item.definitionKey,
+        `Custom field is not a ${scope} field in this organization.`,
+      );
+    }
+    if (!definition.isActive) {
+      return customFieldFailure(
+        definition.key,
+        `Custom field "${definition.label}" is inactive and cannot be changed.`,
+      );
+    }
+    if (seen.has(definition.id)) {
+      return customFieldFailure(
+        definition.key,
+        "Duplicate custom field value.",
+      );
+    }
+    seen.add(definition.id);
+    if (isExplicitCustomClear(item.value)) {
+      if (definition.required) {
+        return customFieldFailure(
+          definition.key,
+          `Required custom field "${definition.label}" cannot be cleared.`,
+        );
+      }
+      clearDefinitionIds.push(definition.id);
+      continue;
+    }
+    const mapped = mapValidatedCustomValue({
+      definitionId: definition.id,
+      definitionKey: definition.key,
+      dataType: definition.dataType,
+      options: definition.options,
+      value: item.value,
+    });
+    if (!mapped.ok) {
+      return customFieldFailure(definition.key, mapped.message);
+    }
+    sets.push(mapped.value);
+  }
+  return { ok: true, sets, clearDefinitionIds };
 }
 
 function collectChannels(
@@ -284,6 +478,7 @@ export async function createProspect(
       if (!prospectCustom.ok) {
         throw Object.assign(new Error(prospectCustom.message), {
           fieldMessage: prospectCustom.message,
+          fieldErrors: prospectCustom.fieldErrors,
         });
       }
 
@@ -378,6 +573,7 @@ export async function createProspect(
         if (!contactCustom.ok) {
           throw Object.assign(new Error(contactCustom.message), {
             fieldMessage: contactCustom.message,
+            fieldErrors: contactCustom.fieldErrors,
           });
         }
         const isPrimary =
@@ -481,6 +677,7 @@ export async function createProspect(
     if (error instanceof Error && "fieldMessage" in error) {
       return validationFailure(
         String((error as { fieldMessage: string }).fieldMessage),
+        (error as { fieldErrors?: Record<string, string[]> }).fieldErrors,
       );
     }
     return (
@@ -518,9 +715,13 @@ export async function updateProspect(
       fieldErrors: { expectedVersion: [expected.message] },
     };
   }
-  const website = normalizeProspectWebsite(parsed.data.website ?? "");
-  if (!website.ok) {
-    return validationFailure(website.message, { website: [website.message] });
+  if (parsed.data.website) {
+    const website = normalizeProspectWebsite(parsed.data.website);
+    if (!website.ok) {
+      return validationFailure(website.message, {
+        website: [website.message],
+      });
+    }
   }
 
   try {
@@ -555,8 +756,20 @@ export async function updateProspect(
       if (row.version !== expected.version) {
         throw new ConflictError();
       }
-      const defs = await loadDefinitions(tx, input.organizationId, "PROSPECT");
-      const custom = prepareCustomValues(
+      const current = await tx.prospect.findFirst({
+        where: {
+          id: input.prospectId,
+          organizationId: input.organizationId,
+        },
+      });
+      if (!current) throw new ProspectNotFoundError();
+      const defs = await loadDefinitions(
+        tx,
+        input.organizationId,
+        "PROSPECT",
+        false,
+      );
+      const custom = prepareCustomValuePatches(
         defs,
         parsed.data.customValues,
         "PROSPECT",
@@ -564,8 +777,89 @@ export async function updateProspect(
       if (!custom.ok) {
         throw Object.assign(new Error(custom.message), {
           fieldMessage: custom.message,
+          fieldErrors: custom.fieldErrors,
         });
       }
+      const storedCustom = await tx.prospectCustomValue.findMany({
+        where: {
+          organizationId: input.organizationId,
+          prospectId: input.prospectId,
+        },
+      });
+      const customDiff = diffCustomValuePatches(
+        storedCustom,
+        custom.sets,
+        custom.clearDefinitionIds,
+      );
+
+      let websiteDisplay = current.websiteDisplay;
+      let websiteNormalized = current.websiteNormalized;
+      if (parsed.data.website !== undefined) {
+        if (parsed.data.website === null) {
+          websiteDisplay = null;
+          websiteNormalized = null;
+        } else {
+          const website = normalizeProspectWebsite(parsed.data.website);
+          if (!website.ok) {
+            throw Object.assign(new Error(website.message), {
+              fieldMessage: website.message,
+              fieldErrors: { website: [website.message] },
+            });
+          }
+          websiteDisplay = website.value.displayValue;
+          websiteNormalized = website.value.normalizedValue;
+        }
+      }
+
+      const next = {
+        kind: parsed.data.kind ?? current.kind,
+        displayName: parsed.data.displayName ?? current.displayName,
+        websiteDisplay,
+        websiteNormalized,
+        locationLabel: pickPatch(
+          parsed.data.locationLabel,
+          current.locationLabel,
+        ),
+        addressLine1: pickPatch(parsed.data.addressLine1, current.addressLine1),
+        addressLine2: pickPatch(parsed.data.addressLine2, current.addressLine2),
+        city: pickPatch(parsed.data.city, current.city),
+        region: pickPatch(parsed.data.region, current.region),
+        postalCode: pickPatch(parsed.data.postalCode, current.postalCode),
+        countryCode: pickPatch(parsed.data.countryCode, current.countryCode),
+        timeZone: pickPatch(parsed.data.timeZone, current.timeZone),
+      };
+      const changedFields: string[] = [];
+      if (next.kind !== current.kind) changedFields.push("kind");
+      if (next.displayName !== current.displayName) {
+        changedFields.push("displayName");
+      }
+      if (
+        next.websiteDisplay !== current.websiteDisplay ||
+        next.websiteNormalized !== current.websiteNormalized
+      ) {
+        changedFields.push("website");
+      }
+      if (next.locationLabel !== current.locationLabel) {
+        changedFields.push("locationLabel");
+      }
+      if (
+        next.addressLine1 !== current.addressLine1 ||
+        next.addressLine2 !== current.addressLine2 ||
+        next.city !== current.city ||
+        next.region !== current.region ||
+        next.postalCode !== current.postalCode ||
+        next.countryCode !== current.countryCode
+      ) {
+        changedFields.push("address");
+      }
+      if (next.timeZone !== current.timeZone) changedFields.push("timeZone");
+      if (customDiff.changed) changedFields.push("customValues");
+
+      if (changedFields.length === 0) {
+        if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
+        return;
+      }
+
       await bumpProspectVersion(tx, {
         organizationId: input.organizationId,
         prospectId: input.prospectId,
@@ -574,34 +868,51 @@ export async function updateProspect(
       await tx.prospect.update({
         where: { id: input.prospectId },
         data: {
-          kind: parsed.data.kind,
-          displayName: parsed.data.displayName,
-          searchName: normalizeProspectSearchName(parsed.data.displayName),
-          websiteDisplay: website.value.displayValue,
-          websiteNormalized: website.value.normalizedValue,
-          locationLabel: parsed.data.locationLabel ?? null,
-          addressLine1: parsed.data.addressLine1 ?? null,
-          addressLine2: parsed.data.addressLine2 ?? null,
-          city: parsed.data.city ?? null,
-          region: parsed.data.region ?? null,
-          postalCode: parsed.data.postalCode ?? null,
-          countryCode: parsed.data.countryCode ?? null,
-          timeZone: parsed.data.timeZone ?? null,
+          kind: next.kind,
+          displayName: next.displayName,
+          searchName: normalizeProspectSearchName(next.displayName),
+          websiteDisplay: next.websiteDisplay,
+          websiteNormalized: next.websiteNormalized,
+          locationLabel: next.locationLabel,
+          addressLine1: next.addressLine1,
+          addressLine2: next.addressLine2,
+          city: next.city,
+          region: next.region,
+          postalCode: next.postalCode,
+          countryCode: next.countryCode,
+          timeZone: next.timeZone,
           updatedByUserId: input.actor.id,
         },
       });
-      await tx.prospectCustomValue.deleteMany({
-        where: {
-          organizationId: input.organizationId,
-          prospectId: input.prospectId,
-        },
-      });
-      for (const value of custom.values) {
-        await tx.prospectCustomValue.create({
-          data: {
+      if (customDiff.clearDefinitionIds.length > 0) {
+        await tx.prospectCustomValue.deleteMany({
+          where: {
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+            definitionId: { in: customDiff.clearDefinitionIds },
+          },
+        });
+      }
+      for (const value of customDiff.sets) {
+        await tx.prospectCustomValue.upsert({
+          where: {
+            prospectId_definitionId: {
+              prospectId: input.prospectId,
+              definitionId: value.definitionId,
+            },
+          },
+          create: {
             organizationId: input.organizationId,
             prospectId: input.prospectId,
             definitionId: value.definitionId,
+            definitionKey: value.definitionKey,
+            stringValue: value.stringValue,
+            numberValue: value.numberValue,
+            booleanValue: value.booleanValue,
+            dateValue: value.dateValue,
+            jsonValue: value.jsonValue as Prisma.InputJsonValue | undefined,
+          },
+          update: {
             definitionKey: value.definitionKey,
             stringValue: value.stringValue,
             numberValue: value.numberValue,
@@ -617,8 +928,7 @@ export async function updateProspect(
         action: "PROSPECT_UPDATED",
         metadata: {
           prospectId: input.prospectId,
-          changedFields:
-            "displayName,kind,website,location,address,timeZone,customValues",
+          changedFields: changedFields.join(","),
         },
       });
       if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
@@ -631,6 +941,7 @@ export async function updateProspect(
     if (error instanceof Error && "fieldMessage" in error) {
       return validationFailure(
         String((error as { fieldMessage: string }).fieldMessage),
+        (error as { fieldErrors?: Record<string, string[]> }).fieldErrors,
       );
     }
     return (
@@ -641,6 +952,10 @@ export async function updateProspect(
       }
     );
   }
+}
+
+function pickPatch<T>(incoming: T | undefined, current: T): T {
+  return incoming === undefined ? current : incoming;
 }
 
 export async function archiveProspect(
@@ -730,6 +1045,7 @@ export async function restoreProspect(
         where: {
           organizationId: input.organizationId,
           prospectId: input.prospectId,
+          lifecycle: "ACTIVE",
         },
         select: { kind: true, normalizedValue: true },
       });
@@ -922,11 +1238,18 @@ export async function addProspectContact(
           prospectId: input.prospectId,
         },
       });
-      if (count >= 50) {
+      if (count >= PROSPECT_MAX_CONTACTS) {
         throw Object.assign(new Error("Too many contacts."), {
           fieldMessage: "Too many contacts.",
         });
       }
+      const activeCount = await tx.prospectContact.count({
+        where: {
+          organizationId: input.organizationId,
+          prospectId: input.prospectId,
+          lifecycle: "ACTIVE",
+        },
+      });
       const defaultCountry = await defaultPhoneCountry(
         tx,
         input.organizationId,
@@ -940,6 +1263,7 @@ export async function addProspectContact(
       if (!custom.ok) {
         throw Object.assign(new Error(custom.message), {
           fieldMessage: custom.message,
+          fieldErrors: custom.fieldErrors,
         });
       }
       if (parsed.data.isPrimary) {
@@ -966,7 +1290,7 @@ export async function addProspectContact(
           displayName: contactDisplayName(parsed.data),
           title: parsed.data.title ?? null,
           preferredLanguage: parsed.data.preferredLanguage ?? null,
-          isPrimary: Boolean(parsed.data.isPrimary) || count === 0,
+          isPrimary: Boolean(parsed.data.isPrimary) || activeCount === 0,
           createdByUserId: input.actor.id,
           updatedByUserId: input.actor.id,
         },
@@ -1028,6 +1352,7 @@ export async function addProspectContact(
     if (error instanceof Error && "fieldMessage" in error) {
       return validationFailure(
         String((error as { fieldMessage: string }).fieldMessage),
+        (error as { fieldErrors?: Record<string, string[]> }).fieldErrors,
       );
     }
     return (
@@ -1101,8 +1426,77 @@ export async function updateProspectContact(
         },
       });
       if (!contact) throw new ProspectNotFoundError();
+      if (contact.lifecycle !== "ACTIVE") {
+        throw new ProspectLifecycleError(
+          "archived",
+          "Archived contacts cannot be edited until they are restored.",
+        );
+      }
       if (contact.version !== expected.version) throw new ConflictError();
-      if (parsed.data.isPrimary) {
+      const defs = await loadDefinitions(
+        tx,
+        input.organizationId,
+        "CONTACT",
+        false,
+      );
+      const custom = prepareCustomValuePatches(
+        defs,
+        parsed.data.customValues,
+        "CONTACT",
+      );
+      if (!custom.ok) {
+        throw Object.assign(new Error(custom.message), {
+          fieldMessage: custom.message,
+          fieldErrors: custom.fieldErrors,
+        });
+      }
+      const storedCustom = await tx.prospectContactCustomValue.findMany({
+        where: {
+          organizationId: input.organizationId,
+          contactId: input.contactId,
+        },
+      });
+      const customDiff = diffCustomValuePatches(
+        storedCustom,
+        custom.sets,
+        custom.clearDefinitionIds,
+      );
+      const firstName = parsed.data.firstName ?? contact.firstName;
+      const lastName = parsed.data.lastName ?? contact.lastName;
+      const title = pickPatch(parsed.data.title, contact.title);
+      const preferredLanguage = pickPatch(
+        parsed.data.preferredLanguage,
+        contact.preferredLanguage,
+      );
+      const displayName = contactDisplayName({
+        firstName,
+        lastName,
+        displayName:
+          parsed.data.displayName === undefined
+            ? contact.displayName
+            : (parsed.data.displayName ?? undefined),
+      });
+      const isPrimary =
+        parsed.data.isPrimary === undefined
+          ? contact.isPrimary
+          : parsed.data.isPrimary;
+      const changedFields: string[] = [];
+      if (firstName !== contact.firstName) changedFields.push("firstName");
+      if (lastName !== contact.lastName) changedFields.push("lastName");
+      if (displayName !== contact.displayName) {
+        changedFields.push("displayName");
+      }
+      if (title !== contact.title) changedFields.push("title");
+      if (preferredLanguage !== contact.preferredLanguage) {
+        changedFields.push("preferredLanguage");
+      }
+      if (isPrimary !== contact.isPrimary) changedFields.push("isPrimary");
+      if (customDiff.changed) changedFields.push("customValues");
+      if (changedFields.length === 0) {
+        if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
+        return;
+      }
+      if (isPrimary) {
         await tx.prospectContact.updateMany({
           where: {
             organizationId: input.organizationId,
@@ -1119,29 +1513,86 @@ export async function updateProspectContact(
           organizationId: input.organizationId,
           prospectId: input.prospectId,
           version: expected.version,
+          lifecycle: "ACTIVE",
         },
         data: {
-          firstName: parsed.data.firstName,
-          lastName: parsed.data.lastName,
-          displayName: contactDisplayName(parsed.data),
-          title: parsed.data.title ?? null,
-          preferredLanguage: parsed.data.preferredLanguage ?? null,
-          isPrimary: Boolean(parsed.data.isPrimary),
+          firstName,
+          lastName,
+          displayName,
+          title,
+          preferredLanguage,
+          isPrimary,
           version: { increment: 1 },
           updatedByUserId: input.actor.id,
         },
       });
       if (updated.count !== 1) throw new ConflictError();
+      if (customDiff.clearDefinitionIds.length > 0) {
+        await tx.prospectContactCustomValue.deleteMany({
+          where: {
+            organizationId: input.organizationId,
+            contactId: input.contactId,
+            definitionId: { in: customDiff.clearDefinitionIds },
+          },
+        });
+      }
+      for (const value of customDiff.sets) {
+        await tx.prospectContactCustomValue.upsert({
+          where: {
+            contactId_definitionId: {
+              contactId: input.contactId,
+              definitionId: value.definitionId,
+            },
+          },
+          create: {
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+            contactId: input.contactId,
+            definitionId: value.definitionId,
+            definitionKey: value.definitionKey,
+            stringValue: value.stringValue,
+            numberValue: value.numberValue,
+            booleanValue: value.booleanValue,
+            dateValue: value.dateValue,
+            jsonValue: value.jsonValue as Prisma.InputJsonValue | undefined,
+          },
+          update: {
+            definitionKey: value.definitionKey,
+            stringValue: value.stringValue,
+            numberValue: value.numberValue,
+            booleanValue: value.booleanValue,
+            dateValue: value.dateValue,
+            jsonValue: value.jsonValue as Prisma.InputJsonValue | undefined,
+          },
+        });
+      }
       await recordProspectAudit(tx, {
         organizationId: input.organizationId,
         actorUserId: input.actor.id,
         action: "CONTACT_UPDATED",
-        metadata: { prospectId: input.prospectId, contactId: input.contactId },
+        metadata: {
+          prospectId: input.prospectId,
+          contactId: input.contactId,
+          changedFields: changedFields.join(","),
+        },
       });
       if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
     });
     return { ok: true };
   } catch (error) {
+    if (error instanceof Error && "fieldMessage" in error) {
+      return validationFailure(
+        String((error as { fieldMessage: string }).fieldMessage),
+        (error as { fieldErrors?: Record<string, string[]> }).fieldErrors,
+      );
+    }
+    if (isPrismaUniqueViolation(error)) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message: "This prospect changed. Reload the page, then try again.",
+      };
+    }
     return (
       mapProspectError(error) ?? {
         ok: false,
@@ -1150,6 +1601,178 @@ export async function updateProspectContact(
       }
     );
   }
+}
+
+async function mutateContactLifecycle(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    prospectId: string;
+    contactId: string;
+    expectedVersion: unknown;
+  },
+  mode: "archive" | "restore",
+  hooks: ProspectMutationTestHooks = {},
+): Promise<{ ok: true } | ProspectFailure> {
+  const expected = requireExpectedVersion(input.expectedVersion);
+  if (!expected.ok) {
+    return {
+      ok: false,
+      reason: "conflict",
+      message: expected.message,
+      fieldErrors: { expectedVersion: [expected.message] },
+    };
+  }
+  try {
+    await requireOrganizationPermission({
+      user: input.actor,
+      organizationId: input.organizationId,
+      permission: "org.prospects.manage",
+    });
+    await prisma.$transaction(async (tx) => {
+      await acquireOrganizationProspectsLock(tx, input.organizationId, hooks);
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.prospects.manage",
+        },
+        hooks,
+      );
+      const [row] = await lockProspectsForUpdate(
+        tx,
+        {
+          organizationId: input.organizationId,
+          prospectIds: [input.prospectId],
+        },
+        hooks,
+      );
+      if (!row) throw new ProspectNotFoundError();
+      assertActiveProspect(row);
+      const contact = await tx.prospectContact.findFirst({
+        where: {
+          id: input.contactId,
+          organizationId: input.organizationId,
+          prospectId: input.prospectId,
+        },
+      });
+      if (!contact) throw new ProspectNotFoundError();
+      if (contact.version !== expected.version) throw new ConflictError();
+      if (mode === "archive") {
+        if (contact.lifecycle !== "ACTIVE") {
+          throw new ProspectLifecycleError(
+            "archived",
+            "Contact is already archived.",
+          );
+        }
+        const updated = await tx.prospectContact.updateMany({
+          where: {
+            id: input.contactId,
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+            version: expected.version,
+            lifecycle: "ACTIVE",
+          },
+          data: {
+            lifecycle: "ARCHIVED",
+            isPrimary: false,
+            archivedAt: new Date(),
+            version: { increment: 1 },
+            updatedByUserId: input.actor.id,
+          },
+        });
+        if (updated.count !== 1) throw new ConflictError();
+        await recordProspectAudit(tx, {
+          organizationId: input.organizationId,
+          actorUserId: input.actor.id,
+          action: "CONTACT_ARCHIVED",
+          metadata: {
+            prospectId: input.prospectId,
+            contactId: input.contactId,
+          },
+        });
+      } else {
+        if (contact.lifecycle !== "ARCHIVED") {
+          throw new ProspectLifecycleError(
+            "not_archived",
+            "Only archived contacts can be restored.",
+          );
+        }
+        const updated = await tx.prospectContact.updateMany({
+          where: {
+            id: input.contactId,
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+            version: expected.version,
+            lifecycle: "ARCHIVED",
+          },
+          data: {
+            lifecycle: "ACTIVE",
+            restoredAt: new Date(),
+            version: { increment: 1 },
+            updatedByUserId: input.actor.id,
+          },
+        });
+        if (updated.count !== 1) throw new ConflictError();
+        await recordProspectAudit(tx, {
+          organizationId: input.organizationId,
+          actorUserId: input.actor.id,
+          action: "CONTACT_RESTORED",
+          metadata: {
+            prospectId: input.prospectId,
+            contactId: input.contactId,
+          },
+        });
+      }
+      if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
+    });
+    if (hooks.testAfterTransactionCommit) {
+      await hooks.testAfterTransactionCommit();
+    }
+    return { ok: true };
+  } catch (error) {
+    if (isPrismaUniqueViolation(error)) {
+      return {
+        ok: false,
+        reason: "conflict",
+        message: "This prospect changed. Reload the page, then try again.",
+      };
+    }
+    return (
+      mapProspectError(error) ?? {
+        ok: false,
+        reason: "error",
+        message: "Request denied.",
+      }
+    );
+  }
+}
+
+export async function archiveProspectContact(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    prospectId: string;
+    contactId: string;
+    expectedVersion: unknown;
+  },
+  hooks: ProspectMutationTestHooks = {},
+): Promise<{ ok: true } | ProspectFailure> {
+  return mutateContactLifecycle(input, "archive", hooks);
+}
+
+export async function restoreProspectContact(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    prospectId: string;
+    contactId: string;
+    expectedVersion: unknown;
+  },
+  hooks: ProspectMutationTestHooks = {},
+): Promise<{ ok: true } | ProspectFailure> {
+  return mutateContactLifecycle(input, "restore", hooks);
 }
 
 export async function addProspectChannel(
@@ -1206,7 +1829,7 @@ export async function addProspectChannel(
       );
       if (!row) throw new ProspectNotFoundError();
       assertActiveProspect(row);
-      if (row.version !== expected.version) throw new ConflictError();
+      let contactVersion: number | null = null;
       if (input.contactId) {
         const contact = await tx.prospectContact.findFirst({
           where: {
@@ -1214,9 +1837,18 @@ export async function addProspectChannel(
             organizationId: input.organizationId,
             prospectId: input.prospectId,
           },
-          select: { id: true },
         });
         if (!contact) throw new ProspectNotFoundError();
+        if (contact.lifecycle !== "ACTIVE") {
+          throw new ProspectLifecycleError(
+            "archived",
+            "Archived contacts cannot be edited until they are restored.",
+          );
+        }
+        if (contact.version !== expected.version) throw new ConflictError();
+        contactVersion = contact.version;
+      } else if (row.version !== expected.version) {
+        throw new ConflictError();
       }
       const defaultCountry = await defaultPhoneCountry(
         tx,
@@ -1236,8 +1868,9 @@ export async function addProspectChannel(
           kind: channel.value.kind,
           normalizedValue: channel.value.normalizedValue,
         },
+        orderBy: { createdAt: "asc" },
       });
-      if (existing) {
+      if (existing?.lifecycle === "ACTIVE") {
         throw Object.assign(
           new Error("That communication point already exists."),
           {
@@ -1245,22 +1878,197 @@ export async function addProspectChannel(
           },
         );
       }
-      await bumpProspectVersion(tx, {
-        organizationId: input.organizationId,
-        prospectId: input.prospectId,
-        expectedVersion: expected.version,
-      });
-      const created = await tx.prospectChannel.create({
-        data: {
+      if (!existing) {
+        const count = await tx.prospectChannel.count({
+          where: {
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+          },
+        });
+        if (count >= PROSPECT_MAX_CHANNELS) {
+          throw Object.assign(new Error("Too many communication points."), {
+            fieldMessage: "Too many communication points.",
+          });
+        }
+      }
+      if (contactVersion != null && input.contactId) {
+        const bumped = await tx.prospectContact.updateMany({
+          where: {
+            id: input.contactId,
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+            version: contactVersion,
+          },
+          data: {
+            version: { increment: 1 },
+            updatedByUserId: input.actor.id,
+          },
+        });
+        if (bumped.count !== 1) throw new ConflictError();
+      } else {
+        await bumpProspectVersion(tx, {
           organizationId: input.organizationId,
           prospectId: input.prospectId,
-          contactId: input.contactId ?? null,
-          kind: channel.value.kind,
-          label: channel.value.label,
-          displayValue: channel.value.displayValue,
-          normalizedValue: channel.value.normalizedValue,
-          isPrimary: channel.value.isPrimary,
+          expectedVersion: expected.version,
+        });
+      }
+      const saved = existing
+        ? await tx.prospectChannel.update({
+            where: { id: existing.id },
+            data: {
+              lifecycle: "ACTIVE",
+              archivedAt: null,
+              label: channel.value.label,
+              displayValue: channel.value.displayValue,
+              isPrimary: channel.value.isPrimary,
+            },
+          })
+        : await tx.prospectChannel.create({
+            data: {
+              organizationId: input.organizationId,
+              prospectId: input.prospectId,
+              contactId: input.contactId ?? null,
+              kind: channel.value.kind,
+              label: channel.value.label,
+              displayValue: channel.value.displayValue,
+              normalizedValue: channel.value.normalizedValue,
+              isPrimary: channel.value.isPrimary,
+            },
+          });
+      await recordProspectAudit(tx, {
+        organizationId: input.organizationId,
+        actorUserId: input.actor.id,
+        action: "PROSPECT_UPDATED",
+        metadata: {
+          prospectId: input.prospectId,
+          channelId: saved.id,
+          changedFields: existing ? "channelRestored" : "channels",
         },
+      });
+      if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
+      return saved.id;
+    });
+    return { ok: true, channelId };
+  } catch (error) {
+    if (error instanceof Error && "fieldMessage" in error) {
+      return validationFailure(
+        String((error as { fieldMessage: string }).fieldMessage),
+        (error as { fieldErrors?: Record<string, string[]> }).fieldErrors,
+      );
+    }
+    if (isPrismaUniqueViolation(error)) {
+      return validationFailure("That communication point already exists.");
+    }
+    return (
+      mapProspectError(error) ?? {
+        ok: false,
+        reason: "error",
+        message: "Request denied.",
+      }
+    );
+  }
+}
+
+export async function archiveProspectChannel(
+  input: {
+    actor: SafeUser;
+    organizationId: string;
+    prospectId: string;
+    channelId: string;
+    expectedVersion: unknown;
+  },
+  hooks: ProspectMutationTestHooks = {},
+): Promise<{ ok: true } | ProspectFailure> {
+  const expected = requireExpectedVersion(input.expectedVersion);
+  if (!expected.ok) {
+    return {
+      ok: false,
+      reason: "conflict",
+      message: expected.message,
+      fieldErrors: { expectedVersion: [expected.message] },
+    };
+  }
+  try {
+    await requireOrganizationPermission({
+      user: input.actor,
+      organizationId: input.organizationId,
+      permission: "org.prospects.manage",
+    });
+    await prisma.$transaction(async (tx) => {
+      await acquireOrganizationProspectsLock(tx, input.organizationId, hooks);
+      await requireActiveActorInTx(
+        tx,
+        {
+          organizationId: input.organizationId,
+          userId: input.actor.id,
+          permission: "org.prospects.manage",
+        },
+        hooks,
+      );
+      const [row] = await lockProspectsForUpdate(
+        tx,
+        {
+          organizationId: input.organizationId,
+          prospectIds: [input.prospectId],
+        },
+        hooks,
+      );
+      if (!row) throw new ProspectNotFoundError();
+      assertActiveProspect(row);
+      const channel = await tx.prospectChannel.findFirst({
+        where: {
+          id: input.channelId,
+          organizationId: input.organizationId,
+          prospectId: input.prospectId,
+        },
+      });
+      if (!channel) throw new ProspectNotFoundError();
+      if (channel.lifecycle !== "ACTIVE") {
+        throw new ProspectLifecycleError(
+          "archived",
+          "Communication point is already archived.",
+        );
+      }
+      if (channel.contactId) {
+        const contact = await tx.prospectContact.findFirst({
+          where: {
+            id: channel.contactId,
+            organizationId: input.organizationId,
+            prospectId: input.prospectId,
+          },
+        });
+        if (!contact) throw new ProspectNotFoundError();
+        if (contact.lifecycle !== "ACTIVE") {
+          throw new ProspectLifecycleError(
+            "archived",
+            "Archived contacts cannot be edited until they are restored.",
+          );
+        }
+        if (contact.version !== expected.version) throw new ConflictError();
+        const bumped = await tx.prospectContact.updateMany({
+          where: {
+            id: contact.id,
+            organizationId: input.organizationId,
+            version: expected.version,
+          },
+          data: {
+            version: { increment: 1 },
+            updatedByUserId: input.actor.id,
+          },
+        });
+        if (bumped.count !== 1) throw new ConflictError();
+      } else if (row.version !== expected.version) {
+        throw new ConflictError();
+      } else {
+        await bumpProspectVersion(tx, {
+          organizationId: input.organizationId,
+          prospectId: input.prospectId,
+          expectedVersion: expected.version,
+        });
+      }
+      await tx.prospectChannel.update({
+        where: { id: channel.id },
+        data: { lifecycle: "ARCHIVED", archivedAt: new Date() },
       });
       await recordProspectAudit(tx, {
         organizationId: input.organizationId,
@@ -1268,20 +2076,14 @@ export async function addProspectChannel(
         action: "PROSPECT_UPDATED",
         metadata: {
           prospectId: input.prospectId,
-          channelId: created.id,
-          changedFields: "channels",
+          channelId: channel.id,
+          changedFields: "channelArchived",
         },
       });
       if (hooks.testBeforeCommit) await hooks.testBeforeCommit();
-      return created.id;
     });
-    return { ok: true, channelId };
+    return { ok: true };
   } catch (error) {
-    if (error instanceof Error && "fieldMessage" in error) {
-      return validationFailure(
-        String((error as { fieldMessage: string }).fieldMessage),
-      );
-    }
     return (
       mapProspectError(error) ?? {
         ok: false,
@@ -1389,6 +2191,7 @@ export async function listProspects(input: {
                 channels: {
                   some: {
                     organizationId: input.organizationId,
+                    lifecycle: "ACTIVE",
                     normalizedValue: {
                       contains: emailQuery ?? query.toLowerCase(),
                       mode: "insensitive",
@@ -1402,6 +2205,7 @@ export async function listProspects(input: {
                       channels: {
                         some: {
                           organizationId: input.organizationId,
+                          lifecycle: "ACTIVE" as const,
                           kind: "PHONE" as const,
                           normalizedValue: { contains: phoneQuery },
                         },
@@ -1432,7 +2236,10 @@ export async function listProspects(input: {
             select: { displayName: true },
           },
           channels: {
-            where: { organizationId: input.organizationId },
+            where: {
+              organizationId: input.organizationId,
+              lifecycle: "ACTIVE",
+            },
             orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
             take: 8,
             select: {
@@ -1526,12 +2333,15 @@ export type ProspectDetail = {
       label: string | null;
       displayValue: string;
       isPrimary: boolean;
+      lifecycle: string;
     }>;
     customValues: Array<{
       definitionKey: string;
       label: string;
       displayValue: string;
     }>;
+    customFieldControls: CustomFieldFormControl[];
+    restoredAt: Date | null;
   }>;
   channels: Array<{
     id: string;
@@ -1539,12 +2349,15 @@ export type ProspectDetail = {
     label: string | null;
     displayValue: string;
     isPrimary: boolean;
+    lifecycle: string;
   }>;
   customValues: Array<{
     definitionKey: string;
     label: string;
     displayValue: string;
   }>;
+  customFieldControls: CustomFieldFormControl[];
+  contactFieldControls: CustomFieldFormControl[];
   recentAudit: Array<{
     id: string;
     action: string;
@@ -1603,7 +2416,19 @@ export async function getProspect(input: {
             },
             customValues: {
               where: { organizationId: input.organizationId },
-              include: { definition: { select: { key: true, label: true } } },
+              include: {
+                definition: {
+                  select: {
+                    key: true,
+                    label: true,
+                    description: true,
+                    dataType: true,
+                    required: true,
+                    isActive: true,
+                    options: true,
+                  },
+                },
+              },
             },
           },
         },
@@ -1613,13 +2438,35 @@ export async function getProspect(input: {
         },
         customValues: {
           where: { organizationId: input.organizationId },
-          include: { definition: { select: { key: true, label: true } } },
+          include: {
+            definition: {
+              select: {
+                key: true,
+                label: true,
+                description: true,
+                dataType: true,
+                required: true,
+                isActive: true,
+                options: true,
+              },
+            },
+          },
         },
       },
     });
     if (!row) {
       throw new ProspectNotFoundError();
     }
+    const [prospectDefs, contactDefs] = await Promise.all([
+      prisma.customFieldDefinition.findMany({
+        where: { organizationId: input.organizationId, scope: "PROSPECT" },
+        orderBy: [{ displayOrder: "asc" }, { key: "asc" }],
+      }),
+      prisma.customFieldDefinition.findMany({
+        where: { organizationId: input.organizationId, scope: "CONTACT" },
+        orderBy: [{ displayOrder: "asc" }, { key: "asc" }],
+      }),
+    ]);
     const recentAudit = await prisma.organizationAuditEvent.findMany({
       where: {
         organizationId: input.organizationId,
@@ -1650,6 +2497,7 @@ export async function getProspect(input: {
               where: {
                 organizationId: input.organizationId,
                 prospectId: row.id,
+                lifecycle: "ACTIVE",
               },
               select: { kind: true, normalizedValue: true },
             }),
@@ -1692,14 +2540,20 @@ export async function getProspect(input: {
           isPrimary: contact.isPrimary,
           lifecycle: contact.lifecycle,
           version: contact.version,
+          restoredAt: contact.restoredAt,
           channels: contact.channels.map((channel) => ({
             id: channel.id,
             kind: channel.kind,
             label: channel.label,
             displayValue: channel.displayValue,
             isPrimary: channel.isPrimary,
+            lifecycle: channel.lifecycle,
           })),
           customValues: contact.customValues.map(displayCustomValue),
+          customFieldControls: toCustomFieldControls(
+            contactDefs,
+            contact.customValues,
+          ),
         })),
         channels: row.channels.map((channel) => ({
           id: channel.id,
@@ -1707,11 +2561,68 @@ export async function getProspect(input: {
           label: channel.label,
           displayValue: channel.displayValue,
           isPrimary: channel.isPrimary,
+          lifecycle: channel.lifecycle,
         })),
         customValues: row.customValues.map(displayCustomValue),
+        customFieldControls: toCustomFieldControls(
+          prospectDefs,
+          row.customValues,
+        ),
+        contactFieldControls: toCustomFieldControls(contactDefs),
         recentAudit,
         duplicateCandidates,
       },
+    };
+  } catch (error) {
+    return (
+      mapProspectError(error) ?? {
+        ok: false,
+        reason: "error",
+        message: "Request denied.",
+      }
+    );
+  }
+}
+
+export async function listProspectFormFields(input: {
+  actor: SafeUser;
+  organizationId: string;
+}): Promise<
+  | {
+      ok: true;
+      prospectFields: CustomFieldFormControl[];
+      contactFields: CustomFieldFormControl[];
+    }
+  | ProspectFailure
+> {
+  try {
+    await requireOrganizationPermission({
+      user: input.actor,
+      organizationId: input.organizationId,
+      permission: "org.prospects.manage",
+    });
+    const [prospectDefs, contactDefs] = await Promise.all([
+      prisma.customFieldDefinition.findMany({
+        where: {
+          organizationId: input.organizationId,
+          scope: "PROSPECT",
+          isActive: true,
+        },
+        orderBy: [{ displayOrder: "asc" }, { key: "asc" }],
+      }),
+      prisma.customFieldDefinition.findMany({
+        where: {
+          organizationId: input.organizationId,
+          scope: "CONTACT",
+          isActive: true,
+        },
+        orderBy: [{ displayOrder: "asc" }, { key: "asc" }],
+      }),
+    ]);
+    return {
+      ok: true,
+      prospectFields: toCustomFieldControls(prospectDefs),
+      contactFields: toCustomFieldControls(contactDefs),
     };
   } catch (error) {
     return (

@@ -21,8 +21,11 @@ import {
   addProspectChannel,
   addProspectContact,
   archiveProspect,
+  archiveProspectChannel,
+  archiveProspectContact,
   createProspect,
   restoreProspect,
+  restoreProspectContact,
   updateProspect,
   updateProspectContact,
 } from "@/lib/orgs/prospects";
@@ -35,6 +38,7 @@ function revalidateProspectPaths(slug: string, prospectId?: string) {
     revalidatePath(`/app/orgs/${slug}/prospects/${prospectId}`);
     revalidatePath(`/app/orgs/${slug}/prospects/${prospectId}/edit`);
     revalidatePath(`/app/orgs/${slug}/prospects/${prospectId}/merge`);
+    revalidatePath(`/app/orgs/${slug}/prospects/${prospectId}/contacts`);
   }
 }
 
@@ -270,7 +274,7 @@ export async function updateProspectContactAction(
     };
   }
   revalidateProspectPaths(guarded.slug, prospectId);
-  return { status: "success", message: "Contact updated." };
+  redirect(`/app/orgs/${guarded.slug}/prospects/${prospectId}`);
 }
 
 export async function addProspectChannelAction(
@@ -299,6 +303,81 @@ export async function addProspectChannelAction(
   }
   revalidateProspectPaths(guarded.slug, prospectId);
   return { status: "success", message: "Communication point added." };
+}
+
+export async function archiveProspectContactAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const prospectId = String(formData.get("prospectId") ?? "");
+  const result = await archiveProspectContact({
+    actor: guarded.user,
+    organizationId: guarded.organizationId,
+    prospectId,
+    contactId: String(formData.get("contactId") ?? ""),
+    expectedVersion: formData.get("expectedVersion"),
+  });
+  if (!result.ok) {
+    return {
+      status: "error",
+      message: result.message,
+      fieldErrors: result.fieldErrors,
+    };
+  }
+  revalidateProspectPaths(guarded.slug, prospectId);
+  redirect(`/app/orgs/${guarded.slug}/prospects/${prospectId}`);
+}
+
+export async function restoreProspectContactAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const prospectId = String(formData.get("prospectId") ?? "");
+  const result = await restoreProspectContact({
+    actor: guarded.user,
+    organizationId: guarded.organizationId,
+    prospectId,
+    contactId: String(formData.get("contactId") ?? ""),
+    expectedVersion: formData.get("expectedVersion"),
+  });
+  if (!result.ok) {
+    return {
+      status: "error",
+      message: result.message,
+      fieldErrors: result.fieldErrors,
+    };
+  }
+  revalidateProspectPaths(guarded.slug, prospectId);
+  redirect(`/app/orgs/${guarded.slug}/prospects/${prospectId}`);
+}
+
+export async function archiveProspectChannelAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const guarded = await guardMutation(formData);
+  if (!guarded.ok) return guarded.state;
+  const prospectId = String(formData.get("prospectId") ?? "");
+  const result = await archiveProspectChannel({
+    actor: guarded.user,
+    organizationId: guarded.organizationId,
+    prospectId,
+    channelId: String(formData.get("channelId") ?? ""),
+    expectedVersion: formData.get("expectedVersion"),
+  });
+  if (!result.ok) {
+    return {
+      status: "error",
+      message: result.message,
+      fieldErrors: result.fieldErrors,
+    };
+  }
+  revalidateProspectPaths(guarded.slug, prospectId);
+  redirect(`/app/orgs/${guarded.slug}/prospects/${prospectId}`);
 }
 
 export async function mergeProspectsAction(

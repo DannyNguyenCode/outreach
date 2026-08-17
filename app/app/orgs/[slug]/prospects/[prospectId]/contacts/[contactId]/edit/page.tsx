@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { ProspectEditForm } from "@/components/orgs/prospects/prospect-edit-form";
+import { ProspectContactEditForm } from "@/components/orgs/prospects/prospect-contact-edit-form";
 import { ProspectNav } from "@/components/orgs/prospects/prospect-nav";
 import { requireVerifiedUser } from "@/lib/auth/session";
 import { setActiveOrganization } from "@/lib/orgs/active-organization";
@@ -13,20 +13,20 @@ import {
 import { getProspect } from "@/lib/orgs/prospects";
 
 type PageProps = {
-  params: Promise<{ slug: string; prospectId: string }>;
+  params: Promise<{ slug: string; prospectId: string; contactId: string }>;
 };
 
 export async function generateMetadata({
   params,
 }: PageProps): Promise<Metadata> {
   const { slug } = await params;
-  return { title: `Edit prospect · ${slug}` };
+  return { title: `Edit contact · ${slug}` };
 }
 
-export default async function EditProspectPage({ params }: PageProps) {
-  const { slug, prospectId } = await params;
+export default async function EditProspectContactPage({ params }: PageProps) {
+  const { slug, prospectId, contactId } = await params;
   const user = await requireVerifiedUser({
-    returnTo: `/app/orgs/${slug}/prospects/${prospectId}/edit`,
+    returnTo: `/app/orgs/${slug}/prospects/${prospectId}/contacts/${contactId}/edit`,
   });
   let membership;
   try {
@@ -46,6 +46,11 @@ export default async function EditProspectPage({ params }: PageProps) {
   });
   if (!result.ok || !result.prospect.canManage) notFound();
   if (result.prospect.lifecycle !== "ACTIVE") notFound();
+  const contact = result.prospect.contacts.find(
+    (item) => item.id === contactId,
+  );
+  if (!contact) notFound();
+  if (contact.lifecycle !== "ACTIVE") notFound();
 
   return (
     <div className="space-y-6">
@@ -57,26 +62,22 @@ export default async function EditProspectPage({ params }: PageProps) {
           ← {result.prospect.displayName}
         </Link>
       </p>
-      <h1 className="text-2xl font-semibold tracking-tight">Edit prospect</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Edit contact</h1>
       <ProspectNav organizationSlug={slug} current="edit" canCreate />
-      <ProspectEditForm
+      <ProspectContactEditForm
         organizationSlug={slug}
-        prospectId={result.prospect.id}
-        expectedVersion={result.prospect.version}
+        prospectId={prospectId}
+        contactId={contact.id}
+        expectedVersion={contact.version}
+        customFields={contact.customFieldControls}
         initial={{
-          kind: result.prospect.kind,
-          displayName: result.prospect.displayName,
-          websiteDisplay: result.prospect.websiteDisplay,
-          locationLabel: result.prospect.locationLabel,
-          addressLine1: result.prospect.addressLine1,
-          addressLine2: result.prospect.addressLine2,
-          city: result.prospect.city,
-          region: result.prospect.region,
-          postalCode: result.prospect.postalCode,
-          countryCode: result.prospect.countryCode,
-          timeZone: result.prospect.timeZone,
+          firstName: contact.firstName,
+          lastName: contact.lastName,
+          displayName: contact.displayName,
+          title: contact.title,
+          preferredLanguage: contact.preferredLanguage,
+          isPrimary: contact.isPrimary,
         }}
-        customFields={result.prospect.customFieldControls}
       />
     </div>
   );

@@ -96,6 +96,7 @@ export async function findDuplicateCandidates(
           some: {
             organizationId: input.organizationId,
             kind: "PHONE",
+            lifecycle: "ACTIVE",
             normalizedValue: { in: phones },
           },
         },
@@ -117,6 +118,7 @@ export async function findDuplicateCandidates(
           some: {
             organizationId: input.organizationId,
             kind: "EMAIL",
+            lifecycle: "ACTIVE",
             normalizedValue: { in: emails },
           },
         },

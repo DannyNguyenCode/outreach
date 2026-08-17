@@ -20,6 +20,8 @@ import {
   canonicalCustomStoredValue,
   mergeResolutionsSchema,
   normalizeProspectSearchName,
+  PROSPECT_MAX_CHANNELS,
+  PROSPECT_MAX_CONTACTS,
   requireExpectedVersion,
   type MergeFieldResolutions,
 } from "@/lib/orgs/prospect-validation";
@@ -546,6 +548,35 @@ export async function mergeProspects(
       });
       if (survivorUpdate.count !== 1) throw new ConflictError();
 
+      const [contactCount, channelCount] = await Promise.all([
+        tx.prospectContact.count({
+          where: {
+            organizationId: input.organizationId,
+            prospectId: { in: [survivor.id, duplicate.id] },
+          },
+        }),
+        tx.prospectChannel.count({
+          where: {
+            organizationId: input.organizationId,
+            prospectId: { in: [survivor.id, duplicate.id] },
+          },
+        }),
+      ]);
+      if (contactCount > PROSPECT_MAX_CONTACTS) {
+        throw Object.assign(
+          new Error("Merging would exceed the contact limit."),
+          { fieldMessage: "Merging would exceed the contact limit." },
+        );
+      }
+      if (channelCount > PROSPECT_MAX_CHANNELS) {
+        throw Object.assign(
+          new Error("Merging would exceed the communication-point limit."),
+          {
+            fieldMessage: "Merging would exceed the communication-point limit.",
+          },
+        );
+      }
+
       await tx.prospectContact.updateMany({
         where: {
           organizationId: input.organizationId,
@@ -567,6 +598,7 @@ export async function mergeProspects(
           organizationId: input.organizationId,
           prospectId: survivor.id,
           contactId: null,
+          lifecycle: "ACTIVE",
         },
         select: { kind: true, normalizedValue: true },
       });
@@ -580,6 +612,7 @@ export async function mergeProspects(
           organizationId: input.organizationId,
           prospectId: duplicate.id,
           contactId: null,
+          lifecycle: "ACTIVE",
         },
       });
       const redundantIds = duplicateProspectChannels
@@ -588,12 +621,13 @@ export async function mergeProspects(
         )
         .map((channel) => channel.id);
       if (redundantIds.length > 0) {
-        await tx.prospectChannel.deleteMany({
+        await tx.prospectChannel.updateMany({
           where: {
             organizationId: input.organizationId,
             prospectId: duplicate.id,
             id: { in: redundantIds },
           },
+          data: { lifecycle: "ARCHIVED", archivedAt: new Date() },
         });
       }
       await tx.prospectChannel.updateMany({

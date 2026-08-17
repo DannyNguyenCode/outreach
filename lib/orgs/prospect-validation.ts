@@ -260,6 +260,77 @@ const customValueInputSchema = z.object({
   value: z.unknown(),
 });
 
+/**
+ * Update contract: omitted keys are preserved. `null` or a blank string is an
+ * explicit clear. The server must not treat a missing JSON key as `null`.
+ */
+const patchOptionalText = (max: number, message: string) =>
+  z
+    .union([z.string().max(max, message), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? null : trimmed;
+    });
+
+export type CustomFieldFormControl = {
+  key: string;
+  label: string;
+  description: string | null;
+  dataType: string;
+  required: boolean;
+  isActive: boolean;
+  options: string[];
+  value: unknown;
+};
+
+export function customFieldOptionsFromJson(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+export function isExplicitCustomClear(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string" && value.trim().length === 0) return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
+}
+
+export function storedCustomValueToFormValue(input: {
+  dataType: string;
+  stringValue: string | null;
+  numberValue: { toString(): string } | string | null;
+  booleanValue: boolean | null;
+  dateValue: Date | null;
+  jsonValue: unknown;
+}): unknown {
+  switch (input.dataType) {
+    case "NUMBER":
+      return input.numberValue == null ? null : String(input.numberValue);
+    case "BOOLEAN":
+      return input.booleanValue;
+    case "DATE":
+      return input.dateValue
+        ? input.dateValue.toISOString().slice(0, 10)
+        : null;
+    case "MULTI_SELECT":
+      return Array.isArray(input.jsonValue) ? input.jsonValue : [];
+    default:
+      return input.stringValue;
+  }
+}
+
+export function customValuesToPayload(
+  values: Record<string, unknown>,
+): Array<{ definitionKey: string; value: unknown }> {
+  return Object.entries(values).map(([definitionKey, value]) => ({
+    definitionKey,
+    value,
+  }));
+}
+
 const channelInputSchema = z.object({
   kind: z.enum(PROSPECT_CHANNEL_KINDS),
   label: optionalTrimmed(
@@ -337,18 +408,116 @@ export const prospectCoreInputSchema = z.object({
   acknowledgeDuplicates: z.boolean().optional(),
 });
 
-export const prospectUpdateInputSchema = prospectCoreInputSchema
-  .omit({ contacts: true, channels: true, acknowledgeDuplicates: true })
-  .extend({
-    expectedVersion: z.unknown(),
-  });
+export const prospectUpdateInputSchema = z.object({
+  kind: z.enum(PROSPECT_KINDS).optional(),
+  displayName: z
+    .string()
+    .trim()
+    .min(1, "Name is required.")
+    .max(PROSPECT_NAME_MAX, "Name is too long.")
+    .optional(),
+  website: patchOptionalText(PROSPECT_WEBSITE_MAX, "Website is too long."),
+  locationLabel: patchOptionalText(
+    PROSPECT_LOCATION_MAX,
+    "Location is too long.",
+  ),
+  addressLine1: patchOptionalText(PROSPECT_ADDRESS_MAX, "Address is too long."),
+  addressLine2: patchOptionalText(PROSPECT_ADDRESS_MAX, "Address is too long."),
+  city: patchOptionalText(PROSPECT_LOCATION_MAX, "City is too long."),
+  region: patchOptionalText(PROSPECT_LOCATION_MAX, "Region is too long."),
+  postalCode: patchOptionalText(20, "Postal code is too long."),
+  countryCode: z
+    .union([z.string(), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      const trimmed = value.trim().toUpperCase();
+      return trimmed.length === 0 ? null : trimmed;
+    })
+    .superRefine((value, ctx) => {
+      if (value === undefined || value === null) return;
+      if (!/^[A-Z]{2}$/.test(value)) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Enter a valid 2-letter country code.",
+        });
+      }
+    }),
+  timeZone: z
+    .union([z.string(), z.null()])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? null : trimmed;
+    })
+    .superRefine((value, ctx) => {
+      if (value === undefined || value === null) return;
+      const parsed = optionalIanaTimeZoneSchema.safeParse(value);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: "custom",
+          message:
+            "Enter a valid IANA time zone (for example America/Toronto).",
+        });
+      }
+    }),
+  customValues: z
+    .array(customValueInputSchema)
+    .max(PROSPECT_MAX_CUSTOM_VALUES)
+    .optional(),
+  expectedVersion: z.unknown(),
+});
 
 export const contactCreateInputSchema = contactInputSchema;
-export const contactUpdateInputSchema = contactInputSchema
-  .omit({ channels: true, customValues: true })
-  .extend({
-    expectedVersion: z.unknown(),
-  });
+export const contactUpdateInputSchema = z.object({
+  firstName: z
+    .string()
+    .trim()
+    .min(1, "First name is required.")
+    .max(PROSPECT_CONTACT_NAME_MAX, "First name is too long.")
+    .optional(),
+  lastName: z
+    .string()
+    .trim()
+    .min(1, "Last name is required.")
+    .max(PROSPECT_CONTACT_NAME_MAX, "Last name is too long.")
+    .optional(),
+  displayName: patchOptionalText(
+    PROSPECT_NAME_MAX,
+    "Contact display name is too long.",
+  ),
+  title: patchOptionalText(PROSPECT_TITLE_MAX, "Title is too long."),
+  preferredLanguage: z
+    .union([z.string(), z.null()])
+    .optional()
+    .superRefine((value, ctx) => {
+      if (value === undefined || value === null) return;
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return;
+      const parsed = bcp47LanguageSchema.safeParse(trimmed);
+      if (!parsed.success) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Enter a valid language tag (for example en).",
+        });
+      }
+    })
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (value === null) return null;
+      const trimmed = value.trim();
+      return trimmed.length === 0 ? null : trimmed;
+    }),
+  isPrimary: z.boolean().optional(),
+  customValues: z
+    .array(customValueInputSchema)
+    .max(PROSPECT_MAX_CUSTOM_VALUES)
+    .optional(),
+  expectedVersion: z.unknown(),
+});
 
 export const channelCreateInputSchema = channelInputSchema;
 

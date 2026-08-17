@@ -23,7 +23,13 @@ import { ProspectCreateForm } from "@/components/orgs/prospects/prospect-create-
 
 describe("prospect create form", () => {
   it("lets the user add a second contact and does not auto-merge duplicates", async () => {
-    render(<ProspectCreateForm organizationSlug="acme" prospectFields={[]} />);
+    render(
+      <ProspectCreateForm
+        organizationSlug="acme"
+        prospectFields={[]}
+        contactFields={[]}
+      />,
+    );
 
     fireEvent.change(screen.getByLabelText("Prospect name"), {
       target: { value: "ABC Plumbing" },

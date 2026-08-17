@@ -7,14 +7,11 @@ import { initialActionState } from "@/app/actions/auth-state";
 import { FieldError } from "@/components/auth/field-error";
 import { FormStatus } from "@/components/auth/form-status";
 import { SubmitButton } from "@/components/auth/submit-button";
-
-export type ProspectCustomFieldOption = {
-  key: string;
-  label: string;
-  dataType: string;
-  required: boolean;
-  scope: "PROSPECT" | "CONTACT";
-};
+import { CustomFieldInputs } from "@/components/orgs/prospects/custom-field-inputs";
+import {
+  customValuesToPayload,
+  type CustomFieldFormControl,
+} from "@/lib/orgs/prospect-validation";
 
 type ChannelDraft = {
   kind: "PHONE" | "EMAIL";
@@ -28,6 +25,7 @@ type ContactDraft = {
   title: string;
   isPrimary: boolean;
   channels: ChannelDraft[];
+  customValues: Record<string, unknown>;
 };
 
 const emptyChannel = (): ChannelDraft => ({
@@ -42,6 +40,7 @@ const emptyContact = (): ContactDraft => ({
   title: "",
   isPrimary: false,
   channels: [emptyChannel()],
+  customValues: {},
 });
 
 type DuplicateCandidate = {
@@ -54,9 +53,11 @@ type DuplicateCandidate = {
 export function ProspectCreateForm({
   organizationSlug,
   prospectFields,
+  contactFields,
 }: {
   organizationSlug: string;
-  prospectFields: ProspectCustomFieldOption[];
+  prospectFields: CustomFieldFormControl[];
+  contactFields: CustomFieldFormControl[];
 }) {
   const [state, formAction] = useActionState(
     createProspectAction,
@@ -66,7 +67,16 @@ export function ProspectCreateForm({
   const [displayName, setDisplayName] = useState("");
   const [website, setWebsite] = useState("");
   const [locationLabel, setLocationLabel] = useState("");
+  const [addressLine1, setAddressLine1] = useState("");
+  const [addressLine2, setAddressLine2] = useState("");
+  const [city, setCity] = useState("");
+  const [region, setRegion] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [countryCode, setCountryCode] = useState("");
   const [timeZone, setTimeZone] = useState("");
+  const [prospectCustom, setProspectCustom] = useState<Record<string, unknown>>(
+    {},
+  );
   const [contacts, setContacts] = useState<ContactDraft[]>([emptyContact()]);
   const [acknowledgeDuplicates, setAcknowledgeDuplicates] = useState(false);
 
@@ -80,6 +90,12 @@ export function ProspectCreateForm({
         displayName,
         website,
         locationLabel,
+        addressLine1,
+        addressLine2,
+        city,
+        region,
+        postalCode,
+        countryCode,
         timeZone,
         acknowledgeDuplicates,
         contacts: contacts
@@ -96,17 +112,25 @@ export function ProspectCreateForm({
             channels: contact.channels.filter((channel) =>
               channel.value.trim(),
             ),
+            customValues: customValuesToPayload(contact.customValues),
           })),
-        customValues: [],
+        customValues: customValuesToPayload(prospectCustom),
       }),
     [
       kind,
       displayName,
       website,
       locationLabel,
+      addressLine1,
+      addressLine2,
+      city,
+      region,
+      postalCode,
+      countryCode,
       timeZone,
       acknowledgeDuplicates,
       contacts,
+      prospectCustom,
     ],
   );
 
@@ -180,6 +204,64 @@ export function ProspectCreateForm({
           />
         </label>
         <label className="block space-y-1 text-sm">
+          <span className="font-medium">Address line 1</span>
+          <input
+            value={addressLine1}
+            onChange={(event) => setAddressLine1(event.target.value)}
+            maxLength={200}
+            className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+          />
+        </label>
+        <label className="block space-y-1 text-sm">
+          <span className="font-medium">Address line 2</span>
+          <input
+            value={addressLine2}
+            onChange={(event) => setAddressLine2(event.target.value)}
+            maxLength={200}
+            className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+          />
+        </label>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">City</span>
+            <input
+              value={city}
+              onChange={(event) => setCity(event.target.value)}
+              maxLength={120}
+              className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+            />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">Region</span>
+            <input
+              value={region}
+              onChange={(event) => setRegion(event.target.value)}
+              maxLength={120}
+              className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+            />
+          </label>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">Postal code</span>
+            <input
+              value={postalCode}
+              onChange={(event) => setPostalCode(event.target.value)}
+              maxLength={20}
+              className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+            />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">Country code</span>
+            <input
+              value={countryCode}
+              onChange={(event) => setCountryCode(event.target.value)}
+              maxLength={2}
+              className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
+            />
+          </label>
+        </div>
+        <label className="block space-y-1 text-sm">
           <span className="font-medium">Time zone</span>
           <input
             name="timeZoneVisible"
@@ -190,6 +272,15 @@ export function ProspectCreateForm({
             className="w-full rounded-sm border border-[var(--border)] bg-[var(--surface)] px-3 py-2"
           />
         </label>
+        <CustomFieldInputs
+          fields={prospectFields}
+          values={prospectCustom}
+          onChange={(key, value) =>
+            setProspectCustom((current) => ({ ...current, [key]: value }))
+          }
+          fieldErrors={state.fieldErrors}
+          idPrefix="prospect-custom"
+        />
       </fieldset>
 
       <fieldset className="space-y-4">
@@ -335,6 +426,24 @@ export function ProspectCreateForm({
             >
               Add channel
             </button>
+            <CustomFieldInputs
+              fields={contactFields}
+              values={contact.customValues}
+              onChange={(key, value) =>
+                setContacts((current) =>
+                  current.map((item, itemIndex) =>
+                    itemIndex === index
+                      ? {
+                          ...item,
+                          customValues: { ...item.customValues, [key]: value },
+                        }
+                      : item,
+                  ),
+                )
+              }
+              fieldErrors={state.fieldErrors}
+              idPrefix={`contact-${index + 1}-custom`}
+            />
           </div>
         ))}
         <button
@@ -345,12 +454,6 @@ export function ProspectCreateForm({
           Add contact
         </button>
       </fieldset>
-
-      {prospectFields.length > 0 ? (
-        <p className="text-sm text-[var(--muted)]">
-          Organization custom fields can be added after the prospect is created.
-        </p>
-      ) : null}
 
       {candidates && candidates.length > 0 ? (
         <fieldset className="space-y-3 rounded-sm border border-[var(--border)] p-3">

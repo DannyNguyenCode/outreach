@@ -100,6 +100,34 @@ test.describe("Phase 5A prospects", () => {
       page.getByRole("heading", { name: "ABC Plumbing Ltd" }),
     ).toBeVisible();
 
+    const janeCard = page.locator("li").filter({ hasText: "Jane Doe" });
+    await janeCard.getByRole("link", { name: "Edit contact" }).click();
+    await page.getByLabel("Title / role").fill("Office Manager");
+    await page.getByLabel("Primary contact").check();
+    await page.getByRole("button", { name: "Save contact" }).click();
+    await expect(
+      page.getByText(/Jane Doe — Office Manager \(primary\)/),
+    ).toBeVisible();
+
+    const jane = page.locator("li").filter({ hasText: "Jane Doe" });
+    await jane.getByLabel("Value").fill("+14165554099");
+    await jane.getByRole("button", { name: "Add communication point" }).click();
+    await expect(jane.getByText("+14165554099")).toBeVisible();
+    await jane.getByRole("button", { name: "Archive contact" }).click();
+    await expect(
+      page.getByText(/Jane Doe — Office Manager \(archived\)/),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Edit contact" })).toHaveCount(
+      1,
+    );
+    await page.getByRole("button", { name: "Restore contact" }).click();
+    await expect(page.getByText(/Jane Doe — Office Manager/)).toBeVisible();
+    await expect(
+      page.locator("li").filter({ hasText: "Jane Doe" }).getByRole("link", {
+        name: "Edit contact",
+      }),
+    ).toBeVisible();
+
     await page.getByRole("button", { name: "Archive prospect" }).click();
     await expect(page.getByText(/business · archived · source/i)).toBeVisible();
     await page.goto(`/app/orgs/${slug}/prospects?lifecycle=ARCHIVED`);

@@ -1,14 +1,53 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isExplicitCustomClear,
   namesAreStrongMatch,
   normalizeProspectEmail,
   normalizeProspectPhone,
   normalizeProspectSearchName,
   normalizeProspectWebsite,
+  prospectUpdateInputSchema,
   safeWebsiteHref,
   sanitizeSearchQuery,
 } from "@/lib/orgs/prospect-validation";
+
+describe("prospect update patch contract", () => {
+  it("treats omitted keys as preserve and blank strings as explicit clear", () => {
+    const omitted = prospectUpdateInputSchema.safeParse({
+      displayName: "New name",
+      expectedVersion: 1,
+    });
+    expect(omitted.success).toBe(true);
+    if (omitted.success) {
+      expect(omitted.data.displayName).toBe("New name");
+      expect(omitted.data.addressLine1).toBeUndefined();
+      expect(omitted.data.website).toBeUndefined();
+      expect(omitted.data.customValues).toBeUndefined();
+    }
+
+    const cleared = prospectUpdateInputSchema.safeParse({
+      website: "",
+      addressLine1: null,
+      locationLabel: "   ",
+      expectedVersion: 1,
+    });
+    expect(cleared.success).toBe(true);
+    if (cleared.success) {
+      expect(cleared.data.website).toBeNull();
+      expect(cleared.data.addressLine1).toBeNull();
+      expect(cleared.data.locationLabel).toBeNull();
+    }
+  });
+
+  it("treats empty custom values as explicit clears", () => {
+    expect(isExplicitCustomClear(null)).toBe(true);
+    expect(isExplicitCustomClear("")).toBe(true);
+    expect(isExplicitCustomClear([])).toBe(true);
+    expect(isExplicitCustomClear("kept")).toBe(false);
+    expect(isExplicitCustomClear(["a"])).toBe(false);
+  });
+});
 
 describe("prospect phone normalization", () => {
   it("normalizes Canadian and US numbers to E.164", () => {

@@ -10,7 +10,7 @@ import {
   OrganizationAuthError,
   requireOrganizationMemberBySlug,
 } from "@/lib/orgs/authorization";
-import { listCustomFields } from "@/lib/orgs/custom-fields";
+import { listProspectFormFields } from "@/lib/orgs/prospects";
 import { roleHasPermission } from "@/lib/orgs/permissions";
 
 type PageProps = {
@@ -43,21 +43,10 @@ export default async function NewProspectPage({ params }: PageProps) {
     user,
     organizationId: membership.organizationId,
   });
-  const fields = await listCustomFields({
+  const fields = await listProspectFormFields({
     actor: user,
     organizationId: membership.organizationId,
   });
-  const prospectFields = fields.ok
-    ? fields.fields
-        .filter((field) => field.scope === "PROSPECT" && field.isActive)
-        .map((field) => ({
-          key: field.key,
-          label: field.label,
-          dataType: field.dataType,
-          required: field.required,
-          scope: "PROSPECT" as const,
-        }))
-    : [];
 
   return (
     <div className="space-y-6">
@@ -73,7 +62,8 @@ export default async function NewProspectPage({ params }: PageProps) {
       <ProspectNav organizationSlug={slug} current="new" canCreate />
       <ProspectCreateForm
         organizationSlug={slug}
-        prospectFields={prospectFields}
+        prospectFields={fields.ok ? fields.prospectFields : []}
+        contactFields={fields.ok ? fields.contactFields : []}
       />
     </div>
   );
